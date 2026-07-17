@@ -12,7 +12,9 @@ export class CdpClient {
   }
 
   async connect() {
-    this._browser = await CDP({ port: this.port })
+    // Connect to browser endpoint (not a tab), so it works even with no open pages
+    const { webSocketDebuggerUrl } = await CDP.Version({ port: this.port })
+    this._browser = await CDP({ target: webSocketDebuggerUrl })
     await this._browser.Target.setDiscoverTargets({ discover: true })
 
     this._browser.Target.targetCreated(({ targetInfo }) => {
