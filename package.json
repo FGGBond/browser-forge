@@ -1,0 +1,23 @@
+{
+  "name": "browser-forge",
+  "version": "0.1.0",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "chrome-remote-interface": "^0.34.0",
+    "electron": "^43.1.1",
+    "electron-vite": "^5.0.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.10",
+    "playwright": "^1.61.1",
+    "vitest": "^4.1.10"
+  }
+}
