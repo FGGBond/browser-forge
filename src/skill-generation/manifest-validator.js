@@ -20,13 +20,33 @@ function schemaIssues(errors) {
 
 export async function validateSkill(skillDir) {
   let manifest = null
-  let issues = []
+  const issues = []
+  let manifestText
   try {
-    manifest = JSON.parse(await readFile(join(skillDir, 'manifest.json'), 'utf8'))
-    if (!validateSchema(manifest)) issues.push(...schemaIssues(validateSchema.errors))
-    issues.push(...validateDependencyGraph(manifest))
+    manifestText = await readFile(join(skillDir, 'manifest.json'), 'utf8')
   } catch (error) {
-    issues.push({ code: 'INVALID_MANIFEST', path: 'manifest.json', message: error.message })
+    issues.push({ code: 'MANIFEST_READ_ERROR', path: 'manifest.json', message: error.message })
+  }
+
+  if (manifestText !== undefined) {
+    try {
+      manifest = JSON.parse(manifestText)
+    } catch (error) {
+      issues.push({ code: 'MANIFEST_PARSE_ERROR', path: 'manifest.json', message: error.message })
+    }
+  }
+
+  if (manifestText !== undefined && !issues.some(issue => issue.code === 'MANIFEST_PARSE_ERROR')) {
+    try {
+      if (!validateSchema(manifest)) issues.push(...schemaIssues(validateSchema.errors))
+    } catch (error) {
+      issues.push({ code: 'SCHEMA_VALIDATION_ERROR', path: 'manifest.json', message: error.message })
+    }
+    try {
+      issues.push(...validateDependencyGraph(manifest))
+    } catch (error) {
+      issues.push({ code: 'DEPENDENCY_GRAPH_VALIDATION_ERROR', path: 'manifest.json', message: error.message })
+    }
   }
 
   let findings = []

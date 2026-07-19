@@ -49,4 +49,23 @@ describe('validateSkill', () => {
       await rm(skillDir, { recursive: true, force: true })
     }
   })
+
+  it('preserves schema issues and scans when a parseable manifest has malformed commands', async () => {
+    const skillDir = await mkdtemp(join(tmpdir(), 'browser-forge-skill-'))
+    const manifest = structuredClone(validManifest)
+    manifest.commands = [null]
+    await writeFile(join(skillDir, 'manifest.json'), JSON.stringify(manifest))
+    await writeFile(join(skillDir, 'SKILL.md'), 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc.def')
+
+    try {
+      const result = await validateSkill(skillDir)
+
+      expect(result.ok).toBe(false)
+      expect(result.issues.map(issue => issue.code)).toContain('SCHEMA_VALIDATION_ERROR')
+      expect(result.issues.map(issue => issue.code)).not.toContain('INVALID_MANIFEST')
+      expect(result.findings.map(finding => finding.code)).toContain('BEARER_TOKEN')
+    } finally {
+      await rm(skillDir, { recursive: true, force: true })
+    }
+  })
 })

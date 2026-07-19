@@ -23,7 +23,11 @@ describe('validateDependencyGraph', () => {
     const manifest = structuredClone(validManifest)
     manifest.commands[0].next_actions.push({ command: 'list-orders', bindings: {} })
 
-    expect(codes(manifest)).toContain('UNKNOWN_COMMAND_REFERENCE')
+    expect(validateDependencyGraph(manifest)).toContainEqual({
+      code: 'UNKNOWN_COMMAND_REFERENCE',
+      path: 'commands[0].next_actions[0].command',
+      message: 'Unknown command: list-orders'
+    })
   })
 
   it('reports an unknown input source command', () => {
@@ -46,7 +50,11 @@ describe('validateDependencyGraph', () => {
       depends_on: ['resolve-account']
     })
 
-    expect(codes(manifest)).toContain('UNKNOWN_STEP_REFERENCE')
+    expect(validateDependencyGraph(manifest)).toContainEqual({
+      code: 'UNKNOWN_STEP_REFERENCE',
+      path: 'commands[0].steps[0].depends_on[0]',
+      message: 'Unknown step: resolve-account'
+    })
   })
 
   it('reports a command prerequisite cycle', () => {
@@ -96,5 +104,9 @@ describe('validateDependencyGraph', () => {
     })
 
     expect(codes(manifest)).toContain('INVALID_JSON_PATH')
+  })
+
+  it('ignores schema-invalid command entries without throwing', () => {
+    expect(validateDependencyGraph({ commands: [null] })).toEqual([])
   })
 })

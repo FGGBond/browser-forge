@@ -1,5 +1,17 @@
 const JSON_PATH_V1 = /^\$(?:\.[A-Za-z_][A-Za-z0-9_]*|\[\*\]|\[\d+\])*$/
 
+function asArray(value) {
+  return Array.isArray(value) ? value : []
+}
+
+function asObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
+function stringIds(values) {
+  return values.flatMap(value => typeof asObject(value).id === 'string' ? [value.id] : [])
+}
+
 function findCycles(nodes, edgesFor, createIssue) {
   const visiting = new Set()
   const visited = new Set()
@@ -8,7 +20,7 @@ function findCycles(nodes, edgesFor, createIssue) {
   function visit(node) {
     if (visited.has(node)) return
     visiting.add(node)
-    for (const edge of edgesFor(node)) {
+    for (const edge of edgesFor(node) ?? []) {
       if (visiting.has(edge.target)) {
         issues.push(createIssue(edge, node))
       } else {
@@ -28,47 +40,46 @@ function unknownCommandIssue(path, command) {
 }
 
 export function validateDependencyGraph(manifest) {
-  const commands = Array.isArray(manifest?.commands) ? manifest.commands : []
-  const commandIds = new Set(commands.map(command => command.id))
-  const commandEdges = new Map(commands.map(command => [command.id, []]))
+  const commands = asArray(manifest?.commands)
+  const commandIds = new Set(stringIds(commands))
+  const commandEdges = new Map([...commandIds].map(commandId => [commandId, []]))
   const issues = []
 
-  for (const [commandIndex, command] of commands.entries()) {
+  for (const [commandIndex, rawCommand] of commands.entries()) {
+    const command = asObject(rawCommand)
     const commandPath = `commands[${commandIndex}]`
     const prerequisiteEdges = commandEdges.get(command.id)
     const references = [
-      ...(command.requires?.commands ?? []).map((target, index) => ({
+      ...asArray(asObject(command.requires).commands).map((target, index) => ({
         target,
         path: `${commandPath}.requires.commands[${index}]`,
         prerequisite: true
       })),
-      ...(command.inputs ?? []).flatMap((input, inputIndex) =>
-        (input.sources ?? []).map((source, sourceIndex) => ({
-          target: source.command,
+      ...asArray(command.inputs).flatMap((rawInput, inputIndex) =>
+        asArray(asObject(rawInput).sources).map((rawSource, sourceIndex) => ({
+          target: asObject(rawSource).command,
           path: `${commandPath}.inputs[${inputIndex}].sources[${sourceIndex}].command`,
-          prerequisite: true,
-          source
+          prerequisite: true
         }))
       ),
-      ...(command.next_actions ?? []).map((action, actionIndex) => ({
-        target: action.command,
+      ...asArray(command.next_actions).map((rawAction, actionIndex) => ({
+        target: asObject(rawAction).command,
         path: `${commandPath}.next_actions[${actionIndex}].command`,
-        prerequisite: false,
-        action,
-        actionIndex
+        prerequisite: false
       }))
     ]
 
     for (const reference of references) {
       if (!commandIds.has(reference.target)) {
         issues.push(unknownCommandIssue(reference.path, reference.target))
-      } else if (reference.prerequisite) {
+      } else if (reference.prerequisite && prerequisiteEdges) {
         prerequisiteEdges.push(reference)
       }
     }
 
-    for (const [inputIndex, input] of (command.inputs ?? []).entries()) {
-      for (const [sourceIndex, source] of (input.sources ?? []).entries()) {
+    for (const [inputIndex, rawInput] of asArray(command.inputs).entries()) {
+      for (const [sourceIndex, rawSource] of asArray(asObject(rawInput).sources).entries()) {
+        const source = asObject(rawSource)
         if (!JSON_PATH_V1.test(source.json_path)) {
           issues.push({
             code: 'INVALID_JSON_PATH',
@@ -79,8 +90,9 @@ export function validateDependencyGraph(manifest) {
       }
     }
 
-    for (const [actionIndex, action] of (command.next_actions ?? []).entries()) {
-      for (const [binding, jsonPath] of Object.entries(action.bindings ?? {})) {
+    for (const [actionIndex, rawAction] of asArray(command.next_actions).entries()) {
+      const action = asObject(rawAction)
+      for (const [binding, jsonPath] of Object.entries(asObject(action.bindings))) {
         if (!JSON_PATH_V1.test(jsonPath)) {
           issues.push({
             code: 'INVALID_JSON_PATH',
@@ -91,16 +103,17 @@ export function validateDependencyGraph(manifest) {
       }
     }
 
-    const steps = command.steps ?? []
-    const stepIds = new Set(steps.map(step => step.id))
-    const stepEdges = new Map(steps.map(step => [step.id, []]))
-    for (const [stepIndex, step] of steps.entries()) {
-      for (const [dependencyIndex, dependency] of (step.depends_on ?? []).entries()) {
+    const steps = asArray(command.steps)
+    const stepIds = new Set(stringIds(steps))
+    const stepEdges = new Map([...stepIds].map(stepId => [stepId, []]))
+    for (const [stepIndex, rawStep] of steps.entries()) {
+      const step = asObject(rawStep)
+      for (const [dependencyIndex, dependency] of asArray(step.depends_on).entries()) {
         const path = `${commandPath}.steps[${stepIndex}].depends_on[${dependencyIndex}]`
         if (!stepIds.has(dependency)) {
           issues.push({ code: 'UNKNOWN_STEP_REFERENCE', path, message: `Unknown step: ${dependency}` })
         } else {
-          stepEdges.get(step.id).push({ target: dependency, path })
+          stepEdges.get(step.id)?.push({ target: dependency, path })
         }
       }
     }
