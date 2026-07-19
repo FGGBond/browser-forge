@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://browser-forge.local/schemas/manifest-1.0.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["spec_version", "id", "name", "status", "cli", "auth", "commands", "workflows", "$defs"],
+  "properties": {
+    "spec_version": { "const": "1.0" },
+    "id": {
+      "type": "string",
+      "pattern": "^browser_forge\\.[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "status": { "enum": ["draft", "experimental", "ready", "unsupported"] },
+    "required_features": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "cli": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entrypoint", "python_requires", "envelope_version"],
+      "properties": {
+        "entrypoint": {
+          "type": "string",
+          "pattern": "^scripts/browser_forge-[a-z0-9-]+$"
+        },
+        "python_requires": { "const": ">=3.10" },
+        "envelope_version": { "const": "1.0" }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime_version", "target_domains", "providers"],
+      "properties": {
+        "runtime_version": { "type": "string" },
+        "target_domains": {
+          "type": "array",
+          "items": { "type": "string", "format": "hostname" }
+        },
+        "providers": {
+          "type": "array",
+          "items": { "enum": ["jdme_sso", "browser_cookie"] }
+        }
+      }
+    },
+    "commands": {
+      "type": "array",
+      "minItems": 3,
+      "items": { "$ref": "#/$defs/command" }
+    },
+    "workflows": { "type": "array" },
+    "$defs": { "type": "object" }
+  },
+  "$defs": {
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "summary", "side_effect", "idempotent", "inputs", "outputs", "requires", "next_actions", "steps"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "summary": { "type": "string", "minLength": 1 },
+        "side_effect": { "type": "boolean" },
+        "idempotent": { "type": "boolean" },
+        "inputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/input" }
+        },
+        "outputs": { "$ref": "#/$defs/outputs" },
+        "requires": { "$ref": "#/$defs/requires" },
+        "next_actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/next_action" }
+        },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/step" }
+        }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "required", "sources"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean" },
+        "sources": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/input_source" }
+        }
+      }
+    },
+    "input_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "json_path"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "json_path": { "type": "string", "minLength": 1 }
+      }
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_ref"],
+      "properties": {
+        "schema_ref": { "type": "string", "pattern": "^#\\/\\$defs\\/" }
+      }
+    },
+    "requires": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["auth", "commands"],
+      "properties": {
+        "auth": { "type": "boolean" },
+        "commands": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "next_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "bindings"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "request", "depends_on"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "request": { "type": "string", "minLength": 1 },
+        "depends_on": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}
