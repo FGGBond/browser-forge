@@ -42,6 +42,33 @@ export class RecordingSession {
     await session.Runtime.enable()
     await session.DOM.enable()
 
+    // 注入点击监听：每次用户点击时通过 binding 回调触发截图
+    await session.Runtime.addBinding({ name: 'bfClick' })
+    await session.Page.addScriptToEvaluateOnNewDocument({
+      source: `
+        document.addEventListener('click', function(e) {
+          try { window.bfClick(JSON.stringify({ x: e.clientX, y: e.clientY, selector: (e.target && e.target.tagName) || '' })) } catch(err) {}
+        }, true)
+      `
+    })
+
+    session.Runtime.bindingCalled(async ({ name, payload }) => {
+      if (name !== 'bfClick') return
+      const ts = Date.now()
+      try {
+        const info = JSON.parse(payload)
+        collectors.events.addEvent({ type: 'click', timestamp: ts, x: info.x, y: info.y, selector: info.selector })
+        this._timelineEvents.push({ timestamp: ts, type: 'click', targetId, x: info.x, y: info.y })
+      } catch {}
+      // 截图：点击后等 300ms 让 UI 响应完成
+      setTimeout(async () => {
+        try {
+          const { data } = await session.Page.captureScreenshot({ format: 'png' })
+          collectors.screenshots.addScreenshot({ timestamp: ts, dataBase64: data })
+        } catch {}
+      }, 300)
+    })
+
     session.Network.requestWillBeSent(params => collectors.network.onRequestWillBeSent(params))
     session.Network.responseReceived(params => collectors.network.onResponseReceived(params))
     session.Network.loadingFinished(async ({ requestId }) => {
@@ -55,10 +82,22 @@ export class RecordingSession {
     session.Page.frameNavigated(async ({ frame }) => {
       if (frame.parentId) return
       this._timelineEvents.push({ timestamp: Date.now(), type: 'navigation', targetId, url: frame.url })
+      const targetEntry = this._cdp._targets.get(targetId)
+      if (targetEntry) targetEntry.info = { ...targetEntry.info, url: frame.url }
       try {
+        // 等页面 load 完成或最多 2.5 秒，取 DOM 快照 + 更新 title
+        await Promise.race([
+          new Promise(resolve => session.Page.loadEventFired(resolve)),
+          new Promise(resolve => setTimeout(resolve, 2500))
+        ])
+        try {
+          const { result } = await session.Runtime.evaluate({ expression: 'document.title', returnByValue: true })
+          if (result.value && targetEntry) targetEntry.info = { ...targetEntry.info, title: result.value }
+        } catch {}
         const { root } = await session.DOM.getDocument({ depth: -1 })
         const { outerHTML } = await session.DOM.getOuterHTML({ nodeId: root.nodeId })
         collectors.dom.addSnapshot({ timestamp: Date.now(), html: outerHTML, url: frame.url })
+        // 导航完成也截一张，记录初始页面状态
         const { data } = await session.Page.captureScreenshot({ format: 'png' })
         collectors.screenshots.addScreenshot({ timestamp: Date.now(), dataBase64: data })
       } catch {}
@@ -121,5 +160,7 @@ export class RecordingSession {
 }
 
 function formatDate(ts) {
-  return new Date(ts).toISOString().replace('T', '-').replace(/:/g, '').slice(0, 15)
+  const d = new Date(ts)
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`
 }

@@ -26,7 +26,8 @@ export function buildChromeArgs({ port, userDataDir }) {
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${userDataDir}`,
     '--no-first-run',
-    '--no-default-browser-check'
+    '--no-default-browser-check',
+    'about:blank'  // 确保打开一个可见的窗口
   ]
 }
 

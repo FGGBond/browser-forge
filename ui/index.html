@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>browser-forge</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; display: flex; justify-content: center; padding: 40px 20px; }
+    .card { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1); width: 480px; padding: 28px; }
+    h1 { font-size: 20px; font-weight: 600; margin-bottom: 24px; color: #1a1a1a; }
+    label { display: block; font-size: 13px; color: #555; margin-bottom: 6px; }
+    .row { display: flex; gap: 8px; margin-bottom: 16px; }
+    input { flex: 1; padding: 7px 10px; font-size: 13px; border: 1px solid #ddd; border-radius: 4px; outline: none; }
+    input:focus { border-color: #1a73e8; }
+    button { padding: 7px 14px; font-size: 13px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; background: white; }
+    button:hover { background: #f0f0f0; }
+    .btn-primary { background: #1a73e8; color: white; border-color: #1a73e8; width: 100%; padding: 10px; font-size: 14px; }
+    .btn-primary:hover { background: #1557b0; }
+    .btn-primary:disabled { background: #aaa; border-color: #aaa; cursor: not-allowed; }
+    .btn-danger { background: #d93025; color: white; border-color: #d93025; width: 100%; padding: 10px; font-size: 14px; }
+    .btn-danger:hover { background: #a52019; }
+    .timer { font-size: 22px; font-weight: 600; color: #1a1a1a; margin-bottom: 4px; display: flex; align-items: center; gap: 10px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: red; animation: blink 1s infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+    .tab-count { font-size: 13px; color: #666; margin-bottom: 12px; }
+    .tab-list { list-style: none; margin-bottom: 24px; border: 1px solid #eee; border-radius: 4px; max-height: 200px; overflow-y: auto; }
+    .tab-list li { padding: 8px 12px; font-size: 12px; border-bottom: 1px solid #f0f0f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tab-list li:last-child { border-bottom: none; }
+    .tab-title { font-weight: 500; }
+    .tab-url { color: #888; margin-left: 6px; }
+    .path-box { background: #f5f5f5; border-radius: 4px; padding: 10px 12px; font-size: 12px; color: #555; word-break: break-all; margin-bottom: 16px; }
+    .btn-row { display: flex; gap: 8px; margin-bottom: 12px; }
+    .btn-row button { flex: 1; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <!-- Setup View -->
+    <div id="view-setup">
+      <h1>browser-forge</h1>
+      <label>Chrome 路径</label>
+      <div class="row">
+        <input id="chrome-path" placeholder="自动探测..." />
+        <button onclick="detectChrome()">探测</button>
+      </div>
+      <label>录制输出目录</label>
+      <div class="row" style="margin-bottom:24px">
+        <input id="output-dir" placeholder="选择目录..." readonly onclick="pickDir()" style="cursor:pointer" />
+        <button onclick="pickDir()">选择</button>
+      </div>
+      <button class="btn-primary" id="start-btn" onclick="startRecording()" disabled>
+        启动 Chrome 并开始录制
+      </button>
+      <p id="setup-error" style="color:red;font-size:12px;margin-top:8px"></p>
+    </div>
+
+    <!-- Recording View -->
+    <div id="view-recording" class="hidden">
+      <div class="timer">
+        <span class="dot"></span>
+        <span id="timer-display">00:00</span>
+        录制中
+      </div>
+      <div class="tab-count" id="tab-count">已打开 Tab：0</div>
+      <ul class="tab-list" id="tab-list"></ul>
+      <button class="btn-danger" onclick="stopRecording()">停止录制</button>
+    </div>
+
+    <!-- Done View -->
+    <div id="view-done" class="hidden">
+      <h1>录制完成</h1>
+      <div class="path-box" id="session-path"></div>
+      <div class="btn-row">
+        <button onclick="openFolder()">在 Finder 中打开</button>
+        <button onclick="copyPath()">复制路径</button>
+      </div>
+      <button class="btn-primary" onclick="reset()">新建录制</button>
+    </div>
+  </div>
+
+  <script>
+    let timerInterval = null
+    let startTime = null
+    let sessionDir = null
+    let ws = null
+
+    function showView(name) {
+      document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'))
+      document.getElementById('view-' + name).classList.remove('hidden')
+    }
+
+    function updateStartBtn() {
+      const cp = document.getElementById('chrome-path').value.trim()
+      const od = document.getElementById('output-dir').value.trim()
+      document.getElementById('start-btn').disabled = !cp || !od
+    }
+
+    document.getElementById('chrome-path').addEventListener('input', updateStartBtn)
+    document.getElementById('output-dir').addEventListener('input', updateStartBtn)
+
+    async function detectChrome() {
+      const res = await fetch('/api/chrome-path').then(r => r.json())
+      document.getElementById('chrome-path').value = res.path
+      updateStartBtn()
+    }
+
+    async function pickDir() {
+      const dir = prompt('输入录制输出目录路径（例如：/Users/你的用户名/Desktop）：')
+      if (dir) {
+        document.getElementById('output-dir').value = dir.trim()
+        updateStartBtn()
+      }
+    }
+
+    async function startRecording() {
+      const chromePath = document.getElementById('chrome-path').value.trim()
+      const outputDir = document.getElementById('output-dir').value.trim()
+      document.getElementById('setup-error').textContent = ''
+
+      const res = await fetch('/api/start-recording', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chromePath, outputDir })
+      }).then(r => r.json())
+
+      if (!res.ok) {
+        document.getElementById('setup-error').textContent = '启动失败：' + res.error
+        return
+      }
+
+      startTime = Date.now()
+      showView('recording')
+
+      timerInterval = setInterval(() => {
+        const elapsed = Date.now() - startTime
+        const m = Math.floor(elapsed / 60000)
+        const s = Math.floor((elapsed % 60000) / 1000)
+        document.getElementById('timer-display').textContent =
+          String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0')
+      }, 1000)
+
+      ws = new WebSocket('ws://localhost:3456')
+      ws.onmessage = (e) => {
+        const data = JSON.parse(e.data)
+        if (data.type === 'tabs') updateTabs(data.tabs)
+      }
+    }
+
+    function updateTabs(tabs) {
+      document.getElementById('tab-count').textContent = '已打开 Tab：' + tabs.length
+      const list = document.getElementById('tab-list')
+      list.innerHTML = tabs.map(t =>
+        `<li><span class="tab-title">${escapeHtml(t.title || '')}</span><span class="tab-url">— ${escapeHtml(t.url || '')}</span></li>`
+      ).join('')
+    }
+
+    async function stopRecording() {
+      clearInterval(timerInterval)
+      ws?.close()
+
+      const res = await fetch('/api/stop-recording', { method: 'POST' }).then(r => r.json())
+      if (res.ok) {
+        sessionDir = res.sessionDir
+        document.getElementById('session-path').textContent = sessionDir
+        showView('done')
+      }
+    }
+
+    function openFolder() {
+      fetch('/api/open-folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: sessionDir })
+      })
+    }
+
+    function copyPath() {
+      navigator.clipboard.writeText(sessionDir).then(() => {
+        const btn = event.target
+        btn.textContent = '已复制！'
+        setTimeout(() => btn.textContent = '复制路径', 2000)
+      })
+    }
+
+    function reset() {
+      sessionDir = null
+      showView('setup')
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    }
+
+    // Auto-detect Chrome on load
+    detectChrome()
+  </script>
+</body>
+</html>

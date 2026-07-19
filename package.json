@@ -1,23 +1,30 @@
 {
   "name": "browser-forge",
   "version": "0.1.0",
-  "main": "out/main/index.js",
+  "main": "src/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "dev": "node recorder.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
     "chrome-remote-interface": "^0.34.0",
-    "electron": "^43.1.1",
     "electron-vite": "^5.0.0",
+    "express": "^5.2.1",
+    "open": "^11.0.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
+    "@electron-forge/cli": "^7.11.1",
+    "@vitejs/plugin-react": "^4.7.0",
     "@vitest/coverage-v8": "^4.1.10",
+    "electron": "^43.1.1",
     "playwright": "^1.61.1",
+    "vite": "^6.4.3",
     "vitest": "^4.1.10"
-  }
+  },
+  "allowScripts": {},
+  "type": "module"
 }

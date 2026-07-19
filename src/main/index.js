@@ -1,4 +1,5 @@
-import { app, BrowserWindow } from 'electron'
+import electronModule from 'electron'
+const { app, BrowserWindow } = electronModule['module.exports'] || electronModule.default || electronModule
 import { join } from 'path'
 import { registerIpcHandlers } from './ipc-handlers.js'
 
