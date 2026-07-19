@@ -26,11 +26,15 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  const srcDir = join(__dirname, '../../skill')
-  const dstDir = join(homedir(), '.claude', 'plugins', 'user', 'browser-forge')
-  const result = await installSkill({ srcDir, dstDir, version: pkg.version })
-  if (result.action !== 'skipped') {
-    console.log(`[browser-forge] skill ${result.action}: v${result.version} → ${dstDir}`)
+  try {
+    const srcDir = join(__dirname, '../../skill')
+    const dstDir = join(homedir(), '.claude', 'plugins', 'user', 'browser-forge')
+    const result = await installSkill({ srcDir, dstDir, version: pkg.version })
+    if (result.action !== 'skipped') {
+      console.log(`[browser-forge] skill ${result.action}: v${result.version} → ${dstDir}`)
+    }
+  } catch (err) {
+    console.error('[browser-forge] skill install failed (non-fatal):', err.message)
   }
 
   registerIpcHandlers()
