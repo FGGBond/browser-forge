@@ -66,7 +66,7 @@ curl -sS 'https://to.jd.com/api/...' -H "Cookie: $COOKIE_HEADER"
 
 ```bash
 # 从 Edge/Chrome 提取目标域名的 Cookie
-COOKIE_HEADER=$(python3 scripts/_extract_browser_cookie.py --domain example.jd.com 2>/dev/null)
+COOKIE_HEADER=$(python3 scripts/_browser_cookie.py --domain example.jd.com 2>/dev/null)
 curl -sS 'https://example.jd.com/api/...' -H "Cookie: $COOKIE_HEADER"
 ```
 

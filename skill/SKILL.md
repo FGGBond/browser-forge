@@ -79,9 +79,11 @@ description: 分析 browser-forge 录制物料，产出可独立分发的 skill 
 ├── knowledge.md      （基于 templates/knowledge-template.md 填充）
 ├── api-map.md        （基于 templates/api-map-template.md 填充）
 └── scripts/
-    ├── install.sh    （直接复制 templates/install-template.sh，替换 {operation-name}）
-    ├── auth.sh       （直接复制 templates/auth-template.sh，替换 {operation-name}）
-    └── {verb}-{resource}.sh  （为每个独立操作创建一个 CLI 工具）
+    ├── install.sh          （直接复制 templates/install-template.sh，替换 {operation-name}）
+    ├── auth.sh             （直接复制 templates/auth-template.sh，替换 {operation-name}）
+    ├── _jdme_sso.py        （复制 templates/_jdme_sso.py，再替换为 erp-sso-login 完整实现）
+    ├── _browser_cookie.py  （直接复制 templates/_browser_cookie.py）
+    └── {verb}-{resource}.sh（为每个独立操作创建一个 CLI 工具）
 ```
 
 每个 CLI 工具必须包含：
