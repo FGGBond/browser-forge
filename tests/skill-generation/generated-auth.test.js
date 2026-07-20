@@ -66,10 +66,32 @@ describe('generated browser cookie authentication', () => {
 
       const pyproject = await readFile(join(result.skillDir, 'scripts', 'cli', 'pyproject.toml'), 'utf8')
       expect(pyproject).toContain('"browser-cookie3>=0.19.1"')
+      expect(pyproject).toContain('"cryptography>=')
+
+      const manifest = JSON.parse(await readFile(join(result.skillDir, 'manifest.json'), 'utf8'))
+      expect(manifest.auth.providers).toEqual(['jdme_sso', 'browser_cookie'])
 
       const tests = execute(python, ['-m', 'pytest', '-q', 'tests/test_auth_selection.py'], result.skillDir)
       expect(tests.status, `${tests.stdout}\n${tests.stderr}`).toBe(0)
-      expect(`${tests.stdout}\n${tests.stderr}`).not.toContain('<REDACTED>')
+      const captured = `${tests.stdout}\n${tests.stderr}`
+      for (const placeholder of [
+        '<REDACTED>',
+        '<ME-TOKEN-SECRET>',
+        '<AUTH-CODE-SECRET>',
+        '<GETCODE-FLOW-SECRET>',
+        '<SSO-TICKET-SECRET>',
+        '<TARGET-SESSION-SECRET>',
+        '<ANALYTICS-SECRET>',
+        '<DEVICE-EID-SECRET>',
+        '<DEVICE-UUID-SECRET>',
+        '<DEVICE-ACCOUNT-SECRET>',
+        '<TEAM-ID-SECRET>',
+        '<HOSTILE-COOKIE-SECRET>',
+        '<EXPIRED-COOKIE-SECRET>',
+        '<BAD-PATH-COOKIE-SECRET>',
+        '<ENCRYPTED-COOKIE-SECRET>',
+        '<MALFORMED-SECRET>'
+      ]) expect(captured).not.toContain(placeholder)
 
       const source = await readFile(join(
         result.skillDir,

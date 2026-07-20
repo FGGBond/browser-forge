@@ -7,6 +7,7 @@ from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit
 
 from .browser_cookies import BrowserCookieError, BrowserCookieProvider
+from .cookie_jar import CookieRecord
 from .jdme_sso import JdmeSsoError, JdmeSsoProvider
 from .session_store import AuthSession
 
@@ -82,6 +83,28 @@ class AuthResolver:
             lambda: JdmeSsoProvider(skill_id, allowed_domains=self.allowed_domains)
         )
 
+    @staticmethod
+    def _session(
+        value: Any,
+        *,
+        expected_provider: str,
+        target_url: str,
+        fallback_used: bool,
+    ) -> AuthSession:
+        if (
+            not isinstance(value, AuthSession)
+            or value.provider != expected_provider
+            or value.target_url != target_url
+            or not isinstance(value.cookie_jar, tuple)
+            or not all(isinstance(item, CookieRecord) for item in value.cookie_jar)
+            or not isinstance(value.expires_at, (int, float))
+        ):
+            raise AuthProviderError()
+        try:
+            return replace(value, fallback_used=fallback_used)
+        except Exception:
+            raise AuthProviderError() from None
+
     def resolve(self, target_url: str, force_refresh: bool = False) -> AuthSession:
         if not is_allowed_target(target_url, self.allowed_domains):
             raise AuthTargetError()
@@ -90,7 +113,13 @@ class AuthResolver:
         if is_jd_target(target_url, self.allowed_domains):
             attempted.append("jdme_sso")
             try:
-                return self._jdme().resolve(target_url, force_refresh=force_refresh)
+                session = self._jdme().resolve(target_url, force_refresh=force_refresh)
+                return self._session(
+                    session,
+                    expected_provider="jdme_sso",
+                    target_url=target_url,
+                    fallback_used=False,
+                )
             except JdmeSsoError as error:
                 if error.code not in RECOVERABLE_JDME_CODES:
                     raise
@@ -101,11 +130,18 @@ class AuthResolver:
         attempted.append("browser_cookie")
         try:
             session = self._browser().resolve(target_url, force_refresh=force_refresh)
+            return self._session(
+                session,
+                expected_provider="browser_cookie",
+                target_url=target_url,
+                fallback_used=used_fallback,
+            )
         except BrowserCookieError:
             raise AuthUnavailableError(attempted) from None
+        except AuthProviderError:
+            raise
         except Exception:
             raise AuthProviderError() from None
-        return replace(session, fallback_used=used_fallback)
 
     def doctor(self) -> dict[str, Any]:
         jd_allowed = any(_within(_domain(item), "jd.com") for item in self.allowed_domains)
