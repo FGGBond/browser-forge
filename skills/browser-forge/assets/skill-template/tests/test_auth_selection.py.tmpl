@@ -1,0 +1,269 @@
+import json
+import os
+import stat
+import sys
+from dataclasses import dataclass
+from importlib import import_module
+from pathlib import Path
+
+import pytest
+
+
+manifest = json.loads((Path(__file__).parents[1] / "manifest.json").read_text())
+package = "browser_forge_" + manifest["id"].split(".", 1)[1].replace("-", "_")
+cookie_module = import_module(package + ".auth.cookie_jar")
+browser_module = import_module(package + ".auth.browser_cookies")
+session_module = import_module(package + ".auth.session_store")
+cli_module = import_module(package + ".cli")
+CookieRecord = cookie_module.CookieRecord
+cookies_for_url = cookie_module.cookies_for_url
+cookie_header_for_url = cookie_module.cookie_header_for_url
+BrowserCookieProvider = browser_module.BrowserCookieProvider
+BrowserCookieError = browser_module.BrowserCookieError
+AuthSession = session_module.AuthSession
+SessionStore = session_module.SessionStore
+
+
+def cookie(name, *, domain, path="/", secure=False, expires_at=None, host_only=False, value="<REDACTED>"):
+    return CookieRecord(
+        name=name,
+        value=value,
+        domain=domain,
+        path=path,
+        secure=secure,
+        expires_at=expires_at,
+        host_only=host_only,
+    )
+
+
+def test_host_only_scope():
+    records = [cookie("host", domain="app.example.test", host_only=True)]
+
+    assert cookies_for_url(records, "https://app.example.test/orders") == records
+    assert cookies_for_url(records, "https://api.example.test/orders") == []
+
+
+def test_domain_scope():
+    records = [cookie("domain", domain=".example.test")]
+
+    assert cookies_for_url(records, "https://api.example.test/") == records
+    assert cookies_for_url(records, "https://notexample.test/") == []
+
+
+def test_request_restrictions():
+    records = [
+        cookie("path", domain="example.test", path="/orders"),
+        cookie("secure", domain="example.test", secure=True),
+        cookie("expired", domain="example.test", expires_at=10),
+    ]
+
+    assert [item.name for item in cookies_for_url(records, "https://example.test/orders/1", now=20)] == ["path", "secure"]
+    assert [item.name for item in cookies_for_url(records, "http://example.test/orders/1", now=20)] == ["path"]
+    assert cookies_for_url(records, "https://example.test/order-summary", now=20)[0].name == "secure"
+
+
+def test_name_specificity():
+    records = [
+        cookie("session", domain="example.test", path="/", value="<ROOT>"),
+        cookie("session", domain="example.test", path="/orders", value="<DOMAIN>"),
+        cookie("session", domain="app.example.test", path="/orders", host_only=True, value="<HOST>"),
+        cookie("locale", domain="example.test", path="/", value="<LOCALE>"),
+    ]
+
+    selected = cookies_for_url(records, "https://app.example.test/orders/1")
+
+    assert [(item.name, item.value) for item in selected] == [
+        ("session", "<HOST>"),
+        ("locale", "<LOCALE>"),
+    ]
+    assert cookie_header_for_url(records, "https://app.example.test/orders/1") == "session=<HOST>; locale=<LOCALE>"
+
+
+def test_cache_isolation(tmp_path):
+    first = SessionStore("browser_forge.Order Tools/../", {"browsers": ["edge"]}, root=tmp_path)
+    second = SessionStore("browser_forge.Order Tools/../", {"browsers": ["chrome"]}, root=tmp_path)
+
+    first_path = first.cache_path("https://api.example.test/orders")
+    second_path = second.cache_path("https://api.example.test/orders")
+
+    assert first_path.parent == tmp_path / "browser_forge.Order-Tools" / "auth"
+    assert first_path.name.startswith("api.example.test-")
+    assert first_path.suffix == ".json"
+    assert first_path != second_path
+
+
+def test_cache_expiry_mode(tmp_path):
+    clock = lambda: 1_000
+    store = SessionStore("browser_forge.order-tools", {"browsers": ["edge"]}, root=tmp_path, now=clock)
+    target_url = "https://api.example.test/orders"
+    expired = AuthSession(
+        provider="browser_cookie",
+        target_url=target_url,
+        cookie_jar=(cookie("session", domain="api.example.test", host_only=True),),
+        fallback_used=False,
+        expires_at=999,
+    )
+
+    cache_path = store.save(expired)
+
+    assert store.load(target_url) is None
+    if os.name == "posix":
+        assert stat.S_IMODE(cache_path.stat().st_mode) == 0o600
+
+
+def test_cache_reuses_a_session_for_the_same_host(tmp_path):
+    store = SessionStore(
+        "browser_forge.order-tools",
+        {"browsers": ["edge"]},
+        root=tmp_path,
+        now=lambda: 1_000,
+    )
+    session = AuthSession(
+        provider="browser_cookie",
+        target_url="https://api.example.test/orders",
+        cookie_jar=(cookie("session", domain="api.example.test", host_only=True),),
+        fallback_used=False,
+        expires_at=2_000,
+    )
+
+    store.save(session)
+
+    cached = store.load("https://api.example.test/profile")
+
+    assert cached is not None
+    assert cached.cached is True
+    assert cached.cookie_header("https://api.example.test/profile") == "session=<REDACTED>"
+
+
+def test_targeted_refresh(tmp_path, monkeypatch):
+    @dataclass
+    class FakeBrowserCookie:
+        name: str = "session"
+        value: str = "<BROWSER>"
+        domain: str = "api.example.test"
+        path: str = "/"
+        secure: bool = True
+        expires: int | None = None
+        domain_specified: bool = False
+
+    calls = []
+
+    class FakeBrowserCookies:
+        def edge(self, **_kwargs):
+            calls.append("edge")
+            return [FakeBrowserCookie()]
+
+    monkeypatch.setitem(sys.modules, "browser_cookie3", FakeBrowserCookies())
+    provider = BrowserCookieProvider(
+        "browser_forge.order-tools",
+        browsers=("edge",),
+        cache_root=tmp_path,
+        now=lambda: 1_000,
+    )
+    first_url = "https://api.example.test/orders"
+    second_url = "https://other.example.test/orders"
+    other_session = AuthSession(
+        provider="browser_cookie",
+        target_url=second_url,
+        cookie_jar=(cookie("other", domain="other.example.test", host_only=True),),
+        fallback_used=False,
+        expires_at=2_000,
+    )
+    provider.store.save(other_session)
+
+    provider.resolve(first_url)
+    provider.resolve(first_url)
+    provider.resolve(first_url, force_refresh=True)
+
+    assert calls == ["edge", "edge"]
+    assert provider.store.load(second_url) == other_session
+
+
+def test_lazy_browser_order(tmp_path, monkeypatch):
+    real_import = browser_module.importlib.import_module
+    imports = []
+    calls = []
+
+    @dataclass
+    class FakeBrowserCookie:
+        name: str = "session"
+        value: str = "<BROWSER>"
+        domain: str = "api.example.test"
+        path: str = "/"
+        secure: bool = True
+        expires: int | None = None
+        domain_specified: bool = False
+
+    class FakeBrowserCookies:
+        def edge(self, **_kwargs):
+            calls.append("edge")
+            raise PermissionError("private user path must not escape")
+
+        def chrome(self, **_kwargs):
+            calls.append("chrome")
+            return [FakeBrowserCookie()]
+
+    def fake_import(name):
+        if name == "browser_cookie3":
+            imports.append(name)
+            return FakeBrowserCookies()
+        return real_import(name)
+
+    monkeypatch.setattr(browser_module.importlib, "import_module", fake_import)
+    provider = BrowserCookieProvider(
+        "browser_forge.order-tools",
+        browsers=("edge", "chrome"),
+        cache_root=tmp_path,
+        now=lambda: 1_000,
+    )
+
+    assert imports == []
+    session = provider.resolve("https://api.example.test/orders")
+
+    assert imports == ["browser_cookie3"]
+    assert calls == ["edge", "chrome"]
+    assert session.metadata() == {
+        "provider": "browser_cookie",
+        "target_host": "api.example.test",
+        "fallback_used": False,
+        "expires_at": 15_400,
+        "cookie_count": 1,
+        "cached": False,
+    }
+    assert "<BROWSER>" not in json.dumps(session.metadata())
+
+
+def test_redacted_failures(tmp_path, monkeypatch):
+    class FakeBrowserCookies:
+        def edge(self, **_kwargs):
+            raise PermissionError("/Users/private-person/browser-data")
+
+        def chrome(self, **_kwargs):
+            raise OSError("/home/private-person/browser-data")
+
+    monkeypatch.setitem(sys.modules, "browser_cookie3", FakeBrowserCookies())
+    provider = BrowserCookieProvider(
+        "browser_forge.order-tools",
+        cache_root=tmp_path,
+        now=lambda: 1_000,
+    )
+
+    with pytest.raises(BrowserCookieError) as raised:
+        provider.resolve("https://api.example.test/orders")
+
+    assert raised.value.code == "BROWSER_COOKIE_" "UNAVAILABLE"
+    assert raised.value.attempts == (
+        {"browser": "edge", "error": "PermissionError"},
+        {"browser": "chrome", "error": "OSError"},
+    )
+    assert "private-person" not in str(raised.value)
+
+
+def test_redacted_auth_status(monkeypatch, capsys):
+    monkeypatch.setenv("BROWSER_FORGE_COOKIE", "<RUNTIME-COOKIE>")
+
+    assert cli_module.main(["auth-status"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data"]["configured"] is True
+    assert "<RUNTIME-COOKIE>" not in json.dumps(payload)
