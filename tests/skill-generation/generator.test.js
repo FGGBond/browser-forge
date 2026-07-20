@@ -126,7 +126,7 @@ describe('generateSkill', () => {
     })
   })
 
-  it('reserves the final directory exclusively and publishes only one concurrent result', async () => {
+  it('serializes concurrent publishers with a cooperative lock', async () => {
     await withTemporaryRoot(async root => {
       const recordingDir = await createRecording(root)
       const options = {
@@ -136,16 +136,36 @@ describe('generateSkill', () => {
         targetDomains: []
       }
 
-      const results = await Promise.allSettled([generateSkill(options), generateSkill(options)])
-      const successes = results.filter(result => result.status === 'fulfilled')
-      const failures = results.filter(result => result.status === 'rejected')
+      let signalLockHeld
+      let releasePublisher
+      const lockHeld = new Promise(resolve => { signalLockHeld = resolve })
+      const publisherMayContinue = new Promise(resolve => { releasePublisher = resolve })
+      const firstGeneration = generateSkill({
+        ...options,
+        testHooks: {
+          beforeRender: async () => {
+            signalLockHeld()
+            await publisherMayContinue
+          }
+        }
+      })
+
+      await lockHeld
+      let concurrentError
+      try {
+        await generateSkill(options)
+      } catch (error) {
+        concurrentError = error
+      } finally {
+        releasePublisher()
+      }
+      await firstGeneration
+      expect(concurrentError).toMatchObject({ code: 'GENERATION_IN_PROGRESS' })
+
       const skillDir = join(root, 'skills', 'order-tools')
 
-      expect(successes).toHaveLength(1)
-      expect(failures).toHaveLength(1)
-      expect(failures[0].reason).toMatchObject({ code: 'SKILL_ALREADY_EXISTS' })
       expect(JSON.parse(await readFile(join(skillDir, '.browser-forge-ready'), 'utf8'))).toMatchObject({ completed: true })
-      expect((await readdir(join(root, 'skills'))).filter(name => name.startsWith('.browser-forge-order-tools-'))).toEqual([])
+      expect(await readdir(join(root, 'skills'))).toEqual(['order-tools'])
     })
   })
 
@@ -165,10 +185,11 @@ describe('generateSkill', () => {
     })
   })
 
-  it('cleans its temporary directory and reserved placeholder when rendering fails', async () => {
+  it('preserves its incomplete reservation but cleans temporary paths and its lock when rendering fails', async () => {
     await withTemporaryRoot(async root => {
       const recordingDir = await createRecording(root)
       const outputRoot = join(root, 'skills')
+      const skillDir = join(outputRoot, 'order-tools')
 
       await expect(generateSkill({
         recordingDir,
@@ -178,8 +199,84 @@ describe('generateSkill', () => {
         testHooks: { beforeRender: () => { throw new Error('render failed') } }
       })).rejects.toThrow('render failed')
 
-      await expect(access(join(outputRoot, 'order-tools'))).rejects.toThrow()
-      await expect(readdir(outputRoot)).resolves.toEqual([])
+      await expect(access(skillDir)).resolves.toBeUndefined()
+      await expect(access(join(skillDir, '.browser-forge-ready'))).rejects.toThrow()
+      await expect(validateSkill(skillDir)).resolves.toMatchObject({ ok: false, complete: false })
+      expect((await readdir(outputRoot)).filter(name => name.startsWith('.browser-forge-order-tools-'))).toEqual([])
+      await expect(access(join(outputRoot, '.browser-forge-order-tools.lock'))).rejects.toThrow()
+    })
+  })
+
+  it('does not overwrite a foreign file added after its publication ownership check', async () => {
+    await withTemporaryRoot(async root => {
+      const recordingDir = await createRecording(root)
+      const skillDir = join(root, 'skills', 'order-tools')
+
+      await expect(generateSkill({
+        recordingDir,
+        skillName: 'order-tools',
+        description: 'Manage test orders.',
+        targetDomains: [],
+        testHooks: {
+          afterPublishOwnershipCheck: async ({ entryName }) => {
+            if (entryName !== 'manifest.json') return
+            await writeFile(join(skillDir, '.browser-forge-owner.json'), '{"owner_id":"foreign/owner"}\n')
+            await writeFile(join(skillDir, 'manifest.json'), 'foreign manifest\n', { flag: 'wx' })
+          }
+        }
+      })).rejects.toMatchObject({ code: 'PUBLICATION_CONFLICT' })
+
+      await expect(readFile(join(skillDir, 'manifest.json'), 'utf8')).resolves.toBe('foreign manifest\n')
+      await expect(access(join(skillDir, '.browser-forge-ready'))).rejects.toThrow()
+      await expect(access(join(root, 'skills', '.browser-forge-order-tools.lock'))).rejects.toThrow()
+      expect((await readdir(join(root, 'skills'))).filter(name => name.startsWith('.browser-forge-order-tools-'))).toEqual([])
+    })
+  })
+
+  it('does not replace a foreign directory added after its publication ownership check', async () => {
+    await withTemporaryRoot(async root => {
+      const recordingDir = await createRecording(root)
+      const skillDir = join(root, 'skills', 'order-tools')
+
+      await expect(generateSkill({
+        recordingDir,
+        skillName: 'order-tools',
+        description: 'Manage test orders.',
+        targetDomains: [],
+        testHooks: {
+          afterPublishOwnershipCheck: async ({ entryName }) => {
+            if (entryName !== 'references') return
+            await mkdir(join(skillDir, 'references'))
+            await writeFile(join(skillDir, 'references', 'foreign.txt'), 'do not replace\n')
+          }
+        }
+      })).rejects.toMatchObject({ code: 'PUBLICATION_CONFLICT' })
+
+      await expect(readFile(join(skillDir, 'references', 'foreign.txt'), 'utf8')).resolves.toBe('do not replace\n')
+      await expect(access(join(skillDir, '.browser-forge-ready'))).rejects.toThrow()
+      expect((await readdir(join(root, 'skills'))).filter(name => name.startsWith('.browser-forge-order-tools-'))).toEqual([])
+    })
+  })
+
+  it('does not release a publication lock whose ownership token was replaced', async () => {
+    await withTemporaryRoot(async root => {
+      const recordingDir = await createRecording(root)
+      const lockPath = join(root, 'skills', '.browser-forge-order-tools.lock')
+
+      await generateSkill({
+        recordingDir,
+        skillName: 'order-tools',
+        description: 'Manage test orders.',
+        targetDomains: [],
+        testHooks: {
+          beforeReady: async () => {
+            await readFile(lockPath, 'utf8')
+            await writeFile(lockPath, '{"owner_id":"foreign/lock"}\n')
+          }
+        }
+      })
+
+      await expect(readFile(lockPath, 'utf8')).resolves.toBe('{"owner_id":"foreign/lock"}\n')
     })
   })
 

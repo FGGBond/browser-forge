@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, link, mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -10,6 +10,7 @@ const TEMPLATE_ROOT = fileURLToPath(new URL('../../skills/browser-forge/assets/s
 const TOKEN_PATTERN = /\{\{(SKILL_NAME|SKILL_ID|PACKAGE_NAME|ENTRYPOINT_NAME|DESCRIPTION|TARGET_DOMAINS_JSON|SPEC_VERSION|AUTH_RUNTIME_VERSION)\}\}/g
 const OWNER_MARKER = '.browser-forge-owner.json'
 const READY_MARKER = '.browser-forge-ready'
+const LOCK_SUFFIX = '.lock'
 
 export class GenerationError extends Error {
   constructor(message, code = 'GENERATION_ENVIRONMENT_ERROR') {
@@ -78,9 +79,8 @@ async function ownsReservation(skillDir, token) {
   try {
     const marker = JSON.parse(await readFile(join(skillDir, OWNER_MARKER), 'utf8'))
     return marker.owner_id === token
-  } catch (error) {
-    if (error.code === 'ENOENT' || error instanceof SyntaxError) return false
-    throw error
+  } catch {
+    return false
   }
 }
 
@@ -102,37 +102,96 @@ async function reserveSkillDir(skillDir, token) {
   try {
     await writeFile(join(skillDir, OWNER_MARKER), `${JSON.stringify({ owner_id: token, spec_version: SPEC_VERSION })}\n`, { flag: 'wx' })
   } catch (error) {
-    if (await ownsReservation(skillDir, token)) await rm(skillDir, { recursive: true, force: true })
+    if (error.code === 'EEXIST') {
+      throw new GenerationError(`Skill reservation changed unexpectedly: ${skillDir}`, 'RESERVATION_CONFLICT')
+    }
     throw error
   }
 }
 
-async function removeOwnedReservation(skillDir, token) {
-  if (await ownsReservation(skillDir, token)) {
-    await rm(skillDir, { recursive: true, force: true })
+async function ownsLock(lockPath, token) {
+  try {
+    const marker = JSON.parse(await readFile(lockPath, 'utf8'))
+    return marker.owner_id === token
+  } catch {
+    return false
   }
 }
 
-async function publishTree(temporaryDir, skillDir, token) {
-  await assertOwnership(skillDir, token)
+async function acquirePublicationLock(lockPath, token) {
+  try {
+    await writeFile(lockPath, `${JSON.stringify({ owner_id: token, spec_version: SPEC_VERSION })}\n`, {
+      flag: 'wx',
+      mode: 0o600
+    })
+  } catch (error) {
+    if (error.code === 'EEXIST') {
+      throw new GenerationError(`Skill generation is already in progress: ${lockPath}`, 'GENERATION_IN_PROGRESS')
+    }
+    throw error
+  }
+}
+
+async function releasePublicationLock(lockPath, token) {
+  if (!(await ownsLock(lockPath, token))) return
+  try {
+    await unlink(lockPath)
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+  }
+}
+
+function publicationConflict(destinationPath) {
+  return new GenerationError(`Publication destination already exists: ${destinationPath}`, 'PUBLICATION_CONFLICT')
+}
+
+async function publishTree(temporaryDir, destinationDir, skillDir, token, testHooks) {
   const entries = await readdir(temporaryDir, { withFileTypes: true })
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
     await assertOwnership(skillDir, token)
-    await rename(join(temporaryDir, entry.name), join(skillDir, entry.name))
+    const sourcePath = join(temporaryDir, entry.name)
+    const destinationPath = join(destinationDir, entry.name)
+    await testHooks?.afterPublishOwnershipCheck?.({ entryName: entry.name, sourcePath, destinationPath, skillDir })
+
+    try {
+      if (entry.isDirectory()) {
+        await mkdir(destinationPath)
+        await assertOwnership(skillDir, token)
+        await publishTree(sourcePath, destinationPath, skillDir, token, testHooks)
+        continue
+      }
+      if (!entry.isFile()) continue
+
+      await link(sourcePath, destinationPath)
+      await unlink(sourcePath)
+      await assertOwnership(skillDir, token)
+    } catch (error) {
+      if (error instanceof GenerationError) throw error
+      if (error.code === 'EEXIST' || error.code === 'EISDIR' || error.code === 'ENOTEMPTY') {
+        throw publicationConflict(destinationPath)
+      }
+      if (!(await ownsReservation(skillDir, token))) {
+        throw new GenerationError(`Lost ownership of skill directory: ${skillDir}`, 'OWNERSHIP_LOST')
+      }
+      throw error
+    }
   }
 }
 
 async function writeReadyMarker(skillDir, token) {
   await assertOwnership(skillDir, token)
-  const temporaryMarker = join(skillDir, `${READY_MARKER}-${randomUUID()}`)
+  const readyMarker = join(skillDir, READY_MARKER)
   const contents = `${JSON.stringify({
     completed: true,
     spec_version: SPEC_VERSION,
     auth_runtime_version: AUTH_RUNTIME_VERSION
   })}\n`
-  await writeFile(temporaryMarker, contents, { flag: 'wx' })
-  await assertOwnership(skillDir, token)
-  await rename(temporaryMarker, join(skillDir, READY_MARKER))
+  try {
+    await writeFile(readyMarker, contents, { flag: 'wx' })
+  } catch (error) {
+    if (error.code === 'EEXIST') throw publicationConflict(readyMarker)
+    throw error
+  }
 }
 
 export async function readReadyMarker(skillDir) {
@@ -171,16 +230,18 @@ export async function generateSkill({ recordingDir, skillName, description, targ
 
   const resolvedOutputRoot = resolve(outputRoot ?? join(dirname(resolvedRecordingDir), 'skills'))
   const skillDir = join(resolvedOutputRoot, identifiers.skillName)
+  const lockPath = join(resolvedOutputRoot, `.browser-forge-${identifiers.skillName}${LOCK_SUFFIX}`)
   await mkdir(resolvedOutputRoot, { recursive: true })
 
   const ownershipToken = randomUUID().replaceAll('-', '/')
   let temporaryDir
-  let reserved = false
+  let lockAcquired = false
   try {
+    await acquirePublicationLock(lockPath, ownershipToken)
+    lockAcquired = true
     await reserveSkillDir(skillDir, ownershipToken)
-    reserved = true
     temporaryDir = await mkdtemp(join(resolvedOutputRoot, `.browser-forge-${identifiers.skillName}-`))
-    await testHooks?.beforeRender?.({ skillDir, temporaryDir })
+    await testHooks?.beforeRender?.({ skillDir, temporaryDir, lockPath })
     const values = {
       SKILL_NAME: identifiers.skillName,
       SKILL_ID: identifiers.skillId,
@@ -192,16 +253,17 @@ export async function generateSkill({ recordingDir, skillName, description, targ
       AUTH_RUNTIME_VERSION
     }
     await renderTree(TEMPLATE_ROOT, temporaryDir, values, identifiers)
-    await publishTree(temporaryDir, skillDir, ownershipToken)
-    await testHooks?.beforeReady?.({ skillDir, temporaryDir })
+    await publishTree(temporaryDir, skillDir, skillDir, ownershipToken, testHooks)
+    await testHooks?.beforeReady?.({ skillDir, temporaryDir, lockPath })
     await assertOwnership(skillDir, ownershipToken)
     await rm(temporaryDir, { recursive: true, force: true })
     temporaryDir = undefined
     await writeReadyMarker(skillDir, ownershipToken)
   } catch (error) {
     if (temporaryDir) await rm(temporaryDir, { recursive: true, force: true })
-    if (reserved) await removeOwnedReservation(skillDir, ownershipToken)
     throw error
+  } finally {
+    if (lockAcquired) await releasePublicationLock(lockPath, ownershipToken)
   }
 
   return { skillDir, ready: true, ...identifiers }
