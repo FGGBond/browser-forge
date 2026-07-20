@@ -9,7 +9,7 @@ import re
 import sys
 from typing import Any, NoReturn
 
-from .auth import BrowserCookieProvider
+from .auth.provider import AuthResolver
 from .client import Client, ClientError
 from .config import load_config
 from .envelope import failure, success
@@ -171,7 +171,10 @@ def _build_auth_resolver(manifest: dict[str, Any]):
     providers = manifest.get("auth", {}).get("providers", [])
     if "browser_cookie" not in providers:
         return None
-    return BrowserCookieProvider(str(manifest.get("id", "browser-forge")))
+    return AuthResolver(
+        str(manifest.get("id", "browser-forge")),
+        allowed_domains=tuple(manifest.get("auth", {}).get("target_domains", [])),
+    )
 
 
 def _execute_business(command: dict[str, Any], values: dict[str, Any], client: Client) -> Any:
@@ -203,10 +206,15 @@ def main(argv: list[str] | None = None) -> int:
     command = args.command_spec
     config = load_config(manifest)
     if command_id == "doctor":
+        resolver = _build_auth_resolver(manifest)
         _emit(success(command_id, {
             "python_version": platform.python_version(),
             "manifest_path": str(manifest_path()),
             "network_disabled": __import__("os").environ.get("BROWSER_FORGE_" "DISABLE_NETWORK") == "1",
+            "authentication": resolver.doctor() if resolver is not None else {
+                "attempted_providers": [],
+                "remediation": "Configure an authentication provider in manifest.json.",
+            },
         }))
         return 0
     if command_id == "auth-status":

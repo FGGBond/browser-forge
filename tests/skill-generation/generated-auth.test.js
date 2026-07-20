@@ -69,6 +69,7 @@ describe('generated browser cookie authentication', () => {
 
       const tests = execute(python, ['-m', 'pytest', '-q', 'tests/test_auth_selection.py'], result.skillDir)
       expect(tests.status, `${tests.stdout}\n${tests.stderr}`).toBe(0)
+      expect(`${tests.stdout}\n${tests.stderr}`).not.toContain('<REDACTED>')
 
       const source = await readFile(join(
         result.skillDir,
