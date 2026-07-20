@@ -40,7 +40,13 @@ def _command_map(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _source_help(input_spec: dict[str, Any]) -> str:
-    sources = [source.get("command") for source in input_spec.get("sources", []) if source.get("command")]
+    sources = []
+    for source in input_spec.get("sources", []):
+        command = source.get("command")
+        if not command:
+            continue
+        json_path = source.get("json_path")
+        sources.append(f"{command} -> {json_path}" if json_path else command)
     return f"Obtain from: {', '.join(sources)}" if sources else "Provide directly."
 
 
