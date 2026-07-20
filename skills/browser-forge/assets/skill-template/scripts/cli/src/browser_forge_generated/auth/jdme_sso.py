@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .cookie_jar import CookieRecord, cookies_for_host
+from .cookie_jar import CookieRecord, cookies_for_url
 from .session_store import DEFAULT_TTL_SECONDS, AuthSession, SessionStore
 
 _ERRORS = {
@@ -633,13 +633,13 @@ def _jar_cookie(
     )
 
 
-def _target_records(
+def _url_records(
     jar: http.cookiejar.CookieJar,
-    target_url: str,
+    url: str,
     *,
     now: float,
 ) -> tuple[CookieRecord, ...]:
-    return tuple(cookies_for_host([_record(item) for item in jar], target_url, now=now))
+    return tuple(cookies_for_url([_record(item) for item in jar], url, now=now))
 
 
 def _add_query(url: str, **values: str) -> str:
@@ -823,7 +823,7 @@ class JdmeSsoProvider:
         }).encode("utf-8")
         before_union = {
             (item.name, item.domain, item.path): item.value
-            for item in _target_records(jar, target_url, now=self.now())
+            for item in _url_records(jar, target_url, now=self.now())
         }
         union_start = len(redirects.events)
         cookie_source_start = len(cookie_processor.set_cookie_sources)
@@ -856,7 +856,7 @@ class JdmeSsoProvider:
             _origin(source_url) == target_origin and target_cookie_name in names
             for source_url, names in cookie_processor.set_cookie_sources[cookie_source_start:]
         )
-        records = _target_records(jar, target_url, now=self.now())
+        records = _url_records(jar, target_url, now=self.now())
         new_session_records = tuple(
             item
             for item in records
@@ -868,7 +868,7 @@ class JdmeSsoProvider:
         probe_req = urllib.request.Request(probe_url, method="GET")
         status, final_url, _ = _response(opener, probe_req, "TARGET_SESSION_FAILED")
         probe_events = redirects.events[probe_start:]
-        probe_records = _target_records(jar, probe_url, now=self.now())
+        probe_records = _url_records(jar, probe_url, now=self.now())
         if (
             status < 200
             or status >= 300

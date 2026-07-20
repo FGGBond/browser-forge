@@ -90,7 +90,11 @@ describe('generated browser cookie authentication', () => {
         '<EXPIRED-COOKIE-SECRET>',
         '<BAD-PATH-COOKIE-SECRET>',
         '<ENCRYPTED-COOKIE-SECRET>',
-        '<MALFORMED-SECRET>'
+        '<MALFORMED-SECRET>',
+        '<BROWSER>',
+        '<FRESH-BROWSER-SECRET>',
+        '<STALE-CACHED-SECRET>',
+        '<RUNTIME-COOKIE>'
       ]) expect(captured).not.toContain(placeholder)
 
       const source = await readFile(join(

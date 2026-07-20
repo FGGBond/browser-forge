@@ -625,6 +625,7 @@ def fake_sso_server(
     probe_ok=True,
     get_code_redirect=False,
     unauthenticated_200=False,
+    callback_cookie_path="/",
 ):
     encoded_redirect = base64.urlsafe_b64encode(
         urlencode({"client_id": "orders-app", "state": "trusted-state"}).encode("utf-8")
@@ -702,7 +703,10 @@ def fake_sso_server(
                     self.end_headers()
                     return
                 self.send_response(200)
-                self.send_header(f"Set-Cookie", f"ssa.orders-app={TARGET_SESSION}; Path=/; HttpOnly")
+                self.send_header(
+                    "Set-Cookie",
+                    f"ssa.orders-app={TARGET_SESSION}; Path={callback_cookie_path}; HttpOnly",
+                )
                 self.end_headers()
                 return
             if path == "/probe":
@@ -788,9 +792,9 @@ def test_sso_security_flow(tmp_path, monkeypatch, capsys):
     db_path = tmp_path / "Cookies"
     write_jdme_db(db_path, extra_rows=(
         ("focus-team-id", TEAM_ID, b"", ".jd.com", "/", 1, 0),
-        ("me_token", "<HOSTILE-COOKIE-SECRET>", b"", ".attacker.test", "/", 0, 0),
-        ("jdsec_client_info", "<EXPIRED-COOKIE-SECRET>", b"", ".jd.com", "/", 0, 500),
-        ("jdsec_client_info", "<BAD-PATH-COOKIE-SECRET>", b"", ".jd.com", "bad", 0, 0),
+        ("me_token", "<HOSTILE-COOKIE-SECRET>", b"", ".attacker.test", "/", 1, 0),
+        ("jdsec_client_info", "<EXPIRED-COOKIE-SECRET>", b"", ".jd.com", "/", 1, 500),
+        ("jdsec_client_info", "<BAD-PATH-COOKIE-SECRET>", b"", ".jd.com", "bad", 1, 0),
     ))
     (tmp_path / "global.json").write_text(json.dumps({"DeviceId": DEVICE_UUID}))
     (tmp_path / "login.json").write_text(json.dumps({"KEY_RISK_JS_EID": DEVICE_EID}))
@@ -853,6 +857,15 @@ def test_redirect_security(tmp_path):
 
     assert raised.value.code == "REDIRECT_" "SECURITY_ERROR"
     assert raised.value.recoverable is False
+
+    target_origin = "http://127.0.0.1:41001"
+    control_origin = "http://127.0.0.1:41002"
+    assert validate_redirect_url(
+        target_origin + "/target",
+        control_origin + "/oidc/authorize",
+        allowed_origins={target_origin, control_origin},
+        allow_insecure_loopback=True,
+    ) == control_origin + "/oidc/authorize"
     assert attacker_state["paths"] == []
 
     with pytest.raises(JdmeSsoError) as raised:
@@ -900,6 +913,22 @@ def test_requires_new_session(tmp_path):
 
     assert raised.value.code == "TARGET_SESSION_FAILED"
     assert "analytics" in state["probe_cookies"]
+
+
+def test_callback_scope(tmp_path):
+    db_path = tmp_path / "Cookies"
+    write_jdme_db(db_path)
+    with fake_sso_server(
+        callback_cookie_path="/callback",
+        unauthenticated_200=True,
+    ) as (base, state):
+        provider = jdme_provider(base, db_path, tmp_path / "cache")
+
+        with pytest.raises(JdmeSsoError) as raised:
+            provider.resolve(base + "/target")
+
+    assert raised.value.code == "TARGET_SESSION_FAILED"
+    assert "ssa.orders-app" not in state["probe_cookies"]
 
 
 def test_stable_local_errors(tmp_path):
