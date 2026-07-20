@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
 import { validateDependencyGraph } from './dependency-graph.js'
+import { readReadyMarker } from './generator.js'
 import { scanTree } from './secret-scanner.js'
 
 const schema = JSON.parse(await readFile(new URL('../../skills/browser-forge/schemas/manifest.schema.json', import.meta.url)))
@@ -21,6 +22,15 @@ function schemaIssues(errors) {
 export async function validateSkill(skillDir) {
   let manifest = null
   const issues = []
+  let readyMarker = null
+  try {
+    readyMarker = await readReadyMarker(skillDir)
+    if (!readyMarker) {
+      issues.push({ code: 'SKILL_NOT_READY', path: '.browser-forge-ready', message: 'Generated skill is incomplete or has no ready marker' })
+    }
+  } catch (error) {
+    issues.push({ code: 'READY_MARKER_READ_ERROR', path: '.browser-forge-ready', message: error.message })
+  }
   let manifestText
   try {
     manifestText = await readFile(join(skillDir, 'manifest.json'), 'utf8')
@@ -56,5 +66,5 @@ export async function validateSkill(skillDir) {
     issues.push({ code: 'SKILL_SCAN_ERROR', path: '.', message: error.message })
   }
 
-  return { ok: issues.length === 0 && findings.length === 0, issues, findings, manifest }
+  return { ok: issues.length === 0 && findings.length === 0, complete: readyMarker !== null, issues, findings, manifest }
 }

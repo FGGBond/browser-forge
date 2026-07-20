@@ -1,12 +1,15 @@
-import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { randomUUID } from 'node:crypto'
 import { AUTH_RUNTIME_VERSION, SPEC_VERSION } from './constants.js'
 import { normalizeSkillName } from './names.js'
 
 const REQUIRED_RECORDING_FILES = ['RECORDING.md', 'recording.har', 'timeline.json', 'metadata.json']
 const TEMPLATE_ROOT = fileURLToPath(new URL('../../skills/browser-forge/assets/skill-template/', import.meta.url))
 const TOKEN_PATTERN = /\{\{(SKILL_NAME|SKILL_ID|PACKAGE_NAME|ENTRYPOINT_NAME|DESCRIPTION|TARGET_DOMAINS_JSON|SPEC_VERSION|AUTH_RUNTIME_VERSION)\}\}/g
+const OWNER_MARKER = '.browser-forge-owner.json'
+const READY_MARKER = '.browser-forge-ready'
 
 export class GenerationError extends Error {
   constructor(message, code = 'GENERATION_ENVIRONMENT_ERROR') {
@@ -71,20 +74,82 @@ async function renderTree(source, destination, values, identifiers) {
   }
 }
 
-async function assertMissing(path) {
+async function ownsReservation(skillDir, token) {
   try {
-    await lstat(path)
+    const marker = JSON.parse(await readFile(join(skillDir, OWNER_MARKER), 'utf8'))
+    return marker.owner_id === token
   } catch (error) {
-    if (error.code === 'ENOENT') return
+    if (error.code === 'ENOENT' || error instanceof SyntaxError) return false
     throw error
   }
-  throw new GenerationError(`Skill directory already exists: ${path}`, 'SKILL_ALREADY_EXISTS')
+}
+
+async function assertOwnership(skillDir, token) {
+  if (!(await ownsReservation(skillDir, token))) {
+    throw new GenerationError(`Lost ownership of skill directory: ${skillDir}`, 'OWNERSHIP_LOST')
+  }
+}
+
+async function reserveSkillDir(skillDir, token) {
+  try {
+    await mkdir(skillDir)
+  } catch (error) {
+    if (error.code === 'EEXIST') {
+      throw new GenerationError(`Skill directory already exists: ${skillDir}`, 'SKILL_ALREADY_EXISTS')
+    }
+    throw error
+  }
+  try {
+    await writeFile(join(skillDir, OWNER_MARKER), `${JSON.stringify({ owner_id: token, spec_version: SPEC_VERSION })}\n`, { flag: 'wx' })
+  } catch (error) {
+    if (await ownsReservation(skillDir, token)) await rm(skillDir, { recursive: true, force: true })
+    throw error
+  }
+}
+
+async function removeOwnedReservation(skillDir, token) {
+  if (await ownsReservation(skillDir, token)) {
+    await rm(skillDir, { recursive: true, force: true })
+  }
+}
+
+async function publishTree(temporaryDir, skillDir, token) {
+  await assertOwnership(skillDir, token)
+  const entries = await readdir(temporaryDir, { withFileTypes: true })
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    await assertOwnership(skillDir, token)
+    await rename(join(temporaryDir, entry.name), join(skillDir, entry.name))
+  }
+}
+
+async function writeReadyMarker(skillDir, token) {
+  await assertOwnership(skillDir, token)
+  const temporaryMarker = join(skillDir, `${READY_MARKER}-${randomUUID()}`)
+  const contents = `${JSON.stringify({
+    completed: true,
+    spec_version: SPEC_VERSION,
+    auth_runtime_version: AUTH_RUNTIME_VERSION
+  })}\n`
+  await writeFile(temporaryMarker, contents, { flag: 'wx' })
+  await assertOwnership(skillDir, token)
+  await rename(temporaryMarker, join(skillDir, READY_MARKER))
+}
+
+export async function readReadyMarker(skillDir) {
+  try {
+    const marker = JSON.parse(await readFile(join(skillDir, READY_MARKER), 'utf8'))
+    if (marker?.completed !== true || marker.spec_version !== SPEC_VERSION) return null
+    return marker
+  } catch (error) {
+    if (error.code === 'ENOENT' || error instanceof SyntaxError) return null
+    throw error
+  }
 }
 
 /**
  * Creates a rendered, standalone skill skeleton without copying recording material.
  */
-export async function generateSkill({ recordingDir, skillName, description, targetDomains = [], outputRoot } = {}) {
+export async function generateSkill({ recordingDir, skillName, description, targetDomains = [], outputRoot, testHooks } = {}) {
   if (typeof recordingDir !== 'string' || recordingDir.trim() === '') {
     throw new GenerationError('recordingDir is required', 'INVALID_ARGUMENT')
   }
@@ -107,10 +172,15 @@ export async function generateSkill({ recordingDir, skillName, description, targ
   const resolvedOutputRoot = resolve(outputRoot ?? join(dirname(resolvedRecordingDir), 'skills'))
   const skillDir = join(resolvedOutputRoot, identifiers.skillName)
   await mkdir(resolvedOutputRoot, { recursive: true })
-  await assertMissing(skillDir)
 
-  const temporaryDir = await mkdtemp(join(resolvedOutputRoot, `.browser-forge-${identifiers.skillName}-`))
+  const ownershipToken = randomUUID().replaceAll('-', '/')
+  let temporaryDir
+  let reserved = false
   try {
+    await reserveSkillDir(skillDir, ownershipToken)
+    reserved = true
+    temporaryDir = await mkdtemp(join(resolvedOutputRoot, `.browser-forge-${identifiers.skillName}-`))
+    await testHooks?.beforeRender?.({ skillDir, temporaryDir })
     const values = {
       SKILL_NAME: identifiers.skillName,
       SKILL_ID: identifiers.skillId,
@@ -122,12 +192,17 @@ export async function generateSkill({ recordingDir, skillName, description, targ
       AUTH_RUNTIME_VERSION
     }
     await renderTree(TEMPLATE_ROOT, temporaryDir, values, identifiers)
-    await assertMissing(skillDir)
-    await rename(temporaryDir, skillDir)
-  } catch (error) {
+    await publishTree(temporaryDir, skillDir, ownershipToken)
+    await testHooks?.beforeReady?.({ skillDir, temporaryDir })
+    await assertOwnership(skillDir, ownershipToken)
     await rm(temporaryDir, { recursive: true, force: true })
+    temporaryDir = undefined
+    await writeReadyMarker(skillDir, ownershipToken)
+  } catch (error) {
+    if (temporaryDir) await rm(temporaryDir, { recursive: true, force: true })
+    if (reserved) await removeOwnedReservation(skillDir, ownershipToken)
     throw error
   }
 
-  return { skillDir, ...identifiers }
+  return { skillDir, ready: true, ...identifiers }
 }

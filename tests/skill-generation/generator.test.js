@@ -1,8 +1,10 @@
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { generateSkill } from '../../src/skill-generation/generator.js'
+import { validateSkill } from '../../src/skill-generation/manifest-validator.js'
 
 async function createRecording(root, name = 'session-test') {
   const recordingDir = join(root, name)
@@ -121,6 +123,112 @@ describe('generateSkill', () => {
       await expect(access(join(result.skillDir, 'private-recording-value.txt'))).rejects.toThrow()
       await expect(access(join(result.skillDir, 'recording.har'))).rejects.toThrow()
       await expect(access(join(result.skillDir, 'timeline.json'))).rejects.toThrow()
+    })
+  })
+
+  it('reserves the final directory exclusively and publishes only one concurrent result', async () => {
+    await withTemporaryRoot(async root => {
+      const recordingDir = await createRecording(root)
+      const options = {
+        recordingDir,
+        skillName: 'order-tools',
+        description: 'Manage test orders.',
+        targetDomains: []
+      }
+
+      const results = await Promise.allSettled([generateSkill(options), generateSkill(options)])
+      const successes = results.filter(result => result.status === 'fulfilled')
+      const failures = results.filter(result => result.status === 'rejected')
+      const skillDir = join(root, 'skills', 'order-tools')
+
+      expect(successes).toHaveLength(1)
+      expect(failures).toHaveLength(1)
+      expect(failures[0].reason).toMatchObject({ code: 'SKILL_ALREADY_EXISTS' })
+      expect(JSON.parse(await readFile(join(skillDir, '.browser-forge-ready'), 'utf8'))).toMatchObject({ completed: true })
+      expect((await readdir(join(root, 'skills'))).filter(name => name.startsWith('.browser-forge-order-tools-'))).toEqual([])
+    })
+  })
+
+  it('marks a generated skeleton complete without creating a secret-scanner finding', async () => {
+    await withTemporaryRoot(async root => {
+      const result = await generateSkill({
+        recordingDir: await createRecording(root),
+        skillName: 'order-tools',
+        description: 'Manage test orders.',
+        targetDomains: ['api.example.test']
+      })
+
+      const validation = await validateSkill(result.skillDir)
+
+      expect(validation).toMatchObject({ ok: true, complete: true })
+      expect(validation.findings).toEqual([])
+    })
+  })
+
+  it('cleans its temporary directory and reserved placeholder when rendering fails', async () => {
+    await withTemporaryRoot(async root => {
+      const recordingDir = await createRecording(root)
+      const outputRoot = join(root, 'skills')
+
+      await expect(generateSkill({
+        recordingDir,
+        skillName: 'order-tools',
+        description: 'Manage test orders.',
+        targetDomains: [],
+        testHooks: { beforeRender: () => { throw new Error('render failed') } }
+      })).rejects.toThrow('render failed')
+
+      await expect(access(join(outputRoot, 'order-tools'))).rejects.toThrow()
+      await expect(readdir(outputRoot)).resolves.toEqual([])
+    })
+  })
+
+  it('does not delete competitor content after losing ownership before readiness', async () => {
+    await withTemporaryRoot(async root => {
+      const recordingDir = await createRecording(root)
+      const outputRoot = join(root, 'skills')
+      const skillDir = join(outputRoot, 'order-tools')
+
+      await expect(generateSkill({
+        recordingDir,
+        skillName: 'order-tools',
+        description: 'Manage test orders.',
+        targetDomains: [],
+        testHooks: {
+          beforeReady: async () => {
+            await rm(skillDir, { recursive: true, force: true })
+            await mkdir(skillDir)
+            await writeFile(join(skillDir, 'competitor.txt'), 'do not delete\n')
+          }
+        }
+      })).rejects.toMatchObject({ code: 'OWNERSHIP_LOST' })
+
+      await expect(readFile(join(skillDir, 'competitor.txt'), 'utf8')).resolves.toBe('do not delete\n')
+    })
+  })
+
+  it('emits one JSON object with contract exit codes for CLI errors', async () => {
+    await withTemporaryRoot(async root => {
+      const run = args => spawnSync(process.execPath, ['src/skill-generation/cli.mjs', ...args], {
+        cwd: process.cwd(),
+        encoding: 'utf8'
+      })
+      const parseSingleJson = result => {
+        expect(result.stdout.trim().split('\n')).toHaveLength(1)
+        return JSON.parse(result.stdout)
+      }
+
+      const argumentError = run(['generate', '--skill-name', 'order-tools'])
+      expect(argumentError.status).toBe(2)
+      expect(parseSingleJson(argumentError).error.code).toBe('INVALID_ARGUMENT')
+
+      const environmentError = run(['generate', '--recording-dir', join(root, 'missing'), '--skill-name', 'order-tools', '--description', 'Example'])
+      expect(environmentError.status).toBe(3)
+      expect(parseSingleJson(environmentError).error.code).toBe('RECORDING_NOT_FOUND')
+
+      const validationError = run(['validate', '--skill-dir', root])
+      expect(validationError.status).toBe(1)
+      expect(parseSingleJson(validationError)).toMatchObject({ ok: false, status: 'invalid' })
     })
   })
 })

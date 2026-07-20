@@ -32,6 +32,22 @@ describe('generated skill manifest schema', () => {
 })
 
 describe('validateSkill', () => {
+  it('reports a skill without a ready marker as incomplete', async () => {
+    const skillDir = await mkdtemp(join(tmpdir(), 'browser-forge-skill-'))
+    await writeFile(join(skillDir, 'manifest.json'), JSON.stringify(validManifest))
+    await writeFile(join(skillDir, 'SKILL.md'), '# Sanitized skill\n')
+
+    try {
+      const result = await validateSkill(skillDir)
+
+      expect(result.ok).toBe(false)
+      expect(result.complete).toBe(false)
+      expect(result.issues.map(issue => issue.code)).toContain('SKILL_NOT_READY')
+    } finally {
+      await rm(skillDir, { recursive: true, force: true })
+    }
+  })
+
   it('returns schema, graph, and secret findings together', async () => {
     const skillDir = await mkdtemp(join(tmpdir(), 'browser-forge-skill-'))
     const manifest = structuredClone(validManifest)
