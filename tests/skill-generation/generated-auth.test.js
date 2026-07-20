@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -27,6 +27,22 @@ function execute(file, args, cwd) {
   })
 }
 
+async function findVenvPython(skillDir) {
+  const candidates = [
+    join(skillDir, 'scripts', '.venv', 'bin', 'python'),
+    join(skillDir, 'scripts', '.venv', 'Scripts', 'python.exe')
+  ]
+  for (const candidate of candidates) {
+    try {
+      await access(candidate)
+      return candidate
+    } catch {
+      // Try the next platform-specific virtualenv layout.
+    }
+  }
+  throw new Error(`Generated virtualenv Python was not found: ${candidates.join(', ')}`)
+}
+
 describe('generated browser cookie authentication', () => {
   it('installs and passes cookie, browser provider, cache, and redaction tests', async () => {
     const root = await mkdtemp(join(tmpdir(), 'browser-forge-generated-auth-'))
@@ -43,7 +59,14 @@ describe('generated browser cookie authentication', () => {
       const install = execute('bash', [join(result.skillDir, 'scripts', 'install.sh'), '--with-test'], result.skillDir)
       expect(install.status, install.stderr).toBe(0)
 
-      const python = join(result.skillDir, 'scripts', '.venv', 'bin', 'python')
+      const python = await findVenvPython(result.skillDir)
+      const dependency = execute(python, ['-c', 'import browser_cookie3; print(browser_cookie3.__name__)'], result.skillDir)
+      expect(dependency.status, dependency.stderr).toBe(0)
+      expect(dependency.stdout.trim()).toBe('browser_cookie3')
+
+      const pyproject = await readFile(join(result.skillDir, 'scripts', 'cli', 'pyproject.toml'), 'utf8')
+      expect(pyproject).toContain('"browser-cookie3>=0.19.1"')
+
       const tests = execute(python, ['-m', 'pytest', '-q', 'tests/test_auth_selection.py'], result.skillDir)
       expect(tests.status, `${tests.stdout}\n${tests.stderr}`).toBe(0)
 

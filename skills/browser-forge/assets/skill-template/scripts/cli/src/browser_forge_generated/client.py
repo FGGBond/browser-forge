@@ -6,11 +6,19 @@ import json
 import logging
 import os
 import re
-from typing import Any
+from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .config import Config
+
+
+class AuthSessionLike(Protocol):
+    def cookie_header(self, url: str | None = None, *, now: float | None = None) -> str: ...
+
+
+class AuthResolverLike(Protocol):
+    def resolve(self, target_url: str, force_refresh: bool = False) -> AuthSessionLike: ...
 
 
 class ClientError(RuntimeError):
@@ -52,8 +60,16 @@ def redacting_logger(secrets: tuple[str, ...] = ()) -> logging.Logger:
 
 
 class Client:
-    def __init__(self, config: Config):
+    def __init__(
+        self,
+        config: Config,
+        *,
+        auth_resolver: AuthResolverLike | None = None,
+        force_refresh_auth: bool = False,
+    ):
         self.config = config
+        self.auth_resolver = auth_resolver
+        self.force_refresh_auth = force_refresh_auth
         self.logger = redacting_logger(config.secrets)
 
     def request(self, method: str, path: str) -> Any:
@@ -62,12 +78,29 @@ class Client:
         if not self.config.base_url:
             raise ClientError("INVALID_CONFIGURATION", "BROWSER_FORGE_BASE_URL is required.")
 
+        target_url = f"{self.config.base_url}/{path.lstrip('/')}"
         headers = {"Accept": "application/json"}
         if self.config.auth_value:
             headers["Authorization"] = self.config.auth_value
         if self.config.cookie_value:
             headers["Cookie"] = self.config.cookie_value
-        request = Request(f"{self.config.base_url}/{path.lstrip('/')}", headers=headers, method=method)
+        if self.auth_resolver is not None:
+            try:
+                session = self.auth_resolver.resolve(
+                    target_url,
+                    force_refresh=self.force_refresh_auth,
+                )
+                self.force_refresh_auth = False
+                cookie_header = session.cookie_header(target_url)
+            except Exception as error:
+                raise ClientError(
+                    getattr(error, "code", "AUTH_UNAVAILABLE"),
+                    str(error),
+                    getattr(error, "recoverable", True),
+                ) from None
+            if cookie_header:
+                headers["Cookie"] = cookie_header
+        request = Request(target_url, headers=headers, method=method)
         self.logger.debug("Requesting %s %s", method, request.full_url)
         try:
             with urlopen(request, timeout=30) as response:  # noqa: S310 - generated allowlisted client shell

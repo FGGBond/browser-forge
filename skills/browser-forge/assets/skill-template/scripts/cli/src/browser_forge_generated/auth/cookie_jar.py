@@ -53,6 +53,26 @@ def _specificity(record: CookieRecord) -> tuple[int, int, int]:
     )
 
 
+def cookies_for_host(
+    records: list[CookieRecord] | tuple[CookieRecord, ...],
+    url: str,
+    *,
+    now: float | None = None,
+) -> list[CookieRecord]:
+    """Return unexpired cookies whose domain may apply to the URL host."""
+
+    request_host = (urlsplit(url).hostname or "").rstrip(".").lower()
+    current_time = time.time() if now is None else now
+    return [
+        record
+        for record in records
+        if record.name
+        and request_host
+        and (record.expires_at is None or record.expires_at > current_time)
+        and _domain_matches(record, request_host)
+    ]
+
+
 def cookies_for_url(
     records: list[CookieRecord] | tuple[CookieRecord, ...],
     url: str,
@@ -62,20 +82,12 @@ def cookies_for_url(
     """Return one URL-valid record per name, ordered by cookie specificity."""
 
     parsed = urlsplit(url)
-    request_host = (parsed.hostname or "").rstrip(".").lower()
     request_path = parsed.path or "/"
-    current_time = time.time() if now is None else now
     winners: dict[str, CookieRecord] = {}
 
-    for record in records:
+    for record in cookies_for_host(records, url, now=now):
         cookie_path = _normalized_path(record.path)
-        if not record.name or not request_host:
-            continue
-        if record.expires_at is not None and record.expires_at <= current_time:
-            continue
         if record.secure and parsed.scheme.lower() != "https":
-            continue
-        if not _domain_matches(record, request_host):
             continue
         if not _path_matches(cookie_path, request_path):
             continue

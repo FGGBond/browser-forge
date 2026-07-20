@@ -8,7 +8,7 @@ from collections.abc import Iterable
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from .cookie_jar import CookieRecord, cookies_for_url
+from .cookie_jar import CookieRecord, cookies_for_host, cookies_for_url
 from .session_store import DEFAULT_TTL_SECONDS, AuthSession, SessionStore
 
 
@@ -81,12 +81,12 @@ class BrowserCookieProvider:
         for browser in self.browsers:
             try:
                 loader = getattr(browser_cookie3, browser)
-                records = cookies_for_url(
+                records = cookies_for_host(
                     self._records(loader(domain_name=hostname)),
                     target_url,
                     now=self.now(),
                 )
-                if not records:
+                if not cookies_for_url(records, target_url, now=self.now()):
                     raise LookupError("no matching cookies")
                 cookie_expiries = [record.expires_at for record in records if record.expires_at is not None]
                 expires_at = self.now() + self.ttl_seconds

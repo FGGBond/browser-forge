@@ -9,6 +9,7 @@ import re
 import sys
 from typing import Any, NoReturn
 
+from .auth import BrowserCookieProvider
 from .client import Client, ClientError
 from .config import load_config
 from .envelope import failure, success
@@ -139,6 +140,12 @@ def build_parser(manifest: dict[str, Any]) -> EnvelopeArgumentParser:
         if command_id == "describe":
             subparser.add_argument("described_command", nargs="?", help="Command ID to describe")
             continue
+        if command.get("requires", {}).get("auth"):
+            subparser.add_argument(
+                "--refresh-auth",
+                action="store_true",
+                help="Discard the cached authentication session before this command.",
+            )
         for input_spec in command.get("inputs", []):
             option = f"--{input_spec['name'].replace('_', '-')}"
             kwargs: dict[str, Any] = {
@@ -156,6 +163,15 @@ def build_parser(manifest: dict[str, Any]) -> EnvelopeArgumentParser:
 
 def _next_actions(command: dict[str, Any]) -> list[dict[str, Any]]:
     return [action for action in command.get("next_actions", []) if isinstance(action, dict)]
+
+
+def _build_auth_resolver(manifest: dict[str, Any]):
+    """Build the provider behind the resolver seam consumed by the client."""
+
+    providers = manifest.get("auth", {}).get("providers", [])
+    if "browser_cookie" not in providers:
+        return None
+    return BrowserCookieProvider(str(manifest.get("id", "browser-forge")))
 
 
 def _execute_business(command: dict[str, Any], values: dict[str, Any], client: Client) -> Any:
@@ -213,7 +229,17 @@ def main(argv: list[str] | None = None) -> int:
         for input_spec in command.get("inputs", [])
     }
     try:
-        data = _execute_business(command, values, Client(config))
+        requires_auth = bool(command.get("requires", {}).get("auth"))
+        auth_resolver = _build_auth_resolver(manifest) if requires_auth else None
+        data = _execute_business(
+            command,
+            values,
+            Client(
+                config,
+                auth_resolver=auth_resolver,
+                force_refresh_auth=getattr(args, "refresh_auth", False),
+            ),
+        )
     except ClientError as error:
         _emit(failure(command_id, error.code, str(error), error.recoverable, _next_actions(command)))
         return 1
