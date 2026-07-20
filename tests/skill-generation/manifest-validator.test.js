@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
-import { validateSkill } from '../../src/skill-generation/manifest-validator.js'
+import { commandIdsFromSkillDocument, validateSkill } from '../../src/skill-generation/manifest-validator.js'
 
 const schema = JSON.parse(await readFile(new URL('../../skills/browser-forge/schemas/manifest.schema.json', import.meta.url)))
 const validManifest = JSON.parse(await readFile(new URL('./fixtures/valid-manifest.json', import.meta.url)))
@@ -83,5 +83,54 @@ describe('validateSkill', () => {
     } finally {
       await rm(skillDir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('SKILL.md command parsing', () => {
+  it('reads canonical command list and heading formats only inside the Commands section', () => {
+    const document = [
+      '# order-tools',
+      '',
+      'Use `scripts/browser_forge-order-tools` to invoke commands.',
+      '',
+      '## Overview',
+      '',
+      '- `not-a-command` is an unrelated example.',
+      '### another-false-positive',
+      '',
+      '## Commands',
+      '',
+      '- `doctor` — check prerequisites.',
+      '* [auth-status](references/commands/auth-status.md) — inspect authentication.',
+      '+ describe — inspect the contract.',
+      '### `list-orders`',
+      '#### [get-order](references/commands/get-order.md)',
+      '',
+      '## References',
+      '',
+      '- [workflow-example](references/workflows.md)',
+      '### reference-heading',
+      ''
+    ].join('\n')
+
+    expect(commandIdsFromSkillDocument(document)).toEqual([
+      'auth-status',
+      'describe',
+      'doctor',
+      'get-order',
+      'list-orders'
+    ])
+  })
+
+  it('returns no commands when the explicit Commands section is absent', () => {
+    const document = [
+      '# order-tools',
+      '',
+      '- `doctor` — mentioned outside a command section.',
+      '### `list-orders`',
+      ''
+    ].join('\n')
+
+    expect(commandIdsFromSkillDocument(document)).toEqual([])
   })
 })

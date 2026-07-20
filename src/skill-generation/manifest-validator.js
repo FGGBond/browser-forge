@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
@@ -27,6 +28,25 @@ const REQUIRED_READY_FEATURES = Object.freeze([
   'offline-network-guard',
   'standalone-auth-runtime'
 ])
+const REQUIRED_HELP_SECTIONS = Object.freeze([
+  'Dependencies',
+  'Authentication',
+  'Output',
+  'Next actions',
+  'Side effects',
+  'Idempotency',
+  'Examples'
+])
+const ENVELOPE_FIELDS = Object.freeze([
+  'spec_version',
+  'ok',
+  'command',
+  'status',
+  'data',
+  'artifacts',
+  'auth',
+  'next_actions'
+])
 
 function issue(code, path, message) {
   return { code, path, message }
@@ -38,13 +58,23 @@ function commandIds(manifest) {
     .map(command => command.id)
 }
 
-function commandIdsFromSkillDocument(text) {
+export function commandIdsFromSkillDocument(text) {
   const ids = []
+  let inCommandsSection = false
   for (const line of text.split('\n')) {
-    if (!/^\s*(?:[-*+]\s+|#{3,6}\s+)/.test(line)) continue
-    const quoted = line.match(/`([a-z0-9]+(?:-[a-z0-9]+)*)`/i)?.[1]
-    const plain = line.match(/^\s*(?:[-*+]\s+|#{3,6}\s+)([a-z0-9]+(?:-[a-z0-9]+)*)\b/i)?.[1]
-    if (quoted ?? plain) ids.push((quoted ?? plain).toLowerCase())
+    if (/^##[ \t]+commands[ \t]*#*[ \t]*$/i.test(line)) {
+      inCommandsSection = true
+      continue
+    }
+    if (inCommandsSection && /^#{1,2}[ \t]+/.test(line)) break
+    if (!inCommandsSection) continue
+
+    const item = line.match(/^\s*(?:[-*+]\s+|\d+\.\s+|#{3,6}\s+)(.*)$/)?.[1]
+    if (!item) continue
+    const commandId = item.match(/^`([a-z0-9]+(?:-[a-z0-9]+)*)`/i)?.[1] ??
+      item.match(/^\[`?([a-z0-9]+(?:-[a-z0-9]+)*)`?\]\([^)]+\)/i)?.[1] ??
+      item.match(/^([a-z0-9]+(?:-[a-z0-9]+)*)\b/i)?.[1]
+    if (commandId) ids.push(commandId.toLowerCase())
   }
   return [...new Set(ids)].sort()
 }
@@ -53,32 +83,191 @@ function sameValues(left, right) {
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
-async function runtimeContractIssues(skillDir, manifest, readyMarker) {
-  const issues = []
-  const packageName = `browser_forge_${String(manifest?.name ?? '').replaceAll('-', '_')}`
-  const runtimeRoot = join(skillDir, 'scripts', 'cli', 'src', packageName)
+function runtimePackageName(manifest) {
+  const skillName = String(manifest?.id ?? '').match(/^browser_forge\.([a-z0-9]+(?:-[a-z0-9]+)*)$/)?.[1]
+  return skillName ? `browser_forge_${skillName.replaceAll('-', '_')}` : null
+}
 
-  if (readyMarker?.auth_runtime_version !== manifest?.auth?.runtime_version) {
+function findSystemPython() {
+  for (const command of ['python3', 'python']) {
+    const result = spawnSync(command, [
+      '-c',
+      'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'
+    ], { encoding: 'utf8', timeout: 5_000 })
+    if (result.status === 0) return command
+  }
+  return null
+}
+
+function runGeneratedPython(python, skillDir, packageName, args) {
+  const environment = {
+    ...process.env,
+    PYTHONPATH: join(skillDir, 'scripts', 'cli', 'src'),
+    BROWSER_FORGE_MANIFEST_PATH: join(skillDir, 'manifest.json'),
+    BROWSER_FORGE_DISABLE_NETWORK: '1'
+  }
+  delete environment.PYTHONHOME
+  delete environment.BROWSER_FORGE_BASE_URL
+  delete environment.BROWSER_FORGE_AUTH_VALUE
+  delete environment.BROWSER_FORGE_COOKIE_VALUE
+  return spawnSync(python, args[0] === '-c' ? args : ['-m', packageName, ...args], {
+    cwd: skillDir,
+    encoding: 'utf8',
+    env: environment,
+    timeout: 10_000,
+    maxBuffer: 1024 * 1024
+  })
+}
+
+function parseSingleJsonLine(text) {
+  const lines = String(text ?? '').trim().split(/\r?\n/)
+  if (lines.length !== 1 || lines[0] === '') return null
+  try {
+    const parsed = JSON.parse(lines[0])
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+async function entrypointContractIssues(skillDir, manifest, packageName) {
+  const issues = []
+  const relativePath = manifest?.cli?.entrypoint
+  if (typeof relativePath !== 'string' || !packageName) {
+    return [issue('ENTRYPOINT_TARGET_MISMATCH', 'manifest.json/cli/entrypoint', 'CLI entrypoint does not target the generated runtime package')]
+  }
+
+  const entrypointPath = join(skillDir, relativePath)
+  let details
+  try {
+    details = await stat(entrypointPath)
+  } catch {
+    return [issue('ENTRYPOINT_MISSING', relativePath, 'Declared CLI entrypoint file is missing')]
+  }
+  if (!details.isFile()) {
+    issues.push(issue('ENTRYPOINT_MISSING', relativePath, 'Declared CLI entrypoint is not a file'))
+    return issues
+  }
+  if ((details.mode & 0o111) === 0) {
+    issues.push(issue('ENTRYPOINT_NOT_EXECUTABLE', relativePath, 'Declared CLI entrypoint is not executable'))
+  }
+
+  try {
+    const source = await readFile(entrypointPath, 'utf8')
+    if (!source.includes(`PACKAGE_NAME="${packageName}"`) || !source.includes('-m "$PACKAGE_NAME"')) {
+      issues.push(issue('ENTRYPOINT_TARGET_MISMATCH', relativePath, 'CLI entrypoint does not target the generated runtime package'))
+    }
+  } catch {
+    issues.push(issue('ENTRYPOINT_TARGET_MISMATCH', relativePath, 'CLI entrypoint could not be inspected'))
+  }
+  return issues
+}
+
+function runtimeExecutionIssues(skillDir, manifest, packageName) {
+  const issues = []
+  const python = findSystemPython()
+  if (!python || !packageName) {
+    return [issue(
+      'RUNTIME_PYTHON_UNAVAILABLE',
+      'manifest.json/cli/python_requires',
+      'Python 3.10 or newer is required to validate the generated runtime'
+    )]
+  }
+
+  const authProbe = runGeneratedPython(python, skillDir, packageName, [
+    '-c',
+    `import json; from ${packageName}.auth import AUTH_RUNTIME_VERSION; print(json.dumps(AUTH_RUNTIME_VERSION))`
+  ])
+  let authVersion = null
+  if (authProbe.status === 0) {
+    try {
+      authVersion = JSON.parse(String(authProbe.stdout).trim())
+    } catch {
+      // The stable mismatch below covers unreadable runtime version output.
+    }
+  }
+  if (authVersion !== manifest?.auth?.runtime_version) {
     issues.push(issue(
       'AUTH_VERSION_MISMATCH',
       'manifest.json/auth/runtime_version',
-      'Manifest auth runtime version does not match the generated runtime version'
+      'Manifest auth runtime version does not match the copied runtime code version'
     ))
   }
 
-  if (readyMarker?.envelope_version !== manifest?.cli?.envelope_version) {
+  const described = runGeneratedPython(python, skillDir, packageName, ['describe'])
+  const describedPayload = described.status === 0 ? parseSingleJsonLine(described.stdout) : null
+  if (described.status !== 0) {
     issues.push(issue(
-      'ENVELOPE_VERSION_MISMATCH',
-      'manifest.json/cli/envelope_version',
-      'Manifest envelope version does not match the generated runtime version'
+      'RUNTIME_DESCRIBE_FAILED',
+      'manifest.json/commands',
+      'Generated runtime could not execute describe from its source tree'
     ))
+  } else if (!describedPayload) {
+    issues.push(issue(
+      'RUNTIME_DESCRIBE_INVALID_JSON',
+      'manifest.json/commands',
+      'Generated runtime describe output must be exactly one JSON object'
+    ))
+  } else {
+    if (
+      describedPayload.ok !== true ||
+      ENVELOPE_FIELDS.some(field => !Object.hasOwn(describedPayload, field))
+    ) {
+      issues.push(issue(
+        'ENVELOPE_CONTRACT_MISSING',
+        'manifest.json/cli/envelope_version',
+        'Generated runtime describe output does not implement the JSON envelope contract'
+      ))
+    }
+    if (describedPayload.spec_version !== manifest?.cli?.envelope_version) {
+      issues.push(issue(
+        'ENVELOPE_VERSION_MISMATCH',
+        'manifest.json/cli/envelope_version',
+        'Manifest envelope version does not match generated runtime output'
+      ))
+    }
+    const describedIds = commandIds(describedPayload?.data?.manifest).sort()
+    const manifestIds = commandIds(manifest).sort()
+    if (!sameValues(describedIds, manifestIds)) {
+      issues.push(issue(
+        'RUNTIME_COMMAND_MISMATCH',
+        'manifest.json/commands',
+        'Generated runtime describe command set must exactly match manifest commands'
+      ))
+    }
   }
 
-  const generatedBuiltins = Array.isArray(readyMarker?.builtin_commands)
-    ? [...readyMarker.builtin_commands].sort()
-    : [...BUILTIN_COMMAND_IDS].sort()
+  for (const commandId of commandIds(manifest)) {
+    const help = runGeneratedPython(python, skillDir, packageName, [commandId, '--help'])
+    if (help.status !== 0) {
+      issues.push(issue(
+        'COMMAND_HELP_FAILED',
+        `${manifest.cli.entrypoint}#${commandId}`,
+        `Generated runtime help failed for command: ${commandId}`
+      ))
+      continue
+    }
+    const missingSections = REQUIRED_HELP_SECTIONS.filter(section => {
+      const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      return !new RegExp(`^\\s*${escaped}:\\s*$`, 'm').test(help.stdout)
+    })
+    if (missingSections.length > 0) {
+      issues.push(issue(
+        'HELP_CONTRACT_MISSING',
+        `${manifest.cli.entrypoint}#${commandId}`,
+        `Generated runtime help is missing required sections for ${commandId}: ${missingSections.join(', ')}`
+      ))
+    }
+  }
+
+  return issues
+}
+
+async function runtimeContractIssues(skillDir, manifest) {
+  const issues = []
+  const packageName = runtimePackageName(manifest)
   const manifestCommandIds = commandIds(manifest)
-  for (const builtin of generatedBuiltins) {
+  for (const builtin of BUILTIN_COMMAND_IDS) {
     if (!manifestCommandIds.includes(builtin)) {
       issues.push(issue(
         'BUILTIN_COMMAND_MISSING',
@@ -87,6 +276,14 @@ async function runtimeContractIssues(skillDir, manifest, readyMarker) {
       ))
     }
   }
+
+  if (!packageName) {
+    issues.push(...await entrypointContractIssues(skillDir, manifest, packageName))
+    issues.push(...runtimeExecutionIssues(skillDir, manifest, packageName))
+    return issues
+  }
+
+  const runtimeRoot = join(skillDir, 'scripts', 'cli', 'src', packageName)
 
   const requiredAuthFiles = ['provider.py', 'jdme_sso.py', 'browser_cookies.py', 'cookie_jar.py', 'session_store.py']
   for (const filename of requiredAuthFiles) {
@@ -99,25 +296,6 @@ async function runtimeContractIssues(skillDir, manifest, readyMarker) {
         `Generated authentication runtime file is missing: ${filename}`
       ))
     }
-  }
-
-  try {
-    const envelopeSource = await readFile(join(runtimeRoot, 'envelope.py'), 'utf8')
-    const version = envelopeSource.match(/^SPEC_VERSION\s*=\s*["']([^"']+)["']/m)?.[1]
-    const fields = ['spec_version', 'ok', 'command', 'status', 'data', 'artifacts', 'auth', 'next_actions']
-    if (version !== manifest?.cli?.envelope_version || fields.some(field => !envelopeSource.includes(`"${field}"`))) {
-      issues.push(issue(
-        'ENVELOPE_CONTRACT_MISSING',
-        `scripts/cli/src/${packageName}/envelope.py`,
-        'Generated runtime does not implement the declared JSON envelope contract'
-      ))
-    }
-  } catch {
-    issues.push(issue(
-      'ENVELOPE_CONTRACT_MISSING',
-      `scripts/cli/src/${packageName}/envelope.py`,
-      'Generated JSON envelope runtime is missing'
-    ))
   }
 
   try {
@@ -139,27 +317,13 @@ async function runtimeContractIssues(skillDir, manifest, readyMarker) {
     ))
   }
 
-  try {
-    const cliSource = await readFile(join(runtimeRoot, 'cli.py'), 'utf8')
-    if (['Dependencies:', 'Output:', 'Next actions:'].some(section => !cliSource.includes(section))) {
-      issues.push(issue(
-        'HELP_CONTRACT_MISSING',
-        `scripts/cli/src/${packageName}/cli.py`,
-        'Generated CLI help does not contain dependency, output, and next-action sections'
-      ))
-    }
-  } catch {
-    issues.push(issue(
-      'HELP_CONTRACT_MISSING',
-      `scripts/cli/src/${packageName}/cli.py`,
-      'Generated CLI runtime is missing'
-    ))
-  }
+  issues.push(...await entrypointContractIssues(skillDir, manifest, packageName))
+  issues.push(...runtimeExecutionIssues(skillDir, manifest, packageName))
 
   return issues
 }
 
-async function readyContractIssues(skillDir, manifest, readyMarker) {
+async function readyContractIssues(skillDir, manifest) {
   const issues = []
   const manifestIds = [...new Set(commandIds(manifest))].sort()
   let skillIds = []
@@ -196,7 +360,7 @@ async function readyContractIssues(skillDir, manifest, readyMarker) {
     }
   }
 
-  issues.push(...await runtimeContractIssues(skillDir, manifest, readyMarker))
+  issues.push(...await runtimeContractIssues(skillDir, manifest))
   return issues
 }
 
@@ -240,7 +404,7 @@ export async function validateSkill(skillDir) {
     }
     if (manifest?.status === 'ready') {
       try {
-        issues.push(...await readyContractIssues(skillDir, manifest, readyMarker))
+        issues.push(...await readyContractIssues(skillDir, manifest))
       } catch (error) {
         issues.push({ code: 'READY_CONTRACT_VALIDATION_ERROR', path: '.', message: error.message })
       }

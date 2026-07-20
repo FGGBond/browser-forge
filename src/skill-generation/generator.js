@@ -2,7 +2,7 @@ import { chmod, link, mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, write
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { AUTH_RUNTIME_VERSION, BUILTIN_COMMAND_IDS, SPEC_VERSION } from './constants.js'
+import { AUTH_RUNTIME_VERSION, SPEC_VERSION } from './constants.js'
 import { normalizeSkillName } from './names.js'
 
 const REQUIRED_RECORDING_FILES = ['RECORDING.md', 'recording.har', 'timeline.json', 'metadata.json']
@@ -182,11 +182,7 @@ async function writeReadyMarker(skillDir, token) {
   await assertOwnership(skillDir, token)
   const readyMarker = join(skillDir, READY_MARKER)
   const contents = `${JSON.stringify({
-    completed: true,
-    spec_version: SPEC_VERSION,
-    auth_runtime_version: AUTH_RUNTIME_VERSION,
-    envelope_version: SPEC_VERSION,
-    builtin_commands: BUILTIN_COMMAND_IDS
+    completed: true
   })}\n`
   try {
     await writeFile(readyMarker, contents, { flag: 'wx' })
@@ -199,8 +195,8 @@ async function writeReadyMarker(skillDir, token) {
 export async function readReadyMarker(skillDir) {
   try {
     const marker = JSON.parse(await readFile(join(skillDir, READY_MARKER), 'utf8'))
-    if (marker?.completed !== true || marker.spec_version !== SPEC_VERSION) return null
-    return marker
+    if (marker?.completed !== true) return null
+    return { completed: true }
   } catch (error) {
     if (error.code === 'ENOENT' || error instanceof SyntaxError) return null
     throw error

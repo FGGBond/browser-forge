@@ -5,6 +5,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 COMMAND_NAME="{{ENTRYPOINT_NAME}}"
 PACKAGE_NAME="{{PACKAGE_NAME}}"
 POSIX_VENV_COMMAND="$SCRIPT_DIR/.venv/bin/$COMMAND_NAME"
+POSIX_VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
 WINDOWS_VENV_COMMAND="$SCRIPT_DIR/.venv/Scripts/$COMMAND_NAME.exe"
 WINDOWS_VENV_PYTHON="$SCRIPT_DIR/.venv/Scripts/python.exe"
 
@@ -14,6 +15,10 @@ PATH:-$SCRIPT_DIR/../manifest.json}"
 
 if [ -x "$POSIX_VENV_COMMAND" ]; then
   exec "$POSIX_VENV_COMMAND" "$@"
+fi
+
+if [ -x "$POSIX_VENV_PYTHON" ]; then
+  exec "$POSIX_VENV_PYTHON" -m "$PACKAGE_NAME" "$@"
 fi
 
 if [ -x "$WINDOWS_VENV_COMMAND" ]; then

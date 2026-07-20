@@ -1,4 +1,4 @@
-import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -60,7 +60,7 @@ function businessCommands() {
       idempotent: true,
       inputs: [],
       outputs: { schema_ref: '#/$defs/list-orders-output' },
-      requires: { auth: true, commands: [] },
+      requires: { auth: false, commands: [] },
       next_actions: [{ command: 'get-order', bindings: { order_id: '$.data.orders[0].id' } }],
       steps: [{ id: 'request-orders', request: 'GET /orders', depends_on: [] }]
     },
@@ -245,18 +245,55 @@ describe('generated skill independence and readiness', () => {
         'cli.py'
       )
       const originalGeneratedCli = await readFile(generatedCliPath, 'utf8')
-      await writeFile(generatedCliPath, originalGeneratedCli.replace('Next actions:', 'Follow up:'))
+      await writeFile(generatedCliPath, originalGeneratedCli.replace(
+        'def _epilog(command: dict[str, Any], manifest: dict[str, Any]) -> str:\n    requires = command.get("requires", {})',
+        'def _epilog(command: dict[str, Any], manifest: dict[str, Any]) -> str:\n    if command.get("id") == "get-order":\n        return "Incomplete command help."\n    requires = command.get("requires", {})'
+      ))
       await expectReadyFailure(generated.skillDir, 'HELP_CONTRACT_MISSING')
       await writeFile(generatedCliPath, originalGeneratedCli)
 
+      await writeFile(generatedCliPath, originalGeneratedCli.replace(
+        '_emit(success(command, {"manifest": manifest}))',
+        'print("not-json")'
+      ))
+      await expectReadyFailure(generated.skillDir, 'RUNTIME_DESCRIBE_INVALID_JSON')
+      await writeFile(generatedCliPath, originalGeneratedCli)
+
+      await writeFile(generatedCliPath, originalGeneratedCli.replace(
+        '_emit(success(command, {"manifest": manifest}))',
+        'manifest = dict(manifest)\n            manifest["commands"] = manifest.get("commands", [])[:-1]\n            _emit(success(command, {"manifest": manifest}))'
+      ))
+      await expectReadyFailure(generated.skillDir, 'RUNTIME_COMMAND_MISMATCH')
+      await writeFile(generatedCliPath, originalGeneratedCli)
+
+      await writeFile(generatedCliPath, `this is not valid Python\n${originalGeneratedCli}`)
+      await expectReadyFailure(generated.skillDir, 'RUNTIME_DESCRIBE_FAILED')
+      await writeFile(generatedCliPath, originalGeneratedCli)
+
+      const readyMarkerPath = join(generated.skillDir, '.browser-forge-ready')
+      const originalReadyMarker = await readFile(readyMarkerPath, 'utf8')
       readyManifest.auth.runtime_version = '9.9.9'
       await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
+      await writeFile(readyMarkerPath, `${JSON.stringify({
+        completed: true,
+        spec_version: '1.0',
+        auth_runtime_version: '9.9.9',
+        builtin_commands: ['doctor', 'auth-status', 'describe']
+      })}\n`)
       await expectReadyFailure(generated.skillDir, 'AUTH_VERSION_MISMATCH')
       readyManifest.auth.runtime_version = '1.0.0'
+      await writeFile(readyMarkerPath, originalReadyMarker)
 
       readyManifest.commands = readyManifest.commands.filter(command => command.id !== 'describe')
       await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
+      await writeFile(readyMarkerPath, `${JSON.stringify({
+        completed: true,
+        spec_version: '1.0',
+        auth_runtime_version: '1.0.0',
+        builtin_commands: []
+      })}\n`)
       await expectReadyFailure(generated.skillDir, 'BUILTIN_COMMAND_MISSING')
+      await writeFile(readyMarkerPath, originalReadyMarker)
       readyManifest.commands.splice(2, 0, {
         id: 'describe',
         summary: 'Describes the generated command contract.',
@@ -270,6 +307,25 @@ describe('generated skill independence and readiness', () => {
       })
       await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
 
+      const entrypoint = join(generated.skillDir, readyManifest.cli.entrypoint)
+      const originalEntrypoint = await readFile(entrypoint, 'utf8')
+      await chmod(entrypoint, 0o644)
+      await expectReadyFailure(generated.skillDir, 'ENTRYPOINT_NOT_EXECUTABLE')
+      await chmod(entrypoint, 0o755)
+
+      await writeFile(entrypoint, originalEntrypoint.replace(
+        'PACKAGE_NAME="browser_forge_order_tools"',
+        'PACKAGE_NAME="browser_forge_wrong_package"'
+      ))
+      await expectReadyFailure(generated.skillDir, 'ENTRYPOINT_TARGET_MISMATCH')
+      await writeFile(entrypoint, originalEntrypoint)
+      await chmod(entrypoint, 0o755)
+
+      await rm(entrypoint)
+      await expectReadyFailure(generated.skillDir, 'ENTRYPOINT_MISSING')
+      await writeFile(entrypoint, originalEntrypoint)
+      await chmod(entrypoint, 0o755)
+
       const standaloneSkill = join(standaloneRoot, 'order-tools')
       await cp(generated.skillDir, standaloneSkill, { recursive: true })
       expect(await readdir(standaloneRoot)).toEqual(['order-tools'])
@@ -277,22 +333,45 @@ describe('generated skill independence and readiness', () => {
       await expect(access(join(standaloneSkill, 'recording.har'))).rejects.toThrow()
       expect(await readFile(join(standaloneSkill, 'SKILL.md'), 'utf8')).not.toContain(repositoryRoot)
 
-      const install = execute('bash', [join(standaloneSkill, 'scripts', 'install.sh')], standaloneSkill)
+      const install = execute(
+        'bash',
+        [join(standaloneSkill, 'scripts', 'install.sh'), '--offline'],
+        standaloneSkill,
+        {
+          PIP_NO_INDEX: '1',
+          PIP_INDEX_URL: 'http://127.0.0.1:9/simple',
+          PIP_EXTRA_INDEX_URL: '',
+          PIP_RETRIES: '0',
+          PIP_TIMEOUT: '1'
+        }
+      )
       expect(install.exitCode, install.stderr).toBe(0)
-      const entrypoint = join(standaloneSkill, 'scripts', 'browser_forge-order-tools')
+      const standaloneEntrypoint = join(standaloneSkill, 'scripts', 'browser_forge-order-tools')
       for (const args of [['doctor'], ['auth-status'], ['describe']]) {
-        const command = execute(entrypoint, args, standaloneSkill)
+        const command = execute(standaloneEntrypoint, args, standaloneSkill)
         expect(command.exitCode, command.stderr).toBe(0)
         expect(parseSingleJson(command)).toMatchObject({ spec_version: '1.0', ok: true })
       }
 
-      const help = execute(entrypoint, ['list-orders', '--help'], standaloneSkill)
-      expect(help.exitCode, help.stderr).toBe(0)
-      expect(help.stdout).toContain('Dependencies:')
-      expect(help.stdout).toContain('Output:')
-      expect(help.stdout).toContain('Next actions:')
+      const requiredHelpSections = [
+        'Dependencies:',
+        'Authentication:',
+        'Output:',
+        'Next actions:',
+        'Side effects:',
+        'Idempotency:',
+        'Examples:'
+      ]
+      for (const command of readyManifest.commands) {
+        const help = execute(standaloneEntrypoint, [command.id, '--help'], standaloneSkill)
+        expect(help.exitCode, `${command.id}: ${help.stderr}`).toBe(0)
+        for (const section of requiredHelpSections) expect(help.stdout).toContain(section)
+        if (command.id === 'get-order') {
+          expect(help.stdout).toContain('Obtain from: list-orders -> $.data.orders[0].id')
+        }
+      }
 
-      const networkDisabled = execute(entrypoint, ['list-orders'], standaloneSkill)
+      const networkDisabled = execute(standaloneEntrypoint, ['list-orders'], standaloneSkill)
       expect(networkDisabled.exitCode).toBe(1)
       expect(parseSingleJson(networkDisabled)).toMatchObject({
         spec_version: '1.0',
