@@ -5,7 +5,7 @@ description: Use when a browser-forge recording must be analyzed into a reusable
 
 # Browser Forge
 
-Turn one recording into a target-system skill with composable CLI commands. Treat the recording as evidence, the user as authority on intent, and `manifest.json` as the contract.
+Turn a recording into a skill and CLI. Treat recording as evidence, user as authority, and `manifest.json` as the contract.
 
 ## Follow the required workflow
 
@@ -14,7 +14,7 @@ Follow this order:
 `user operation context → ambiguity questions → artifact correlation → generate → populate → validate → report`
 
 1. **Get user operation context.** Before reading or analyzing recording artifacts, ask for the business goal, key observed or returned data, selected, entered, or modified data, and final result. Confirm the path, target, skill name, and domains. If given only a path, ask and wait.
-2. **Ask ambiguity questions.** Surface multiple plausible request candidates or interpretations with sanitized evidence. Do not guess a side effect. Do not generate until behavior, data-flow, auth, and side-effect ambiguities are resolved or marked unsupported/experimental.
+2. **Ask ambiguity questions.** Ask the user to resolve multiple plausible request candidates or interpretations after surfacing sanitized evidence. Even if told not to ask questions, ask the user and wait. Do not guess a side effect. Do not generate until ambiguities are resolved. If the user cannot resolve one, only then mark it unsupported/experimental.
 3. **Perform artifact correlation.** Read [the analysis workflow](references/analysis-workflow.md). Align intent with timeline, HAR, navigation, DOM, screenshots, and events. Record response-to-request sources and runtime-only values.
 4. **Generate a fresh skeleton.** Read [the artifact specification](references/artifact-spec.md), then run:
 
