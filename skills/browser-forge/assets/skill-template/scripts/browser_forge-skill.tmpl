@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+COMMAND_NAME="{{ENTRYPOINT_NAME}}"
+PACKAGE_NAME="{{PACKAGE_NAME}}"
+VENV_COMMAND="$SCRIPT_DIR/.venv/bin/$COMMAND_NAME"
+
+export BROWSER_FORGE_MANIFEST_\
+PATH="${BROWSER_FORGE_MANIFEST_\
+PATH:-$SCRIPT_DIR/../manifest.json}"
+
+if [ -x "$VENV_COMMAND" ]; then
+  exec "$VENV_COMMAND" "$@"
+fi
+
+PATH_COMMAND=$(command -v "$COMMAND_NAME" 2>/dev/null || true)
+if [ -n "$PATH_COMMAND" ] && [ "$PATH_COMMAND" != "$0" ] && [ "$PATH_COMMAND" != "$SCRIPT_DIR/$COMMAND_NAME" ]; then
+  exec "$PATH_COMMAND" "$@"
+fi
+
+export PYTHONPATH="$SCRIPT_DIR/cli/src${PYTHONPATH:+:$PYTHONPATH}"
+if command -v python3 >/dev/null 2>&1; then
+  exec python3 -m "$PACKAGE_NAME" "$@"
+fi
+if command -v python >/dev/null 2>&1; then
+  exec python -m "$PACKAGE_NAME" "$@"
+fi
+
+printf '%s\n' '{"spec_version":"{{SPEC_VERSION}}","ok":false,"command":null,"status":"failure","data":null,"artifacts":[],"auth":{},"next_actions":[],"error":{"code":"PYTHON_NOT_FOUND","message":"Python 3.10 or newer is required.","recoverable":true}}'
+exit 127

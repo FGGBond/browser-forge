@@ -1,0 +1,15 @@
+import json
+from importlib import import_module
+from pathlib import Path
+
+manifest_data = json.loads((Path(__file__).parents[1] / "manifest.json").read_text())
+package = "browser_forge_" + manifest_data["id"].split(".", 1)[1].replace("-", "_")
+cli_module = import_module(package + ".cli")
+manifest_module = import_module(package + ".manifest")
+
+
+def test_registration():
+    parser = cli_module.build_parser(manifest_module.load_manifest())
+    choices = next(action for action in parser._actions if action.dest == "selected_command").choices
+
+    assert {"doctor", "auth-status", "describe"}.issubset(choices)

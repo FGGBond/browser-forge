@@ -1,0 +1,56 @@
+import logging
+import json
+from importlib import import_module
+from pathlib import Path
+
+import pytest
+
+manifest = json.loads((Path(__file__).parents[1] / "manifest.json").read_text())
+package = "browser_forge_" + manifest["id"].split(".", 1)[1].replace("-", "_")
+client_module = import_module(package + ".client")
+config_module = import_module(package + ".config")
+envelope_module = import_module(package + ".envelope")
+Client = client_module.Client
+ClientError = client_module.ClientError
+RedactingFilter = client_module.RedactingFilter
+Config = config_module.Config
+failure = envelope_module.failure
+success = envelope_module.success
+
+
+def test_success_fields():
+    result = success("doctor", {"ready": True})
+
+    assert set(result) == {
+        "spec_version", "ok", "command", "status", "data", "artifacts", "auth", "next_actions"
+    }
+    assert result["ok"] is True
+
+
+def test_failure_error():
+    result = failure("get-order", "INVALID_ARGUMENT", "order_id is required", True)
+
+    assert result["ok"] is False
+    assert result["error"] == {
+        "code": "INVALID_ARGUMENT",
+        "message": "order_id is required",
+        "recoverable": True,
+    }
+
+
+def test_network_disabled(monkeypatch):
+    monkeypatch.setenv("BROWSER_FORGE_" "DISABLE_NETWORK", "1")
+    client = Client(Config("https://api.example.test", None, None))
+
+    with pytest.raises(ClientError, match="Network access is disabled") as raised:
+        client.request("GET", "/orders")
+
+    assert raised.value.code == "NETWORK_DISABLED"
+
+
+def test_log_redaction():
+    record = logging.LogRecord("test", logging.WARNING, __file__, 1, "Authorization: Bearer visible-secret", (), None)
+
+    RedactingFilter().filter(record)
+
+    assert "visible-secret" not in record.getMessage()
