@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "node recorder.mjs",
     "test": "vitest run",
+    "test:skill-generation": "vitest run tests/skill-generation",
     "test:watch": "vitest"
   },
   "dependencies": {

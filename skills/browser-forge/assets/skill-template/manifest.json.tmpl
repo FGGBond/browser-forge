@@ -4,7 +4,13 @@
   "name": "{{SKILL_NAME}}",
   "description": {{DESCRIPTION}},
   "status": "draft",
-  "required_features": [],
+  "required_features": [
+    "manifest-command-parity",
+    "progressive-help",
+    "json-envelope",
+    "offline-network-guard",
+    "standalone-auth-runtime"
+  ],
   "cli": {
     "entrypoint": "scripts/{{ENTRYPOINT_NAME}}",
     "python_requires": ">=3.10",

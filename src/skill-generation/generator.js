@@ -2,7 +2,7 @@ import { chmod, link, mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, write
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { AUTH_RUNTIME_VERSION, SPEC_VERSION } from './constants.js'
+import { AUTH_RUNTIME_VERSION, BUILTIN_COMMAND_IDS, SPEC_VERSION } from './constants.js'
 import { normalizeSkillName } from './names.js'
 
 const REQUIRED_RECORDING_FILES = ['RECORDING.md', 'recording.har', 'timeline.json', 'metadata.json']
@@ -184,7 +184,9 @@ async function writeReadyMarker(skillDir, token) {
   const contents = `${JSON.stringify({
     completed: true,
     spec_version: SPEC_VERSION,
-    auth_runtime_version: AUTH_RUNTIME_VERSION
+    auth_runtime_version: AUTH_RUNTIME_VERSION,
+    envelope_version: SPEC_VERSION,
+    builtin_commands: BUILTIN_COMMAND_IDS
   })}\n`
   try {
     await writeFile(readyMarker, contents, { flag: 'wx' })
