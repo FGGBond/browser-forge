@@ -4,14 +4,24 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 COMMAND_NAME="{{ENTRYPOINT_NAME}}"
 PACKAGE_NAME="{{PACKAGE_NAME}}"
-VENV_COMMAND="$SCRIPT_DIR/.venv/bin/$COMMAND_NAME"
+POSIX_VENV_COMMAND="$SCRIPT_DIR/.venv/bin/$COMMAND_NAME"
+WINDOWS_VENV_COMMAND="$SCRIPT_DIR/.venv/Scripts/$COMMAND_NAME.exe"
+WINDOWS_VENV_PYTHON="$SCRIPT_DIR/.venv/Scripts/python.exe"
 
 export BROWSER_FORGE_MANIFEST_\
 PATH="${BROWSER_FORGE_MANIFEST_\
 PATH:-$SCRIPT_DIR/../manifest.json}"
 
-if [ -x "$VENV_COMMAND" ]; then
-  exec "$VENV_COMMAND" "$@"
+if [ -x "$POSIX_VENV_COMMAND" ]; then
+  exec "$POSIX_VENV_COMMAND" "$@"
+fi
+
+if [ -x "$WINDOWS_VENV_COMMAND" ]; then
+  exec "$WINDOWS_VENV_COMMAND" "$@"
+fi
+
+if [ -x "$WINDOWS_VENV_PYTHON" ]; then
+  exec "$WINDOWS_VENV_PYTHON" -m "$PACKAGE_NAME" "$@"
 fi
 
 PATH_COMMAND=$(command -v "$COMMAND_NAME" 2>/dev/null || true)

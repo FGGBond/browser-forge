@@ -24,9 +24,18 @@ else
 fi
 
 "$PYTHON" -m venv "$VENV_DIR"
-"$VENV_DIR/bin/python" -m pip install --upgrade pip
-if [ "$WITH_TEST" = true ]; then
-  "$VENV_DIR/bin/python" -m pip install "$SCRIPT_DIR/cli[test]"
+if [ -x "$VENV_DIR/bin/python" ]; then
+  VENV_PYTHON="$VENV_DIR/bin/python"
+elif [ -x "$VENV_DIR/Scripts/python.exe" ]; then
+  VENV_PYTHON="$VENV_DIR/Scripts/python.exe"
 else
-  "$VENV_DIR/bin/python" -m pip install "$SCRIPT_DIR/cli"
+  printf '%s\n' 'Virtual environment Python executable was not found.' >&2
+  exit 1
+fi
+
+"$VENV_PYTHON" -m pip install --upgrade pip
+if [ "$WITH_TEST" = true ]; then
+  "$VENV_PYTHON" -m pip install "$SCRIPT_DIR/cli[test]"
+else
+  "$VENV_PYTHON" -m pip install "$SCRIPT_DIR/cli"
 fi

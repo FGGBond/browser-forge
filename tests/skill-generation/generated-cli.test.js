@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -87,7 +87,56 @@ function expectSingleJsonFailure(result, { command, code = 'INVALID_ARGUMENT' })
   })
 }
 
+async function writeExecutable(path, source) {
+  await writeFile(path, source)
+  await chmod(path, 0o755)
+}
+
 describe('generated Python CLI', () => {
+  it('uses POSIX then Windows virtualenv launchers before interpreter fallbacks', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'browser-forge-venv-layout-'))
+    try {
+      const result = await generateSkill({
+        recordingDir: await createRecording(root),
+        skillName: 'order-tools',
+        description: 'Manage test orders.',
+        targetDomains: ['api.example.test']
+      })
+      const scriptsDir = join(result.skillDir, 'scripts')
+      const entrypoint = join(scriptsDir, 'browser_forge-order-tools')
+      const venvDir = join(scriptsDir, '.venv')
+      const posixCommand = join(venvDir, 'bin', 'browser_forge-order-tools')
+      const windowsCommand = join(venvDir, 'Scripts', 'browser_forge-order-tools.exe')
+      const windowsPython = join(venvDir, 'Scripts', 'python.exe')
+
+      const installScript = await readFile(join(scriptsDir, 'install.sh'), 'utf8')
+      expect(installScript).toContain('"$VENV_DIR/bin/python"')
+      expect(installScript).toContain('"$VENV_DIR/Scripts/python.exe"')
+
+      await mkdir(join(venvDir, 'bin'), { recursive: true })
+      await mkdir(join(venvDir, 'Scripts'), { recursive: true })
+      await writeExecutable(posixCommand, '#!/bin/sh\nprintf %s posix-venv\n')
+      await writeExecutable(windowsCommand, '#!/bin/sh\nprintf %s windows-console\n')
+      await writeExecutable(windowsPython, '#!/bin/sh\nprintf "%s %s %s %s" "$1" "$2" "$3" "$4"\n')
+
+      const posix = execute(entrypoint, ['doctor'], result.skillDir)
+      expect(posix.exitCode, posix.stderr).toBe(0)
+      expect(posix.stdout.trim()).toBe('posix-venv')
+
+      await rm(join(venvDir, 'bin'), { recursive: true, force: true })
+      const windowsConsole = execute(entrypoint, ['doctor'], result.skillDir)
+      expect(windowsConsole.exitCode, windowsConsole.stderr).toBe(0)
+      expect(windowsConsole.stdout.trim()).toBe('windows-console')
+
+      await rm(windowsCommand, { force: true })
+      const windowsModule = execute(entrypoint, ['doctor'], result.skillDir)
+      expect(windowsModule.exitCode, windowsModule.stderr).toBe(0)
+      expect(windowsModule.stdout.trim()).toBe('-m browser_forge_order_tools doctor')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('installs and exposes manifest-driven progressive help and JSON envelopes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'browser-forge-generated-cli-'))
     try {
