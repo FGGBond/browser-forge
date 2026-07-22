@@ -22,12 +22,33 @@ describe('generated skill manifest schema', () => {
     ['an unsupported spec version', manifest => { manifest.spec_version = '2.0' }],
     ['an invalid CLI entrypoint', manifest => { manifest.cli.entrypoint = 'scripts/invalid-entrypoint' }],
     ['a command without side_effect', manifest => { delete manifest.commands[0].side_effect }],
-    ['an unknown auth provider', manifest => { manifest.auth.providers.push('unknown_provider') }]
+    ['an unknown auth provider', manifest => { manifest.auth.providers.push('unknown_provider') }],
+    ['an arbitrary input type', manifest => { manifest.commands[0].inputs.push({ name: 'value', type: 'callable', required: false, sources: [] }) }],
+    ['a malformed request string', manifest => { manifest.commands[0].steps.push({ id: 'load', request: 'fetch /orders', depends_on: [] }) }],
+    ['a side-effect command without safety metadata', manifest => { manifest.commands[0].side_effect = true }]
   ])('rejects %s', (_description, mutate) => {
     const manifest = structuredClone(validManifest)
     mutate(manifest)
 
     expect(validate(manifest)).toBe(false)
+  })
+
+  it('accepts JSON request bodies and complete side-effect safety metadata', () => {
+    const manifest = structuredClone(validManifest)
+    manifest.commands[0].side_effect = true
+    manifest.commands[0].safety = {
+      dry_run: 'unsupported',
+      retry_risk: 'unsafe',
+      verification: 'Run describe and inspect the returned state.'
+    }
+    manifest.commands[0].steps.push({
+      id: 'update-order',
+      request: 'POST /orders/{order_id}',
+      body: { state: '{state}' },
+      depends_on: []
+    })
+
+    expect(validate(manifest), JSON.stringify(validate.errors)).toBe(true)
   })
 })
 
@@ -80,6 +101,52 @@ describe('validateSkill', () => {
       expect(result.issues.map(issue => issue.code)).toContain('SCHEMA_VALIDATION_ERROR')
       expect(result.issues.map(issue => issue.code)).not.toContain('INVALID_MANIFEST')
       expect(result.findings.map(finding => finding.code)).toContain('BEARER_TOKEN')
+    } finally {
+      await rm(skillDir, { recursive: true, force: true })
+    }
+  })
+
+  it('compiles ready output definitions as JSON Schema', async () => {
+    const skillDir = await mkdtemp(join(tmpdir(), 'browser-forge-skill-'))
+    const manifest = structuredClone(validManifest)
+    manifest.status = 'ready'
+    manifest.$defs['doctor-output'] = 'not-a-schema'
+    await writeFile(join(skillDir, 'manifest.json'), JSON.stringify(manifest))
+    await writeFile(join(skillDir, 'SKILL.md'), [
+      '---',
+      'name: order-tools',
+      'description: Sanitized example generated skill.',
+      'broken: [unterminated',
+      '---',
+      '## Commands',
+      '- `doctor`',
+      '- `auth-status`',
+      '- `describe`'
+    ].join('\n'))
+
+    try {
+      const result = await validateSkill(skillDir)
+
+      expect(result.issues.map(issue => issue.code)).toContain('OUTPUT_SCHEMA_INVALID')
+      expect(result.issues.map(issue => issue.code)).toContain('SKILL_METADATA_INVALID')
+    } finally {
+      await rm(skillDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a ready provider chain that does not match its target domains', async () => {
+    const skillDir = await mkdtemp(join(tmpdir(), 'browser-forge-skill-'))
+    const manifest = structuredClone(validManifest)
+    manifest.status = 'ready'
+    manifest.auth.target_domains = ['orders.jd.com']
+    manifest.auth.providers = ['jdme_sso']
+    await writeFile(join(skillDir, 'manifest.json'), JSON.stringify(manifest))
+    await writeFile(join(skillDir, 'SKILL.md'), '## Commands\n- `doctor`\n- `auth-status`\n- `describe`\n')
+
+    try {
+      const result = await validateSkill(skillDir)
+
+      expect(result.issues.map(issue => issue.code)).toContain('AUTH_PROVIDER_POLICY_INVALID')
     } finally {
       await rm(skillDir, { recursive: true, force: true })
     }

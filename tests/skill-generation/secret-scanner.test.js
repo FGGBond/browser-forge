@@ -23,6 +23,14 @@ describe('scanText', () => {
     expect(scanText('me_token=real-looking-long-value-123456', 'x.txt')).toHaveLength(1)
   })
 
+  it.each([
+    'sso.jd.com=short-real-value',
+    'ssa.orders-app=short-real-value',
+    'ssa.orders_app=short-real-value'
+  ])('finds a named JD SSO cookie outside a Cookie header: %s', value => {
+    expect(scanText(value, 'x.txt')).toMatchObject([{ code: 'JD_SESSION_COOKIE' }])
+  })
+
   it('allows explicit redacted placeholders', () => {
     expect(scanText('me_token=<REDACTED>', 'x.txt')).toEqual([])
   })

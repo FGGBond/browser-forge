@@ -91,7 +91,11 @@ def _epilog(command: dict[str, Any], manifest: dict[str, Any]) -> str:
         "Next actions:",
         _format_next_actions(command),
         "Side effects:",
-        f"  {'Yes' if command.get('side_effect') else 'No'}",
+        f"  {'Yes' if command.get('side_effect') else 'No'}"
+        + (f"; dry-run={command.get('safety', {}).get('dry_run')}; "
+           f"retry-risk={command.get('safety', {}).get('retry_risk')}; "
+           f"verification={command.get('safety', {}).get('verification')}"
+           if command.get("side_effect") else ""),
         "Idempotency:",
         f"  {'Idempotent' if command.get('idempotent') else 'Not idempotent'}",
         "Examples:",
@@ -169,26 +173,73 @@ def _build_auth_resolver(manifest: dict[str, Any]):
     """Build the provider behind the resolver seam consumed by the client."""
 
     providers = manifest.get("auth", {}).get("providers", [])
-    if "browser_cookie" not in providers:
+    if not providers:
         return None
     return AuthResolver(
         str(manifest.get("id", "browser-forge")),
         allowed_domains=tuple(manifest.get("auth", {}).get("target_domains", [])),
+        providers=tuple(providers),
     )
 
 
+def _substitute(value: Any, values: dict[str, Any]) -> Any:
+    if isinstance(value, str):
+        for name, replacement in values.items():
+            value = value.replace("{" + name + "}", str(replacement))
+        return value
+    if isinstance(value, list):
+        return [_substitute(item, values) for item in value]
+    if isinstance(value, dict):
+        return {key: _substitute(item, values) for key, item in value.items()}
+    return value
+
+
 def _execute_business(command: dict[str, Any], values: dict[str, Any], client: Client) -> Any:
-    result: Any = None
+    results: dict[str, Any] = {}
+    completed: set[str] = set()
     for step in command.get("steps", []):
+        step_id = step.get("id")
+        if not isinstance(step_id, str) or not step_id or step_id in completed:
+            raise ClientError("INVALID_MANIFEST", "Request step IDs must be unique.", recoverable=False)
+        dependencies = step.get("depends_on", [])
+        if not isinstance(dependencies, list) or any(dependency not in completed for dependency in dependencies):
+            raise ClientError(
+                "INVALID_MANIFEST",
+                f"Request step dependencies must refer to completed steps: {step_id}",
+                recoverable=False,
+            )
         request = step.get("request", "")
-        match = re.match(r"^([A-Z]+)\s+(.+)$", request)
+        match = re.fullmatch(r"(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) (/\S*)", request)
         if not match:
             raise ClientError("INVALID_MANIFEST", f"Invalid request step: {request}", recoverable=False)
         method, path = match.groups()
-        for name, value in values.items():
-            path = path.replace("{" + name + "}", str(value))
-        result = client.request(method, path)
-    return result
+        path = _substitute(path, values)
+        body = _substitute(step.get("body"), values) if "body" in step else None
+        results[step_id] = client.request(method, path, body)
+        completed.add(step_id)
+    output = results[next(reversed(results))] if results else None
+    return {"steps": results, "output": output}
+
+
+def _auth_status(manifest: dict[str, Any], config) -> dict[str, Any]:
+    resolver = _build_auth_resolver(manifest)
+    if resolver is None or not config.base_url:
+        return config.auth_status
+    try:
+        return resolver.resolve(config.base_url).metadata()
+    except Exception as error:
+        result = dict(config.auth_status)
+        result.update({
+            "error_code": getattr(error, "code", "AUTH_UNAVAILABLE"),
+            "recoverable": getattr(error, "recoverable", True),
+        })
+        attempted = getattr(error, "attempted_providers", None)
+        remediation = getattr(error, "remediation", None)
+        if attempted is not None:
+            result["attempted_providers"] = list(attempted)
+        if remediation:
+            result["remediation"] = remediation
+        return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -204,52 +255,63 @@ def main(argv: list[str] | None = None) -> int:
 
     command_id = args.selected_command
     command = args.command_spec
-    config = load_config(manifest)
-    if command_id == "doctor":
-        resolver = _build_auth_resolver(manifest)
-        _emit(success(command_id, {
-            "python_version": platform.python_version(),
-            "manifest_path": str(manifest_path()),
-            "network_disabled": __import__("os").environ.get("BROWSER_FORGE_" "DISABLE_NETWORK") == "1",
-            "authentication": resolver.doctor() if resolver is not None else {
-                "attempted_providers": [],
-                "remediation": "Configure an authentication provider in manifest.json.",
-            },
-        }))
-        return 0
-    if command_id == "auth-status":
-        _emit(success(command_id, config.auth_status, auth=config.auth_status))
-        return 0
-    if command_id == "describe":
-        target_id = args.described_command
-        if target_id is None:
-            _emit(success(command, {"manifest": manifest}))
-            return 0
-        target = _command_map(manifest).get(target_id)
-        if target is None:
-            _emit(failure(command_id, "INVALID_ARGUMENT", f"Unknown command: {target_id}", recoverable=True))
-            return 2
-        _emit(success(target, {"command": target}, next_actions=_next_actions(target)))
-        return 0
-
-    values = {
-        input_spec["name"]: getattr(args, input_spec["name"])
-        for input_spec in command.get("inputs", [])
-    }
     try:
+        config = load_config(manifest)
+        if command_id == "doctor":
+            resolver = _build_auth_resolver(manifest)
+            _emit(success(command_id, {
+                "python_version": platform.python_version(),
+                "manifest_path": str(manifest_path()),
+                "network_disabled": __import__("os").environ.get("BROWSER_FORGE_" "DISABLE_NETWORK") == "1",
+                "authentication": resolver.doctor() if resolver is not None else {
+                    "attempted_providers": [],
+                    "remediation": "Configure an authentication provider in manifest.json.",
+                },
+            }))
+            return 0
+        if command_id == "auth-status":
+            auth = _auth_status(manifest, config)
+            _emit(success(command_id, auth, auth=auth))
+            return 0
+        if command_id == "describe":
+            target_id = args.described_command
+            if target_id is None:
+                _emit(success(command_id, {"manifest": manifest}))
+                return 0
+            target = _command_map(manifest).get(target_id)
+            if target is None:
+                _emit(failure(command_id, "INVALID_ARGUMENT", f"Unknown command: {target_id}", recoverable=True))
+                return 2
+            _emit(success(command_id, {"command": target}, next_actions=_next_actions(target)))
+            return 0
+
+        values = {
+            input_spec["name"]: getattr(args, input_spec["name"])
+            for input_spec in command.get("inputs", [])
+        }
         requires_auth = bool(command.get("requires", {}).get("auth"))
         auth_resolver = _build_auth_resolver(manifest) if requires_auth else None
+        client = Client(
+            config,
+            auth_resolver=auth_resolver,
+            force_refresh_auth=getattr(args, "refresh_auth", False),
+        )
         data = _execute_business(
             command,
             values,
-            Client(
-                config,
-                auth_resolver=auth_resolver,
-                force_refresh_auth=getattr(args, "refresh_auth", False),
-            ),
+            client,
         )
     except ClientError as error:
         _emit(failure(command_id, error.code, str(error), error.recoverable, _next_actions(command)))
         return 1
-    _emit(success(command_id, data, auth=config.auth_status, next_actions=_next_actions(command)))
+    except Exception:
+        _emit(failure(
+            command_id,
+            "INTERNAL_ERROR",
+            "The command failed unexpectedly.",
+            recoverable=False,
+            next_actions=_next_actions(command),
+        ))
+        return 1
+    _emit(success(command_id, data, auth=client.auth_metadata, next_actions=_next_actions(command)))
     return 0

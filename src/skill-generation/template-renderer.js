@@ -10,12 +10,17 @@ const TEMPLATE_TOKENS = Object.freeze([
   'ENTRYPOINT_NAME',
   'DESCRIPTION',
   'TARGET_DOMAINS_JSON',
+  'AUTH_PROVIDERS_JSON',
   'SPEC_VERSION',
   'AUTH_RUNTIME_VERSION'
 ])
 const TOKEN_PATTERN = new RegExp(`\\{\\{(${TEMPLATE_TOKENS.join('|')})\\}\\}`, 'g')
 
 export function templateValues(identifiers, description, targetDomains) {
+  const hasJdTarget = targetDomains.some(value => {
+    const domain = String(value).trim().toLowerCase().replace(/\.$/, '')
+    return domain === 'jd.com' || domain.endsWith('.jd.com')
+  })
   return {
     SKILL_NAME: identifiers.skillName,
     SKILL_ID: identifiers.skillId,
@@ -23,6 +28,7 @@ export function templateValues(identifiers, description, targetDomains) {
     ENTRYPOINT_NAME: identifiers.entrypointName,
     DESCRIPTION: JSON.stringify(description),
     TARGET_DOMAINS_JSON: JSON.stringify(targetDomains),
+    AUTH_PROVIDERS_JSON: JSON.stringify(hasJdTarget ? ['jdme_sso', 'browser_cookie'] : ['browser_cookie']),
     SPEC_VERSION,
     AUTH_RUNTIME_VERSION
   }

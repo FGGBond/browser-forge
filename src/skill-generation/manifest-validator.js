@@ -58,7 +58,8 @@ const IMMUTABLE_RUNTIME_TEMPLATES = Object.freeze([
   ['scripts/cli/src/browser_forge_generated/auth/cookie_jar.py', 'auth/cookie_jar.py'],
   ['scripts/cli/src/browser_forge_generated/auth/jdme_sso.py', 'auth/jdme_sso.py'],
   ['scripts/cli/src/browser_forge_generated/auth/provider.py', 'auth/provider.py'],
-  ['scripts/cli/src/browser_forge_generated/auth/session_store.py', 'auth/session_store.py']
+  ['scripts/cli/src/browser_forge_generated/auth/session_store.py', 'auth/session_store.py'],
+  ['scripts/cli/src/browser_forge_generated/commands/__init__.py', 'commands/__init__.py']
 ])
 
 function issue(code, path, message) {
@@ -170,14 +171,13 @@ async function unexpectedRuntimePaths(skillDir, identifiers) {
   async function visit(directory, relativeDirectory = '') {
     const entries = await readdir(directory, { withFileTypes: true })
     for (const entry of entries) {
-      if (entry.name === '__pycache__') continue
       const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
       if (entry.isSymbolicLink()) {
         unexpected.push(relativePath)
         continue
       }
       if (entry.isDirectory()) {
-        if (!allowedDirectories.has(relativePath) && !relativePath.startsWith(`${packageRoot}/commands/`)) {
+        if (!allowedDirectories.has(relativePath)) {
           unexpected.push(relativePath)
           continue
         }
@@ -188,7 +188,7 @@ async function unexpectedRuntimePaths(skillDir, identifiers) {
         unexpected.push(relativePath)
         continue
       }
-      if (!allowedFiles.has(relativePath) && !relativePath.startsWith(`${packageRoot}/commands/`)) {
+      if (!allowedFiles.has(relativePath)) {
         unexpected.push(relativePath)
       }
     }
@@ -200,6 +200,35 @@ async function unexpectedRuntimePaths(skillDir, identifiers) {
     return ['scripts/cli/src']
   }
   return unexpected.sort()
+}
+
+async function forbiddenExecutionPathIssues(skillDir) {
+  const forbidden = []
+
+  async function visit(directory, relativeDirectory = '') {
+    const entries = await readdir(directory, { withFileTypes: true })
+    for (const entry of entries) {
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
+      if (
+        entry.name === '.venv' ||
+        entry.name === '__pycache__' ||
+        /\.(?:pyc|pyo)$/i.test(entry.name)
+      ) {
+        forbidden.push(relativePath)
+        continue
+      }
+      if (entry.isDirectory() && !entry.isSymbolicLink() && !['.git', 'node_modules'].includes(entry.name)) {
+        await visit(join(directory, entry.name), relativePath)
+      }
+    }
+  }
+
+  await visit(skillDir)
+  return forbidden.sort().map(path => issue(
+    'FORBIDDEN_EXECUTION_PATH',
+    path,
+    'Ready skills must not contain virtualenvs, bytecode caches, or compiled Python launch artifacts'
+  ))
 }
 
 async function runtimeIntegrityIssues(skillDir, manifest) {
@@ -282,7 +311,12 @@ function helpMetadataIssues(manifest) {
       typeof command.outputs?.schema_ref === 'string' && command.outputs.schema_ref !== '',
       typeof command.requires?.auth === 'boolean',
       Array.isArray(command.requires?.commands),
-      Array.isArray(command.next_actions)
+      Array.isArray(command.next_actions),
+      command.side_effect !== true || (
+        ['supported', 'unsupported'].includes(command.safety?.dry_run) &&
+        ['safe', 'duplicate-effect', 'unsafe'].includes(command.safety?.retry_risk) &&
+        typeof command.safety?.verification === 'string' && command.safety.verification.trim() !== ''
+      )
     ].some(valid => !valid)
     const invalidInputs = (Array.isArray(command.inputs) ? command.inputs : []).some(input =>
       typeof input?.name !== 'string' || input.name === '' ||
@@ -332,6 +366,84 @@ function outputSchemaIssues(manifest) {
       `Command output schema_ref must resolve to a manifest $defs entry: ${schemaRef ?? command?.id ?? index}`
     )]
   })
+}
+
+function outputDefinitionIssues(manifest) {
+  const definitions = manifest?.$defs
+  if (!definitions || typeof definitions !== 'object' || Array.isArray(definitions)) return []
+  for (const [name, definition] of Object.entries(definitions)) {
+    if (typeof definition !== 'boolean' && (!definition || typeof definition !== 'object' || Array.isArray(definition))) {
+      return [issue(
+        'OUTPUT_SCHEMA_INVALID',
+        `manifest.json/$defs/${name}`,
+        `Output definition is not a JSON Schema: ${name}`
+      )]
+    }
+  }
+  try {
+    const definitionAjv = new Ajv2020({ allErrors: true, strict: true })
+    addFormats(definitionAjv)
+    definitionAjv.compile({
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      $defs: definitions
+    })
+    return []
+  } catch (error) {
+    return [issue(
+      'OUTPUT_SCHEMA_INVALID',
+      'manifest.json/$defs',
+      `Output definitions must compile as JSON Schema: ${error.message}`
+    )]
+  }
+}
+
+function authProviderPolicyIssues(manifest) {
+  const domains = Array.isArray(manifest?.auth?.target_domains) ? manifest.auth.target_domains : []
+  const hasJdTarget = domains.some(value => {
+    const domain = String(value).trim().toLowerCase().replace(/\.$/, '')
+    return domain === 'jd.com' || domain.endsWith('.jd.com')
+  })
+  const expected = hasJdTarget ? ['jdme_sso', 'browser_cookie'] : ['browser_cookie']
+  const actual = Array.isArray(manifest?.auth?.providers) ? manifest.auth.providers : []
+  return sameValues(actual, expected) ? [] : [issue(
+    'AUTH_PROVIDER_POLICY_INVALID',
+    'manifest.json/auth/providers',
+    `Provider chain must be ${expected.join(' then ')} for the configured target domains`
+  )]
+}
+
+function skillMetadataIssues(text, manifest, identifiers) {
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
+  if (!match) {
+    return [issue('SKILL_METADATA_INVALID', 'SKILL.md', 'SKILL.md must begin with YAML frontmatter')]
+  }
+  const fields = {}
+  for (const line of match[1].split(/\r?\n/)) {
+    if (/\[[^\]]*$|\{[^}]*$/.test(line)) {
+      return [issue('SKILL_METADATA_INVALID', 'SKILL.md', 'SKILL.md frontmatter must be parseable YAML metadata')]
+    }
+    const separator = line.indexOf(':')
+    if (separator <= 0) continue
+    const key = line.slice(0, separator).trim()
+    let value = line.slice(separator + 1).trim()
+    if (value.startsWith('"')) {
+      try { value = JSON.parse(value) } catch { /* Report the normalized mismatch below. */ }
+    }
+    fields[key] = value
+  }
+  if (
+    fields.name !== identifiers?.skillName ||
+    typeof fields.description !== 'string' ||
+    fields.description.trim() === '' ||
+    fields.description !== manifest?.description
+  ) {
+    return [issue(
+      'SKILL_METADATA_INVALID',
+      'SKILL.md',
+      'SKILL.md frontmatter name and description must match the generated manifest identity'
+    )]
+  }
+  return []
 }
 
 function resolveLocalJsonPointer(root, reference) {
@@ -402,11 +514,14 @@ function commandDocumentIssues(text, command, relativePath) {
 
 async function readyContractIssues(skillDir, manifest) {
   const issues = []
+  const identifiers = trustedIdentifiers(manifest)
   const manifestIds = commandIds(manifest).sort()
   const uniqueManifestIds = [...new Set(manifestIds)]
   let skillIds = []
   try {
-    skillIds = commandIdsFromSkillDocument(await readFile(join(skillDir, 'SKILL.md'), 'utf8'))
+    const skillText = await readFile(join(skillDir, 'SKILL.md'), 'utf8')
+    skillIds = commandIdsFromSkillDocument(skillText)
+    issues.push(...skillMetadataIssues(skillText, manifest, identifiers))
   } catch {
     // The parity issue below is stable for both a missing and unreadable SKILL.md.
   }
@@ -442,6 +557,9 @@ async function readyContractIssues(skillDir, manifest) {
   issues.push(...duplicateCommandIssues(manifest))
   issues.push(...helpMetadataIssues(manifest))
   issues.push(...outputSchemaIssues(manifest))
+  issues.push(...outputDefinitionIssues(manifest))
+  issues.push(...authProviderPolicyIssues(manifest))
+  issues.push(...await forbiddenExecutionPathIssues(skillDir))
   issues.push(...await runtimeIntegrityIssues(skillDir, manifest))
   return issues
 }

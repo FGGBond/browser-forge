@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import os
 import sqlite3
@@ -24,6 +25,7 @@ jdme_module = import_module(package + ".auth.jdme_sso")
 session_module = import_module(package + ".auth.session_store")
 cli_module = import_module(package + ".cli")
 client_module = import_module(package + ".client")
+config_module = import_module(package + ".config")
 CookieRecord = cookie_module.CookieRecord
 cookies_for_url = cookie_module.cookies_for_url
 cookie_header_for_url = cookie_module.cookie_header_for_url
@@ -41,6 +43,7 @@ validate_redirect_url = jdme_module.validate_redirect_url
 db_candidates = jdme_module.db_candidates
 find_jdme_db = jdme_module.find_jdme_db
 open_jdme_db = jdme_module.open_jdme_db
+decrypt_cookie = jdme_module.decrypt_cookie
 AuthSession = session_module.AuthSession
 SessionStore = session_module.SessionStore
 
@@ -330,14 +333,41 @@ def test_redacted_failures(tmp_path, monkeypatch):
     assert "private-person" not in str(raised.value)
 
 
-def test_redacted_auth_status(monkeypatch, capsys):
+def test_raw_creds_ignored(monkeypatch, capsys):
+    monkeypatch.setenv("BROWSER_FORGE_" "AUTHORIZATION", "Bearer <RUNTIME-COOKIE>")
     monkeypatch.setenv("BROWSER_FORGE_COOKIE", "<RUNTIME-COOKIE>")
+    monkeypatch.setattr(cli_module, "_build_auth_resolver", lambda _manifest: None)
 
     assert cli_module.main(["auth-status"]) == 0
 
     payload = json.loads(capsys.readouterr().out)
-    assert payload["data"]["configured"] is True
+    assert payload["data"] == {
+        "configured": True,
+        "resolved": False,
+        "providers": ["browser_cookie"],
+    }
+    runtime_config = config_module.load_config(manifest)
+    assert not hasattr(runtime_config, "auth_value")
+    assert not hasattr(runtime_config, "cookie_value")
     assert "<RUNTIME-COOKIE>" not in json.dumps(payload)
+
+
+def test_auth_status_metadata(monkeypatch, capsys):
+    session = auth_session("browser_cookie", "https://api.example.test")
+
+    class Resolver:
+        def resolve(self, target_url, force_refresh=False):
+            assert target_url == "https://api.example.test"
+            assert force_refresh is False
+            return session
+
+    monkeypatch.setattr(cli_module, "_build_auth_resolver", lambda _manifest: Resolver())
+
+    assert cli_module.main(["auth-status"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data"] == session.metadata()
+    assert payload["auth"] == session.metadata()
 
 
 def test_refresh_flag():
@@ -435,17 +465,18 @@ def test_cli_refresh_cookie(tmp_path, monkeypatch, capsys):
 
     requests = []
 
-    def fake_urlopen(request, timeout):
-        requests.append(request)
-        assert timeout == 30
-        return FakeResponse()
+    class FakeOpener:
+        def open(self, request, timeout):
+            requests.append(request)
+            assert timeout == 30
+            return FakeResponse()
 
     monkeypatch.delenv("BROWSER_FORGE_" "DISABLE_NETWORK", raising=False)
     monkeypatch.delenv("BROWSER_FORGE_COOKIE", raising=False)
     monkeypatch.setitem(sys.modules, "browser_cookie3", FakeBrowserCookies())
     monkeypatch.setattr(cli_module, "load_manifest", lambda: runtime_manifest)
     monkeypatch.setattr(cli_module, "_build_auth_resolver", lambda _manifest: provider, raising=False)
-    monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(client_module, "build_opener", lambda *_handlers: FakeOpener())
 
     assert cli_module.main(["list-orders", "--refresh-auth"]) == 0
 
@@ -455,6 +486,14 @@ def test_cli_refresh_cookie(tmp_path, monkeypatch, capsys):
     assert browser_calls == ["edge"]
     assert requests[0].get_header("Cookie") == "session=<FRESH-BROWSER-SECRET>"
     assert payload["ok"] is True
+    assert payload["auth"] == {
+        "provider": "browser_cookie",
+        "target_host": "api.example.test",
+        "fallback_used": False,
+        "expires_at": provider.store.load("https://api.example.test/orders").expires_at,
+        "cookie_count": 1,
+        "cached": False,
+    }
     assert "<FRESH-BROWSER-SECRET>" not in output.out + output.err
     assert "<STALE-CACHED-SECRET>" not in output.out + output.err
 
@@ -480,6 +519,19 @@ class FakeProvider:
         if self.error is not None:
             raise self.error
         return auth_session(self.provider, target_url)
+
+
+def test_jdme_only_resolver():
+    resolver = cli_module._build_auth_resolver({
+        "id": "browser_forge.order-tools",
+        "auth": {
+            "target_domains": ["orders.jd.com"],
+            "providers": ["jdme_sso"],
+        },
+    })
+
+    assert resolver is not None
+    assert resolver.providers == ("jdme_sso",)
 
 
 def test_jdme_first():
@@ -955,6 +1007,44 @@ def test_stable_local_errors(tmp_path):
         )
         with pytest.raises(JdmeSsoError) as raised:
             provider.resolve(base + "/target")
+    assert raised.value.code == "JDME_DECRYPTION_ERROR"
+    assert raised.value.recoverable is False
+
+
+def test_decryption(tmp_path, monkeypatch):
+    from cryptography.hazmat.primitives import padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key = b"0123456789abcdef"
+    plaintext = b"synthetic-cookie-value"
+    monkeypatch.setattr(jdme_module, "_os_key", lambda _path, system=None: key)
+
+    padder = padding.PKCS7(128).padder()
+    padded = padder.update(plaintext) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(b" " * 16)).encryptor()
+    mac_value = b"v10" + encryptor.update(padded) + encryptor.finalize()
+    assert decrypt_cookie(mac_value, tmp_path / "Cookies", system="Darwin") == plaintext.decode()
+
+    hashed = hashlib.sha256(b".jd.com").digest() + plaintext
+    padder = padding.PKCS7(128).padder()
+    padded = padder.update(hashed) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(b" " * 16)).encryptor()
+    current_value = b"v10" + encryptor.update(padded) + encryptor.finalize()
+    assert decrypt_cookie(
+        current_value,
+        tmp_path / "Cookies",
+        system="Darwin",
+        host_key=".jd.com",
+        db_version=24,
+    ) == plaintext.decode()
+
+    nonce = b"synthetic-iv"
+    windows_value = b"v10" + nonce + AESGCM(key).encrypt(nonce, plaintext, None)
+    assert decrypt_cookie(windows_value, tmp_path / "Cookies", system="Windows") == plaintext.decode()
+
+    with pytest.raises(JdmeSsoError) as raised:
+        decrypt_cookie(mac_value, tmp_path / "Cookies", system="Plan9")
     assert raised.value.code == "JDME_DECRYPTION_ERROR"
     assert raised.value.recoverable is False
 

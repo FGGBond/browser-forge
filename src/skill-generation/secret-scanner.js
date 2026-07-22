@@ -11,7 +11,7 @@ const PATTERNS = [
   },
   {
     code: 'JD_SESSION_COOKIE',
-    expression: /\b(?:me_token|sso_token|ssa_token)\s*=\s*([^\s;'"`]+)/gi
+    expression: /\b(?:me_token|sso_token|ssa_token|sso\.jd\.com|ssa\.[A-Za-z0-9_.-]+)\s*=\s*([^\s;'"`{}]+)/gi
   },
   {
     code: 'AUTHORIZATION_HEADER',

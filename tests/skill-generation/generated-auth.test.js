@@ -69,7 +69,7 @@ describe('generated browser cookie authentication', () => {
       expect(pyproject).toContain('"cryptography>=')
 
       const manifest = JSON.parse(await readFile(join(result.skillDir, 'manifest.json'), 'utf8'))
-      expect(manifest.auth.providers).toEqual(['jdme_sso', 'browser_cookie'])
+      expect(manifest.auth.providers).toEqual(['browser_cookie'])
 
       const tests = execute(python, ['-m', 'pytest', '-q', 'tests/test_auth_selection.py'], result.skillDir)
       expect(tests.status, `${tests.stdout}\n${tests.stderr}`).toBe(0)

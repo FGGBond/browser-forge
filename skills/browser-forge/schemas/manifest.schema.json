@@ -43,6 +43,9 @@
         },
         "providers": {
           "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
           "items": { "enum": ["jdme_sso", "browser_cookie"] }
         }
       }
@@ -52,7 +55,10 @@
       "minItems": 3,
       "items": { "$ref": "#/$defs/command" }
     },
-    "workflows": { "type": "array" },
+    "workflows": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/workflow" }
+    },
     "$defs": { "type": "object" }
   },
   "$defs": {
@@ -68,6 +74,7 @@
         "summary": { "type": "string", "minLength": 1 },
         "side_effect": { "type": "boolean" },
         "idempotent": { "type": "boolean" },
+        "safety": { "$ref": "#/$defs/safety" },
         "inputs": {
           "type": "array",
           "items": { "$ref": "#/$defs/input" }
@@ -82,15 +89,24 @@
           "type": "array",
           "items": { "$ref": "#/$defs/step" }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "side_effect": { "const": true } }, "required": ["side_effect"] },
+          "then": {
+            "properties": { "safety": { "$ref": "#/$defs/safety" } },
+            "required": ["safety"]
+          }
+        }
+      ]
     },
     "input": {
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "type", "required", "sources"],
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "type": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "type": { "enum": ["string", "integer", "number", "boolean", "object", "array"] },
         "required": { "type": "boolean" },
         "sources": {
           "type": "array",
@@ -145,12 +161,50 @@
       "additionalProperties": false,
       "required": ["id", "request", "depends_on"],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "request": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "request": {
+          "type": "string",
+          "pattern": "^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \/\\S*$"
+        },
+        "body": {},
         "depends_on": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "uniqueItems": true
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dry_run", "retry_risk", "verification"],
+      "properties": {
+        "dry_run": { "enum": ["supported", "unsupported"] },
+        "retry_risk": { "enum": ["safe", "duplicate-effect", "unsafe"] },
+        "verification": { "type": "string", "minLength": 1 }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "steps"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/workflow_step" }
+        }
+      }
+    },
+    "workflow_step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "bindings"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
         }
       }
     }

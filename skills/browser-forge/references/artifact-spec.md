@@ -8,7 +8,7 @@ Maintain this contract:
 
 | Artifact | Required content |
 | --- | --- |
-| `SKILL.md` | Command list, stable entrypoint, standard invocation, and direct links to detailed references. |
+| `SKILL.md` | YAML `name`/`description` frontmatter, command list, stable entrypoint, standard invocation, and direct links to detailed references. |
 | `manifest.json` | The machine-readable source of truth for identity, runtime, auth, schemas, commands, dependencies, request steps, and required features. |
 | `references/commands/<command>.md` | Purpose, inputs and sources, outputs, dependencies, side effects, idempotency, examples, and next actions. |
 | `references/workflows.md` | Recording-confirmed multi-command and multi-request sequences. |
@@ -24,11 +24,15 @@ Add one manifest command entry and matching CLI/help/reference/test implementati
 - typed inputs with `required` and `sources`; for derived inputs, give both the producing `command` and `json_path`;
 - an output `schema_ref` backed by `$defs`;
 - required auth and command dependencies;
-- ordered internal HTTP `steps` and their `depends_on` edges;
+- ordered internal HTTP `steps` with unique IDs, `METHOD /path` requests, optional JSON `body` templates, and backward-only `depends_on` edges;
 - `next_actions` with output-to-input bindings;
-- dry-run, retry risk, and a verification action for side effects.
+- `safety.dry_run`, `safety.retry_risk`, and `safety.verification` metadata for side effects.
 
 Keep `manifest.json`, CLI behavior, `--help`, and command references consistent. Never silently retry a non-idempotent request. If safe dry-run is impossible, state that in both the manifest and help.
+
+The generated runtime returns every request response under `data.steps[step-id]`
+and the final command value under `data.output`. Keep response-source JSON Paths
+within the producing command's declared output schema.
 
 ## Preserve built-ins and output contracts
 

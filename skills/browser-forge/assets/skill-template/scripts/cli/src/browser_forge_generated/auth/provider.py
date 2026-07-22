@@ -73,11 +73,13 @@ class AuthResolver:
         skill_id: str,
         allowed_domains: tuple[str, ...] | list[str],
         *,
+        providers: tuple[str, ...] | list[str] = ("jdme_sso", "browser_cookie"),
         browser_factory: Callable[[], Provider] | None = None,
         jdme_factory: Callable[[], Provider] | None = None,
     ):
         self.skill_id = skill_id
         self.allowed_domains = tuple(allowed_domains)
+        self.providers = tuple(providers)
         self._browser = browser_factory or (lambda: BrowserCookieProvider(skill_id))
         self._jdme = jdme_factory or (
             lambda: JdmeSsoProvider(skill_id, allowed_domains=self.allowed_domains)
@@ -110,7 +112,7 @@ class AuthResolver:
             raise AuthTargetError()
         attempted: list[str] = []
         used_fallback = False
-        if is_jd_target(target_url, self.allowed_domains):
+        if is_jd_target(target_url, self.allowed_domains) and "jdme_sso" in self.providers:
             attempted.append("jdme_sso")
             try:
                 session = self._jdme().resolve(target_url, force_refresh=force_refresh)
@@ -127,6 +129,8 @@ class AuthResolver:
             except Exception:
                 raise AuthProviderError() from None
 
+        if "browser_cookie" not in self.providers:
+            raise AuthUnavailableError(attempted)
         attempted.append("browser_cookie")
         try:
             session = self._browser().resolve(target_url, force_refresh=force_refresh)
@@ -144,11 +148,7 @@ class AuthResolver:
             raise AuthProviderError() from None
 
     def doctor(self) -> dict[str, Any]:
-        jd_allowed = any(_within(_domain(item), "jd.com") for item in self.allowed_domains)
-        providers = ["browser_cookie"]
-        if jd_allowed:
-            providers.insert(0, "jdme_sso")
         return {
-            "attempted_providers": providers,
+            "attempted_providers": list(self.providers),
             "remediation": "Sign in to 京ME or a configured browser before an authenticated command.",
         }

@@ -27,7 +27,7 @@ function businessCommands() {
       inputs: [],
       outputs: { schema_ref: '#/$defs/list-orders-output' },
       requires: { auth: true, commands: [] },
-      next_actions: [{ command: 'get-order', bindings: { order_id: '$.data.orders[0].id' } }],
+      next_actions: [{ command: 'get-order', bindings: { order_id: '$.data.output.orders[0].id' } }],
       steps: [{ id: 'list-orders', request: 'GET /orders', depends_on: [] }]
     },
     {
@@ -39,7 +39,7 @@ function businessCommands() {
         name: 'order_id',
         type: 'string',
         required: true,
-        sources: [{ command: 'list-orders', json_path: '$.data.orders[0].id' }]
+        sources: [{ command: 'list-orders', json_path: '$.data.output.orders[0].id' }]
       }, {
         name: 'revision',
         type: 'integer',
@@ -54,12 +54,12 @@ function businessCommands() {
   ]
 }
 
-function execute(file, args, cwd) {
+function execute(file, args, cwd, extraEnvironment = {}) {
   const result = spawnSync(file, args, {
     cwd,
     encoding: 'utf8',
     timeout: 120_000,
-    env: { ...process.env, BROWSER_FORGE_DISABLE_NETWORK: '1' }
+    env: { ...process.env, BROWSER_FORGE_DISABLE_NETWORK: '1', ...extraEnvironment }
   })
   let json = null
   try {
@@ -93,7 +93,7 @@ async function writeExecutable(path, source) {
 }
 
 describe('generated Python CLI', () => {
-  it('uses POSIX then Windows virtualenv launchers before interpreter fallbacks', async () => {
+  it('ignores same-named virtualenv and PATH commands while using bundled source', async () => {
     const root = await mkdtemp(join(tmpdir(), 'browser-forge-venv-layout-'))
     try {
       const result = await generateSkill({
@@ -106,32 +106,43 @@ describe('generated Python CLI', () => {
       const entrypoint = join(scriptsDir, 'browser_forge-order-tools')
       const venvDir = join(scriptsDir, '.venv')
       const posixCommand = join(venvDir, 'bin', 'browser_forge-order-tools')
-      const windowsCommand = join(venvDir, 'Scripts', 'browser_forge-order-tools.exe')
-      const windowsPython = join(venvDir, 'Scripts', 'python.exe')
+      const shadowDir = join(root, 'shadow-bin')
+      const pathCommand = join(shadowDir, 'browser_forge-order-tools')
+      const shadowPackage = join(shadowDir, 'browser_forge_order_tools')
 
       const installScript = await readFile(join(scriptsDir, 'install.sh'), 'utf8')
       expect(installScript).toContain('"$VENV_DIR/bin/python"')
       expect(installScript).toContain('"$VENV_DIR/Scripts/python.exe"')
 
       await mkdir(join(venvDir, 'bin'), { recursive: true })
-      await mkdir(join(venvDir, 'Scripts'), { recursive: true })
+      await mkdir(shadowDir)
+      await mkdir(shadowPackage)
       await writeExecutable(posixCommand, '#!/bin/sh\nprintf %s posix-venv\n')
-      await writeExecutable(windowsCommand, '#!/bin/sh\nprintf %s windows-console\n')
-      await writeExecutable(windowsPython, '#!/bin/sh\nprintf "%s %s %s %s" "$1" "$2" "$3" "$4"\n')
+      await writeExecutable(pathCommand, '#!/bin/sh\nprintf %s path-shadow\n')
+      await writeFile(join(shadowPackage, '__init__.py'), '')
+      await writeFile(join(shadowPackage, '__main__.py'), 'print("cwd-module-shadow")\n')
 
-      const posix = execute(entrypoint, ['doctor'], result.skillDir)
-      expect(posix.exitCode, posix.stderr).toBe(0)
-      expect(posix.stdout.trim()).toBe('posix-venv')
+      const run = execute(entrypoint, ['doctor'], shadowDir, {
+        PATH: `${shadowDir}:${process.env.PATH}`
+      })
+      expect(run.exitCode, run.stderr).toBe(0)
+      expect(run.stdout).not.toContain('posix-venv')
+      expect(run.stdout).not.toContain('path-shadow')
+      expect(run.stdout).not.toContain('cwd-module-shadow')
+      expect(run.json).toMatchObject({ ok: true, command: 'doctor' })
 
-      await rm(join(venvDir, 'bin'), { recursive: true, force: true })
-      const windowsConsole = execute(entrypoint, ['doctor'], result.skillDir)
-      expect(windowsConsole.exitCode, windowsConsole.stderr).toBe(0)
-      expect(windowsConsole.stdout.trim()).toBe('windows-console')
-
-      await rm(windowsCommand, { force: true })
-      const windowsModule = execute(entrypoint, ['doctor'], result.skillDir)
-      expect(windowsModule.exitCode, windowsModule.stderr).toBe(0)
-      expect(windowsModule.stdout.trim()).toBe('-m browser_forge_order_tools doctor')
+      const oldPython = '#!/bin/sh\nfor arg in "$@"; do [ "$arg" = "-c" ] && exit 1; done\nprintf old-python-executed\n'
+      await writeExecutable(join(shadowDir, 'python3'), oldPython)
+      await writeExecutable(join(shadowDir, 'python'), oldPython)
+      const unsupported = execute(entrypoint, ['doctor'], shadowDir, {
+        PATH: `${shadowDir}:/usr/bin:/bin`
+      })
+      expect(unsupported.exitCode).toBe(127)
+      expect(unsupported.stdout).not.toContain('old-python-executed')
+      expect(unsupported.json).toMatchObject({
+        ok: false,
+        error: { code: 'PYTHON_NOT_FOUND' }
+      })
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -172,11 +183,12 @@ describe('generated Python CLI', () => {
 
       const described = run(['describe', 'get-order'])
       expect(described.exitCode, described.stderr).toBe(0)
-      expect(described.json.command.id).toBe('get-order')
+      expect(described.json.command).toBe('describe')
+      expect(described.json.data.command.id).toBe('get-order')
 
       const help = run(['get-order', '--help'])
       expect(help.exitCode, help.stderr).toBe(0)
-      expect(help.stdout).toContain('Obtain from: list-orders -> $.data.orders[0].id')
+      expect(help.stdout).toContain('Obtain from: list-orders -> $.data.output.orders[0].id')
       expect(help.stdout).toContain('Dependencies:')
       expect(help.stdout).toContain('Authentication:')
       expect(help.stdout).toContain('Output:')

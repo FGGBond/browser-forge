@@ -108,6 +108,23 @@ describe('generateSkill', () => {
       })
       expect(skillDocument).toContain('browser_forge_order_tools')
       expect(skillDocument).toContain('scripts/browser_forge-order-tools')
+      expect(skillDocument).toMatch(/^---\nname: order-tools\ndescription: "Manage test orders\."\n---\n/)
+      expect(manifest.auth.providers).toEqual(['browser_cookie'])
+    })
+  })
+
+  it('selects the JDME-first provider chain only when a JD target is configured', async () => {
+    await withTemporaryRoot(async root => {
+      const result = await generateSkill({
+        recordingDir: await createRecording(root),
+        skillName: 'JD Order Tools',
+        description: 'Manage JD test orders.',
+        targetDomains: ['orders.jd.com']
+      })
+
+      const manifest = JSON.parse(await readFile(join(result.skillDir, 'manifest.json'), 'utf8'))
+
+      expect(manifest.auth.providers).toEqual(['jdme_sso', 'browser_cookie'])
     })
   })
 

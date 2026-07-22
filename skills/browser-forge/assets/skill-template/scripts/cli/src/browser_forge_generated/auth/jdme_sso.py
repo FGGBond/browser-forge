@@ -439,17 +439,26 @@ def _win_key(path: Path) -> bytes | None:
     return None
 
 
-def _os_key(path: Path) -> bytes | None:
-    system = platform.system()
+def _os_key(path: Path, *, system: str | None = None) -> bytes | None:
+    system = platform.system() if system is None else system
     if system == "Darwin":
         return _mac_key()
     if system == "Windows":
         return _win_key(path)
-    return hashlib.pbkdf2_hmac("sha1", b"peanuts", b"saltysalt", 1, 16)
+    if system == "Linux":
+        return hashlib.pbkdf2_hmac("sha1", b"peanuts", b"saltysalt", 1, 16)
+    return None
 
 
-def decrypt_cookie(value: bytes, path: Path) -> str | None:
-    """Decrypt a Chromium v10 value using only the current user's OS key."""
+def decrypt_cookie(
+    value: bytes,
+    path: Path,
+    *,
+    system: str | None = None,
+    host_key: str | None = None,
+    db_version: int | None = None,
+) -> str | None:
+    """Decrypt Chromium v10 cookies with the current platform's format."""
 
     if not value:
         return None
@@ -458,17 +467,38 @@ def decrypt_cookie(value: bytes, path: Path) -> str | None:
             return value.decode("utf-8")
         except UnicodeDecodeError:
             return None
-    key = _os_key(path)
+    system = platform.system() if system is None else system
+    key = _os_key(path, system=system)
     if key is None:
         raise JdmeSsoError("JDME_DECRYPTION_ERROR")
     try:
+        from cryptography.hazmat.primitives import padding
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     except ImportError:
         raise JdmeSsoError("JDME_DEPENDENCY_ERROR") from None
     try:
         payload = value[3:]
-        return AESGCM(key).decrypt(payload[:12], payload[12:], None).decode("utf-8")
+        if system == "Windows":
+            if len(payload) < 28:
+                raise ValueError("invalid GCM payload")
+            plaintext = AESGCM(key).decrypt(payload[:12], payload[12:], None)
+        elif system in {"Darwin", "Linux"}:
+            if not payload or len(payload) % 16:
+                raise ValueError("invalid CBC payload")
+            decryptor = Cipher(algorithms.AES(key), modes.CBC(b" " * 16)).decryptor()
+            padded = decryptor.update(payload) + decryptor.finalize()
+            unpadder = padding.PKCS7(128).unpadder()
+            plaintext = unpadder.update(padded) + unpadder.finalize()
+            if db_version is not None and db_version >= 24 and host_key:
+                digest = hashlib.sha256(host_key.encode("utf-8")).digest()
+                if not plaintext.startswith(digest):
+                    raise ValueError("invalid host digest")
+                plaintext = plaintext[len(digest):]
+        else:
+            raise ValueError("unsupported platform")
+        return plaintext.decode("utf-8")
     except (ValueError, UnicodeDecodeError):
         raise JdmeSsoError("JDME_DECRYPTION_ERROR") from None
 
@@ -495,6 +525,10 @@ def _read_local(
 ) -> list[_LocalCookie]:
     try:
         with open_jdme_db(path) as db:
+            try:
+                db_version = int(db.execute("SELECT value FROM meta WHERE key = 'version'").fetchone()[0])
+            except (TypeError, ValueError, sqlite3.Error):
+                db_version = None
             columns = {row[1] for row in db.execute("PRAGMA table_info(cookies)")}
             secure = "is_secure" if "is_secure" in columns else "secure"
             expires = "expires_utc" if "expires_utc" in columns else "expires"
@@ -520,7 +554,10 @@ def _read_local(
         value = str(plain or "")
         if not value and encrypted:
             try:
-                value = decrypt(bytes(encrypted), path) or ""
+                try:
+                    value = decrypt(bytes(encrypted), path, host_key=str(domain or ""), db_version=db_version) or ""
+                except TypeError:
+                    value = decrypt(bytes(encrypted), path) or ""
             except JdmeSsoError:
                 raise
             except Exception:

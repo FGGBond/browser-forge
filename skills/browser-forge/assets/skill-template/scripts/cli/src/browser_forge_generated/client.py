@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
 import re
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import urljoin, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from .auth.provider import is_allowed_target
 from .config import Config
 
 
 class AuthSessionLike(Protocol):
     def cookie_header(self, url: str | None = None, *, now: float | None = None) -> str: ...
+
+    def metadata(self) -> dict[str, Any]: ...
 
 
 class AuthResolverLike(Protocol):
@@ -59,6 +64,34 @@ def redacting_logger(secrets: tuple[str, ...] = ()) -> logging.Logger:
     return logger
 
 
+class _SafeBusinessRedirects(HTTPRedirectHandler):
+    """Validate every redirect and reconstruct URL-scoped credentials."""
+
+    def __init__(self, client: "Client"):
+        self.client = client
+        super().__init__()
+
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        target_url = urljoin(request.full_url, newurl)
+        self.client._validate_target(target_url)
+        if urlsplit(request.full_url).scheme.lower() != urlsplit(target_url).scheme.lower():
+            raise ClientError(
+                "TARGET_NOT_ALLOWED",
+                "Redirects may not change URL scheme while credentials are attached.",
+                recoverable=False,
+            )
+        redirected = super().redirect_request(request, fp, code, msg, headers, target_url)
+        if redirected is None:
+            return None
+        for collection in (redirected.headers, redirected.unredirected_hdrs):
+            for name in tuple(collection):
+                if name.lower() in {"authorization", "cookie", "proxy-authorization"}:
+                    collection.pop(name, None)
+        for name, value in self.client._credential_headers(target_url).items():
+            redirected.add_unredirected_header(name, value)
+        return redirected
+
+
 class Client:
     def __init__(
         self,
@@ -71,44 +104,74 @@ class Client:
         self.auth_resolver = auth_resolver
         self.force_refresh_auth = force_refresh_auth
         self.logger = redacting_logger(config.secrets)
+        self.auth_metadata: dict[str, Any] = config.auth_status
 
-    def request(self, method: str, path: str) -> Any:
+    def _validate_target(self, target_url: str) -> None:
+        parsed = urlsplit(target_url)
+        host = parsed.hostname or ""
+        try:
+            loopback = host.lower() == "localhost" or ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = False
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or (parsed.scheme.lower() != "https" and not loopback)
+            or parsed.username
+            or parsed.password
+            or not is_allowed_target(target_url, self.config.allowed_domains)
+        ):
+            raise ClientError(
+                "TARGET_NOT_ALLOWED",
+                "The request target is outside the manifest allowlist.",
+                recoverable=False,
+            )
+
+    def _credential_headers(self, target_url: str) -> dict[str, str]:
+        if self.auth_resolver is None:
+            return {}
+        try:
+            session = self.auth_resolver.resolve(
+                target_url,
+                force_refresh=self.force_refresh_auth,
+            )
+            self.force_refresh_auth = False
+            cookie_header = session.cookie_header(target_url)
+            self.auth_metadata = session.metadata()
+        except Exception as error:
+            raise ClientError(
+                getattr(error, "code", "AUTH_UNAVAILABLE"),
+                str(error),
+                getattr(error, "recoverable", True),
+            ) from None
+        return {"Cookie": cookie_header} if cookie_header else {}
+
+    def request(self, method: str, path: str, body: Any = None) -> Any:
         if os.environ.get("BROWSER_FORGE_" "DISABLE_NETWORK") == "1":
             raise ClientError("NETWORK_DISABLED", "Network access is disabled by BROWSER_FORGE_" "DISABLE_NETWORK.")
         if not self.config.base_url:
             raise ClientError("INVALID_CONFIGURATION", "BROWSER_FORGE_BASE_URL is required.")
 
-        target_url = f"{self.config.base_url}/{path.lstrip('/')}"
+        target_url = urljoin(self.config.base_url.rstrip("/") + "/", path.lstrip("/"))
+        self._validate_target(target_url)
         headers = {"Accept": "application/json"}
-        if self.config.auth_value:
-            headers["Authorization"] = self.config.auth_value
-        if self.config.cookie_value:
-            headers["Cookie"] = self.config.cookie_value
-        if self.auth_resolver is not None:
-            try:
-                session = self.auth_resolver.resolve(
-                    target_url,
-                    force_refresh=self.force_refresh_auth,
-                )
-                self.force_refresh_auth = False
-                cookie_header = session.cookie_header(target_url)
-            except Exception as error:
-                raise ClientError(
-                    getattr(error, "code", "AUTH_UNAVAILABLE"),
-                    str(error),
-                    getattr(error, "recoverable", True),
-                ) from None
-            if cookie_header:
-                headers["Cookie"] = cookie_header
-        request = Request(target_url, headers=headers, method=method)
+        headers.update(self._credential_headers(target_url))
+        encoded_body = None
+        if body is not None:
+            encoded_body = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        request = Request(target_url, data=encoded_body, headers=headers, method=method)
         self.logger.debug("Requesting %s %s", method, request.full_url)
         try:
-            with urlopen(request, timeout=30) as response:  # noqa: S310 - generated allowlisted client shell
+            with build_opener(_SafeBusinessRedirects(self)).open(request, timeout=30) as response:
                 payload = response.read().decode("utf-8")
         except HTTPError as error:
             raise ClientError("HTTP_ERROR", f"Remote service returned HTTP {error.code}.") from error
         except URLError as error:
             raise ClientError("NETWORK_ERROR", f"Network request failed: {error.reason}") from error
+        except TimeoutError as error:
+            raise ClientError("REQUEST_TIMEOUT", "Network request timed out.") from error
+        except UnicodeDecodeError as error:
+            raise ClientError("INVALID_RESPONSE", "Remote service returned invalid UTF-8.") from error
         try:
             return json.loads(payload) if payload else None
         except json.JSONDecodeError as error:

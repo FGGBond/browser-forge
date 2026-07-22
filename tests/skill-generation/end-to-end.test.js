@@ -61,7 +61,7 @@ function businessCommands() {
       inputs: [],
       outputs: { schema_ref: '#/$defs/list-orders-output' },
       requires: { auth: false, commands: [] },
-      next_actions: [{ command: 'get-order', bindings: { order_id: '$.data.orders[0].id' } }],
+      next_actions: [{ command: 'get-order', bindings: { order_id: '$.data.output.orders[0].id' } }],
       steps: [{ id: 'request-orders', request: 'GET /orders', depends_on: [] }]
     },
     {
@@ -73,7 +73,7 @@ function businessCommands() {
         name: 'order_id',
         type: 'string',
         required: true,
-        sources: [{ command: 'list-orders', json_path: '$.data.orders[0].id' }]
+        sources: [{ command: 'list-orders', json_path: '$.data.output.orders[0].id' }]
       }],
       outputs: { schema_ref: '#/$defs/get-order-output' },
       requires: { auth: true, commands: ['list-orders'] },
@@ -143,6 +143,11 @@ async function populateSkill(skillDir) {
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 
   await writeFile(join(skillDir, 'SKILL.md'), [
+    '---',
+    'name: order-tools',
+    'description: Inspect synthetic test orders.',
+    '---',
+    '',
     '# order-tools',
     '',
     'Use `scripts/browser_forge-order-tools` for the sanitized order API.',
@@ -175,7 +180,7 @@ async function populateSkill(skillDir) {
     '## inspect-order',
     '',
     '1. Run `list-orders`.',
-    '2. Bind `$.data.orders[0].id` to `get-order --order-id`.',
+    '2. Bind `$.data.output.orders[0].id` to `get-order --order-id`.',
     ''
   ].join('\n'))
   return manifestPath
@@ -247,6 +252,10 @@ describe('generated skill independence and readiness', () => {
 
       const skillDocumentPath = join(generated.skillDir, 'SKILL.md')
       const originalSkillDocument = await readFile(skillDocumentPath, 'utf8')
+      await writeFile(skillDocumentPath, originalSkillDocument.replace('name: order-tools', 'name: wrong-skill'))
+      await expectReadyFailure(generated.skillDir, 'SKILL_METADATA_INVALID')
+      await writeFile(skillDocumentPath, originalSkillDocument)
+
       await writeFile(skillDocumentPath, originalSkillDocument.replace('- `get-order`', '- `lookup-order`'))
       await expectReadyFailure(generated.skillDir, 'SKILL_COMMAND_MISMATCH')
       await writeFile(skillDocumentPath, originalSkillDocument)
@@ -264,7 +273,7 @@ describe('generated skill independence and readiness', () => {
       delete readyManifest.commands.find(command => command.id === 'get-order').inputs[0].sources[0].json_path
       await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
       await expectReadyFailure(generated.skillDir, 'HELP_CONTRACT_MISSING')
-      readyManifest.commands.find(command => command.id === 'get-order').inputs[0].sources[0].json_path = '$.data.orders[0].id'
+      readyManifest.commands.find(command => command.id === 'get-order').inputs[0].sources[0].json_path = '$.data.output.orders[0].id'
       await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
 
       readyManifest.commands.push({
@@ -392,8 +401,29 @@ describe('generated skill independence and readiness', () => {
       )
       const originalCommandExtension = await readFile(commandExtensionPath, 'utf8')
       await writeFile(commandExtensionPath, `${originalCommandExtension}\n# populated business-command extension\n`)
-      expect(validateThroughWrapper(generated.skillDir)).toMatchObject({ exitCode: 0, json: { ok: true } })
+      await expectReadyFailure(generated.skillDir, 'RUNTIME_INTEGRITY_FAILED')
       await writeFile(commandExtensionPath, originalCommandExtension)
+
+      const venvBin = join(generated.skillDir, 'scripts', '.venv', 'bin')
+      const untrustedVenvCommand = join(venvBin, 'browser_forge-order-tools')
+      await mkdir(venvBin, { recursive: true })
+      await writeFile(untrustedVenvCommand, '#!/bin/sh\nprintf untrusted\n')
+      await chmod(untrustedVenvCommand, 0o755)
+      await expectReadyFailure(generated.skillDir, 'FORBIDDEN_EXECUTION_PATH')
+      await rm(join(generated.skillDir, 'scripts', '.venv'), { recursive: true, force: true })
+
+      const bytecodeCache = join(
+        generated.skillDir,
+        'scripts',
+        'cli',
+        'src',
+        'browser_forge_order_tools',
+        '__pycache__'
+      )
+      await mkdir(bytecodeCache)
+      await writeFile(join(bytecodeCache, 'cli.cpython-312.pyc'), 'untrusted bytecode')
+      await expectReadyFailure(generated.skillDir, 'FORBIDDEN_EXECUTION_PATH')
+      await rm(bytecodeCache, { recursive: true, force: true })
 
       const readyMarkerPath = join(generated.skillDir, '.browser-forge-ready')
       const originalReadyMarker = await readFile(readyMarkerPath, 'utf8')
@@ -534,7 +564,7 @@ describe('generated skill independence and readiness', () => {
         expect(help.exitCode, `${command.id}: ${help.stderr}`).toBe(0)
         for (const section of requiredHelpSections) expect(help.stdout).toContain(section)
         if (command.id === 'get-order') {
-          expect(help.stdout).toContain('Obtain from: list-orders -> $.data.orders[0].id')
+          expect(help.stdout).toContain('Obtain from: list-orders -> $.data.output.orders[0].id')
         }
       }
 
