@@ -322,19 +322,29 @@ function duplicateCommandIssues(manifest) {
 }
 
 function outputSchemaIssues(manifest) {
-  const definitions = manifest?.$defs && typeof manifest.$defs === 'object' && !Array.isArray(manifest.$defs)
-    ? manifest.$defs
-    : {}
+  const root = manifest && typeof manifest === 'object' && !Array.isArray(manifest) ? manifest : {}
   return (Array.isArray(manifest?.commands) ? manifest.commands : []).flatMap((command, index) => {
     const schemaRef = command?.outputs?.schema_ref
-    const definitionName = typeof schemaRef === 'string' ? schemaRef.match(/^#\/\$defs\/([^/]+)$/)?.[1] : null
-    if (definitionName && Object.hasOwn(definitions, definitionName)) return []
+    if (typeof schemaRef === 'string' && resolveLocalJsonPointer(root, schemaRef) !== undefined) return []
     return [issue(
       'OUTPUT_SCHEMA_MISSING',
       `manifest.json/commands/${index}/outputs/schema_ref`,
       `Command output schema_ref must resolve to a manifest $defs entry: ${schemaRef ?? command?.id ?? index}`
     )]
   })
+}
+
+function resolveLocalJsonPointer(root, reference) {
+  if (typeof reference !== 'string' || !reference.startsWith('#/')) return undefined
+  const tokens = reference.slice(2).split('/').map(token => token.replace(/~1/g, '/').replace(/~0/g, '~'))
+  let current = root
+  for (const token of tokens) {
+    if (!current || typeof current !== 'object' || Array.isArray(current) || !Object.hasOwn(current, token)) {
+      return undefined
+    }
+    current = current[token]
+  }
+  return current
 }
 
 function readyMarkerIssues(marker) {

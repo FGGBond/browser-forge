@@ -281,6 +281,20 @@ describe('generated skill independence and readiness', () => {
       readyManifest.commands.find(command => command.id === 'get-order').outputs.schema_ref = '#/$defs/get-order-output'
       await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
 
+      readyManifest.$defs['escaped~1name-output'] = { type: 'object' }
+      readyManifest.commands.find(command => command.id === 'get-order').outputs.schema_ref = '#/$defs/escaped~1name-output'
+      await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
+      await writeFile(getOrderDocPath, originalGetOrderDoc.replace('#/$defs/get-order-output', '#/$defs/escaped~1name-output'))
+      await expectReadyFailure(generated.skillDir, 'OUTPUT_SCHEMA_MISSING')
+      delete readyManifest.$defs['escaped~1name-output']
+      readyManifest.$defs['escaped/name-output'] = { type: 'object' }
+      await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
+      expect(validateThroughWrapper(generated.skillDir)).toMatchObject({ exitCode: 0, json: { ok: true } })
+      delete readyManifest.$defs['escaped/name-output']
+      readyManifest.commands.find(command => command.id === 'get-order').outputs.schema_ref = '#/$defs/get-order-output'
+      await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
+      await writeFile(getOrderDocPath, originalGetOrderDoc)
+
       const generatedCliPath = join(
         generated.skillDir,
         'scripts',
@@ -369,6 +383,22 @@ describe('generated skill independence and readiness', () => {
       const readyMarkerPath = join(generated.skillDir, '.browser-forge-ready')
       const originalReadyMarker = await readFile(readyMarkerPath, 'utf8')
       await writeFile(readyMarkerPath, `${JSON.stringify({ completed: true, spec_version: '999' })}\n`)
+      await expectReadyFailure(generated.skillDir, 'READY_MARKER_VERSION_MISMATCH')
+      await writeFile(readyMarkerPath, originalReadyMarker)
+      await writeFile(readyMarkerPath, `${JSON.stringify({
+        completed: true,
+        spec_version: '1.0',
+        auth_runtime_version: '999',
+        builtin_commands: ['doctor', 'auth-status', 'describe']
+      })}\n`)
+      await expectReadyFailure(generated.skillDir, 'READY_MARKER_VERSION_MISMATCH')
+      await writeFile(readyMarkerPath, originalReadyMarker)
+      await writeFile(readyMarkerPath, `${JSON.stringify({
+        completed: true,
+        spec_version: '1.0',
+        auth_runtime_version: '1.0.0',
+        builtin_commands: ['doctor']
+      })}\n`)
       await expectReadyFailure(generated.skillDir, 'READY_MARKER_VERSION_MISMATCH')
       await writeFile(readyMarkerPath, originalReadyMarker)
 
