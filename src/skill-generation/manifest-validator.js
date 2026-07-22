@@ -1,4 +1,4 @@
-import { lstat, readFile, readdir, stat } from 'node:fs/promises'
+import { lstat, readFile, readdir, realpath, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import Ajv2020 from 'ajv/dist/2020.js'
@@ -125,6 +125,9 @@ async function renderedTemplateFile(templateRelativePath, values) {
 async function artifactFileIntegrity(skillDir, artifactRelativePath, expected) {
   try {
     const artifactPath = join(skillDir, artifactRelativePath)
+    const skillRoot = `${await realpath(skillDir)}/`
+    const actualPath = await realpath(artifactPath)
+    if (!actualPath.startsWith(skillRoot)) return false
     const details = await lstat(artifactPath)
     if (!details.isFile() || details.isSymbolicLink()) return false
     const actual = await readFile(artifactPath)
@@ -169,6 +172,10 @@ async function unexpectedRuntimePaths(skillDir, identifiers) {
   const unexpected = []
 
   async function visit(directory, relativeDirectory = '') {
+    if ((await lstat(directory)).isSymbolicLink()) {
+      unexpected.push(relativeDirectory || 'scripts/cli/src')
+      return
+    }
     const entries = await readdir(directory, { withFileTypes: true })
     for (const entry of entries) {
       const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
@@ -209,6 +216,10 @@ async function forbiddenExecutionPathIssues(skillDir) {
     const entries = await readdir(directory, { withFileTypes: true })
     for (const entry of entries) {
       const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
+      if (entry.isSymbolicLink()) {
+        forbidden.push(relativePath)
+        continue
+      }
       if (
         entry.name === '.venv' ||
         entry.name === '__pycache__' ||
@@ -419,6 +430,9 @@ function skillMetadataIssues(text, manifest, identifiers) {
   }
   const fields = {}
   for (const line of match[1].split(/\r?\n/)) {
+    if (line.trim() && !/^[A-Za-z][A-Za-z0-9_-]*\s*:/.test(line)) {
+      return [issue('SKILL_METADATA_INVALID', 'SKILL.md', 'SKILL.md frontmatter must be parseable YAML metadata')]
+    }
     if (/\[[^\]]*$|\{[^}]*$/.test(line)) {
       return [issue('SKILL_METADATA_INVALID', 'SKILL.md', 'SKILL.md frontmatter must be parseable YAML metadata')]
     }

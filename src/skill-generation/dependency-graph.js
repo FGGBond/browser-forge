@@ -58,42 +58,41 @@ function resolvePointer(root, reference) {
 }
 
 function schemaAllowsPath(root, rawSchema, jsonPath) {
-  let schema = rawSchema
   const tokens = [...jsonPath.matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)|\[(\*|\d+)\]/g)]
     .map(match => match[1] ?? match[2])
   if (tokens[0] === 'data') tokens.shift()
   if (tokens[0] === 'output') tokens.shift()
-  let dereferenceDepth = 0
-  for (const token of tokens) {
+
+  function allows(schema, index, dereferenceDepth = 0) {
     while (schema && typeof schema === 'object' && typeof schema.$ref === 'string') {
       if (dereferenceDepth++ > 100) return false
       schema = resolvePointer(root, schema.$ref)
     }
     if (schema === false || schema === undefined || schema === null) return false
     if (schema === true || typeof schema !== 'object' || Array.isArray(schema)) return true
-    if (Array.isArray(schema.anyOf)) return schema.anyOf.some(candidate => schemaAllowsPath(root, candidate, `$.${tokens.join('.')}`))
-    if (Array.isArray(schema.oneOf)) return schema.oneOf.some(candidate => schemaAllowsPath(root, candidate, `$.${tokens.join('.')}`))
-    if (Array.isArray(schema.allOf)) return schema.allOf.every(candidate => schemaAllowsPath(root, candidate, `$.${tokens.join('.')}`))
+    if (Array.isArray(schema.anyOf)) return schema.anyOf.some(candidate => allows(candidate, index, dereferenceDepth))
+    if (Array.isArray(schema.oneOf)) return schema.oneOf.some(candidate => allows(candidate, index, dereferenceDepth))
+    if (Array.isArray(schema.allOf)) return schema.allOf.every(candidate => allows(candidate, index, dereferenceDepth))
+    if (index >= tokens.length) return schema !== false
+
+    const token = tokens[index]
     if (/^\d+$/.test(token) || token === '*') {
       if (schema.type && schema.type !== 'array') return false
       if (schema.items === false) return false
       if (!schema.items || Array.isArray(schema.items)) return true
-      schema = schema.items
-      continue
+      return allows(schema.items, index + 1, dereferenceDepth)
     }
     if (schema.type === 'array') return false
     if (schema.properties && Object.hasOwn(schema.properties, token)) {
-      schema = schema.properties[token]
-      continue
+      return allows(schema.properties[token], index + 1, dereferenceDepth)
     }
     if (schema.additionalProperties === false) return false
     if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
-      schema = schema.additionalProperties
-      continue
+      return allows(schema.additionalProperties, index + 1, dereferenceDepth)
     }
     return true
   }
-  return schema !== false
+  return allows(rawSchema, 0)
 }
 
 function pathSchemaIssue(path, jsonPath, producingCommand) {
