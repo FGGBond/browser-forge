@@ -209,6 +209,7 @@ async function expectReadyFailure(skillDir, expectedCode) {
   const codes = validation.json.issues.map(issue => issue.code)
   expect(codes).toContain(expectedCode)
   expect(codes).toContain('READY_GATE_FAILED')
+  return validation
 }
 
 describe('generated skill independence and readiness', () => {
@@ -287,8 +288,22 @@ describe('generated skill independence and readiness', () => {
       await writeFile(getOrderDocPath, originalGetOrderDoc.replace('#/$defs/get-order-output', '#/$defs/escaped~1name-output'))
       await expectReadyFailure(generated.skillDir, 'OUTPUT_SCHEMA_MISSING')
       delete readyManifest.$defs['escaped~1name-output']
-      readyManifest.$defs['escaped/name-output'] = { type: 'object' }
+      readyManifest.$defs['escaped~name-output'] = { type: 'object' }
+      readyManifest.commands.find(command => command.id === 'get-order').outputs.schema_ref = '#/$defs/escaped~0name-output'
       await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
+      await writeFile(getOrderDocPath, originalGetOrderDoc.replace('#/$defs/get-order-output', '#/$defs/escaped~0name-output'))
+      expect(validateThroughWrapper(generated.skillDir)).toMatchObject({ exitCode: 0, json: { ok: true } })
+      delete readyManifest.$defs['escaped~name-output']
+      readyManifest.$defs['escaped~2name-output'] = { type: 'object' }
+      readyManifest.commands.find(command => command.id === 'get-order').outputs.schema_ref = '#/$defs/escaped~2name-output'
+      await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
+      await writeFile(getOrderDocPath, originalGetOrderDoc.replace('#/$defs/get-order-output', '#/$defs/escaped~2name-output'))
+      await expectReadyFailure(generated.skillDir, 'OUTPUT_SCHEMA_MISSING')
+      delete readyManifest.$defs['escaped~2name-output']
+      readyManifest.$defs['escaped/name-output'] = { type: 'object' }
+      readyManifest.commands.find(command => command.id === 'get-order').outputs.schema_ref = '#/$defs/escaped~1name-output'
+      await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
+      await writeFile(getOrderDocPath, originalGetOrderDoc.replace('#/$defs/get-order-output', '#/$defs/escaped~1name-output'))
       expect(validateThroughWrapper(generated.skillDir)).toMatchObject({ exitCode: 0, json: { ok: true } })
       delete readyManifest.$defs['escaped/name-output']
       readyManifest.commands.find(command => command.id === 'get-order').outputs.schema_ref = '#/$defs/get-order-output'
@@ -382,8 +397,17 @@ describe('generated skill independence and readiness', () => {
 
       const readyMarkerPath = join(generated.skillDir, '.browser-forge-ready')
       const originalReadyMarker = await readFile(readyMarkerPath, 'utf8')
-      await writeFile(readyMarkerPath, `${JSON.stringify({ completed: true, spec_version: '999' })}\n`)
-      await expectReadyFailure(generated.skillDir, 'READY_MARKER_VERSION_MISMATCH')
+      await writeFile(readyMarkerPath, `${JSON.stringify({
+        completed: true,
+        spec_version: '999',
+        auth_runtime_version: '1.0.0',
+        builtin_commands: ['doctor', 'auth-status', 'describe']
+      })}\n`)
+      const specMarkerValidation = await expectReadyFailure(generated.skillDir, 'READY_MARKER_VERSION_MISMATCH')
+      expect(specMarkerValidation.json.issues).toContainEqual(expect.objectContaining({
+        code: 'READY_MARKER_VERSION_MISMATCH',
+        path: '.browser-forge-ready/spec_version'
+      }))
       await writeFile(readyMarkerPath, originalReadyMarker)
       await writeFile(readyMarkerPath, `${JSON.stringify({
         completed: true,

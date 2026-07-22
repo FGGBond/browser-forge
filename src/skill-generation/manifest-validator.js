@@ -336,7 +336,9 @@ function outputSchemaIssues(manifest) {
 
 function resolveLocalJsonPointer(root, reference) {
   if (typeof reference !== 'string' || !reference.startsWith('#/')) return undefined
-  const tokens = reference.slice(2).split('/').map(token => token.replace(/~1/g, '/').replace(/~0/g, '~'))
+  const rawTokens = reference.slice(2).split('/')
+  if (rawTokens.some(token => /~(?![01])/.test(token))) return undefined
+  const tokens = rawTokens.map(token => token.replace(/~1/g, '/').replace(/~0/g, '~'))
   let current = root
   for (const token of tokens) {
     if (!current || typeof current !== 'object' || Array.isArray(current) || !Object.hasOwn(current, token)) {
