@@ -102,7 +102,7 @@ describe('SKILL.md command parsing', () => {
       '',
       '- `doctor` — check prerequisites.',
       '* [auth-status](references/commands/auth-status.md) — inspect authentication.',
-      '+ describe — inspect the contract.',
+      '+ `describe` — inspect the contract.',
       '### `list-orders`',
       '#### [get-order](references/commands/get-order.md)',
       '',
@@ -128,6 +128,20 @@ describe('SKILL.md command parsing', () => {
       '',
       '- `doctor` — mentioned outside a command section.',
       '### `list-orders`',
+      ''
+    ].join('\n')
+
+    expect(commandIdsFromSkillDocument(document)).toEqual([])
+  })
+
+  it('does not treat prose list items as commands inside the Commands section', () => {
+    const document = [
+      '## Commands',
+      '',
+      '- Doctor checks whether prerequisites are installed.',
+      '- list-orders can be used to inspect orders.',
+      '1. get-order follows after the list response.',
+      '+ auth-status is described in the authentication guide.',
       ''
     ].join('\n')
 

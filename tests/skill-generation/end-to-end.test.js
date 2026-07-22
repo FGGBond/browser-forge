@@ -91,9 +91,17 @@ function commandDocument(command) {
     '',
     command.summary,
     '',
+    '## Inputs',
+    '',
+    source ? `Input source: \`${source.command}\` at \`${source.json_path}\`.` : 'No inputs are required.',
+    '',
     '## Dependencies',
     '',
     source ? `Input source: \`${source.command}\` at \`${source.json_path}\`.` : 'No command dependency; invoke directly.',
+    '',
+    '## Authentication',
+    '',
+    command.requires.auth ? 'Authentication is required.' : 'Authentication is not required.',
     '',
     '## Output',
     '',
@@ -102,6 +110,18 @@ function commandDocument(command) {
     '## Next actions',
     '',
     next ? `Run \`${next.command}\` with the documented binding.` : 'No next action is required.',
+    '',
+    '## Side effects',
+    '',
+    command.side_effect ? 'This command has side effects.' : 'This command has no side effects.',
+    '',
+    '## Idempotency',
+    '',
+    command.idempotent ? 'This command is idempotent.' : 'This command is not idempotent.',
+    '',
+    '## Examples',
+    '',
+    `\`scripts/browser_forge-order-tools ${command.id}\``,
     ''
   ].join('\n')
 }
@@ -236,6 +256,16 @@ describe('generated skill independence and readiness', () => {
       await expectReadyFailure(generated.skillDir, 'COMMAND_DOC_MISSING')
       await writeFile(getOrderDocPath, originalGetOrderDoc)
 
+      await writeFile(getOrderDocPath, originalGetOrderDoc.replace('## Output', '## Result'))
+      await expectReadyFailure(generated.skillDir, 'HELP_CONTRACT_MISSING')
+      await writeFile(getOrderDocPath, originalGetOrderDoc)
+
+      delete readyManifest.commands.find(command => command.id === 'get-order').inputs[0].sources[0].json_path
+      await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
+      await expectReadyFailure(generated.skillDir, 'HELP_CONTRACT_MISSING')
+      readyManifest.commands.find(command => command.id === 'get-order').inputs[0].sources[0].json_path = '$.data.orders[0].id'
+      await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
+
       const generatedCliPath = join(
         generated.skillDir,
         'scripts',
@@ -249,26 +279,77 @@ describe('generated skill independence and readiness', () => {
         'def _epilog(command: dict[str, Any], manifest: dict[str, Any]) -> str:\n    requires = command.get("requires", {})',
         'def _epilog(command: dict[str, Any], manifest: dict[str, Any]) -> str:\n    if command.get("id") == "get-order":\n        return "Incomplete command help."\n    requires = command.get("requires", {})'
       ))
-      await expectReadyFailure(generated.skillDir, 'HELP_CONTRACT_MISSING')
+      await expectReadyFailure(generated.skillDir, 'RUNTIME_INTEGRITY_FAILED')
       await writeFile(generatedCliPath, originalGeneratedCli)
 
-      await writeFile(generatedCliPath, originalGeneratedCli.replace(
-        '_emit(success(command, {"manifest": manifest}))',
-        'print("not-json")'
-      ))
-      await expectReadyFailure(generated.skillDir, 'RUNTIME_DESCRIBE_INVALID_JSON')
-      await writeFile(generatedCliPath, originalGeneratedCli)
+      const installerPath = join(generated.skillDir, 'scripts', 'install.sh')
+      const originalInstaller = await readFile(installerPath, 'utf8')
+      await writeFile(installerPath, `${originalInstaller}\n# untrusted installer target\n`)
+      await expectReadyFailure(generated.skillDir, 'RUNTIME_INTEGRITY_FAILED')
+      await writeFile(installerPath, originalInstaller)
+      await chmod(installerPath, 0o755)
 
-      await writeFile(generatedCliPath, originalGeneratedCli.replace(
-        '_emit(success(command, {"manifest": manifest}))',
-        'manifest = dict(manifest)\n            manifest["commands"] = manifest.get("commands", [])[:-1]\n            _emit(success(command, {"manifest": manifest}))'
-      ))
-      await expectReadyFailure(generated.skillDir, 'RUNTIME_COMMAND_MISMATCH')
-      await writeFile(generatedCliPath, originalGeneratedCli)
+      const pyprojectPath = join(generated.skillDir, 'scripts', 'cli', 'pyproject.toml')
+      const originalPyproject = await readFile(pyprojectPath, 'utf8')
+      await writeFile(pyprojectPath, originalPyproject.replace('version = "0.1.0"', 'version = "9.9.9"'))
+      await expectReadyFailure(generated.skillDir, 'RUNTIME_INTEGRITY_FAILED')
+      await writeFile(pyprojectPath, originalPyproject)
 
-      await writeFile(generatedCliPath, `this is not valid Python\n${originalGeneratedCli}`)
-      await expectReadyFailure(generated.skillDir, 'RUNTIME_DESCRIBE_FAILED')
-      await writeFile(generatedCliPath, originalGeneratedCli)
+      const runtimeInitPath = join(
+        generated.skillDir,
+        'scripts',
+        'cli',
+        'src',
+        'browser_forge_order_tools',
+        '__init__.py'
+      )
+      const originalRuntimeInit = await readFile(runtimeInitPath, 'utf8')
+      const executionSentinel = join(root, 'validator-executed-untrusted-artifact')
+      await writeFile(runtimeInitPath, [
+        'from pathlib import Path',
+        `Path(${JSON.stringify(executionSentinel)}).write_text("validator executed artifact", encoding="utf-8")`,
+        '# Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc.def',
+        originalRuntimeInit
+      ].join('\n'))
+      const maliciousValidation = validateThroughWrapper(generated.skillDir)
+      expect(maliciousValidation.exitCode).toBe(1)
+      expect(maliciousValidation.json.issues.map(issue => issue.code)).toEqual(expect.arrayContaining([
+        'RUNTIME_INTEGRITY_FAILED',
+        'READY_GATE_FAILED'
+      ]))
+      expect(maliciousValidation.json.findings.map(finding => finding.code)).toContain('BEARER_TOKEN')
+      await expect(access(executionSentinel)).rejects.toThrow()
+      await writeFile(runtimeInitPath, originalRuntimeInit)
+
+      const siteCustomizePath = join(
+        generated.skillDir,
+        'scripts',
+        'cli',
+        'src',
+        'sitecustomize.py'
+      )
+      await writeFile(siteCustomizePath, [
+        'from pathlib import Path',
+        `Path(${JSON.stringify(executionSentinel)}).write_text("validator executed sitecustomize", encoding="utf-8")`,
+        ''
+      ].join('\n'))
+      await expectReadyFailure(generated.skillDir, 'RUNTIME_INTEGRITY_FAILED')
+      await expect(access(executionSentinel)).rejects.toThrow()
+      await rm(siteCustomizePath)
+
+      const commandExtensionPath = join(
+        generated.skillDir,
+        'scripts',
+        'cli',
+        'src',
+        'browser_forge_order_tools',
+        'commands',
+        '__init__.py'
+      )
+      const originalCommandExtension = await readFile(commandExtensionPath, 'utf8')
+      await writeFile(commandExtensionPath, `${originalCommandExtension}\n# populated business-command extension\n`)
+      expect(validateThroughWrapper(generated.skillDir)).toMatchObject({ exitCode: 0, json: { ok: true } })
+      await writeFile(commandExtensionPath, originalCommandExtension)
 
       const readyMarkerPath = join(generated.skillDir, '.browser-forge-ready')
       const originalReadyMarker = await readFile(readyMarkerPath, 'utf8')
@@ -310,21 +391,31 @@ describe('generated skill independence and readiness', () => {
       const entrypoint = join(generated.skillDir, readyManifest.cli.entrypoint)
       const originalEntrypoint = await readFile(entrypoint, 'utf8')
       await chmod(entrypoint, 0o644)
-      await expectReadyFailure(generated.skillDir, 'ENTRYPOINT_NOT_EXECUTABLE')
+      await expectReadyFailure(generated.skillDir, 'ENTRYPOINT_INVALID')
       await chmod(entrypoint, 0o755)
 
       await writeFile(entrypoint, originalEntrypoint.replace(
         'PACKAGE_NAME="browser_forge_order_tools"',
         'PACKAGE_NAME="browser_forge_wrong_package"'
       ))
-      await expectReadyFailure(generated.skillDir, 'ENTRYPOINT_TARGET_MISMATCH')
+      await expectReadyFailure(generated.skillDir, 'ENTRYPOINT_INVALID')
+      await writeFile(entrypoint, `#!/bin/sh\nexit 0\n${originalEntrypoint}`)
+      await expectReadyFailure(generated.skillDir, 'ENTRYPOINT_INVALID')
+      await writeFile(entrypoint, `${originalEntrypoint}\nexec python3 -m browser_forge_extra "$@"\n`)
+      await expectReadyFailure(generated.skillDir, 'ENTRYPOINT_INVALID')
       await writeFile(entrypoint, originalEntrypoint)
       await chmod(entrypoint, 0o755)
 
       await rm(entrypoint)
-      await expectReadyFailure(generated.skillDir, 'ENTRYPOINT_MISSING')
+      await expectReadyFailure(generated.skillDir, 'ENTRYPOINT_INVALID')
       await writeFile(entrypoint, originalEntrypoint)
       await chmod(entrypoint, 0o755)
+
+      readyManifest.cli.entrypoint = 'scripts/browser_forge-other'
+      await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
+      await expectReadyFailure(generated.skillDir, 'ENTRYPOINT_INVALID')
+      readyManifest.cli.entrypoint = 'scripts/browser_forge-order-tools'
+      await writeFile(manifestPath, `${JSON.stringify(readyManifest, null, 2)}\n`)
 
       const standaloneSkill = join(standaloneRoot, 'order-tools')
       await cp(generated.skillDir, standaloneSkill, { recursive: true })

@@ -1,13 +1,11 @@
 import { chmod, link, mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { AUTH_RUNTIME_VERSION, SPEC_VERSION } from './constants.js'
+import { SPEC_VERSION } from './constants.js'
 import { normalizeSkillName } from './names.js'
+import { renderTemplateText, TEMPLATE_ROOT, templateValues } from './template-renderer.js'
 
 const REQUIRED_RECORDING_FILES = ['RECORDING.md', 'recording.har', 'timeline.json', 'metadata.json']
-const TEMPLATE_ROOT = fileURLToPath(new URL('../../skills/browser-forge/assets/skill-template/', import.meta.url))
-const TOKEN_PATTERN = /\{\{(SKILL_NAME|SKILL_ID|PACKAGE_NAME|ENTRYPOINT_NAME|DESCRIPTION|TARGET_DOMAINS_JSON|SPEC_VERSION|AUTH_RUNTIME_VERSION)\}\}/g
 const OWNER_MARKER = '.browser-forge-owner.json'
 const READY_MARKER = '.browser-forge-ready'
 const LOCK_SUFFIX = '.lock'
@@ -53,10 +51,6 @@ function renderName(name, identifiers) {
   return name.endsWith('.tmpl') ? name.slice(0, -'.tmpl'.length) : name
 }
 
-function renderText(text, values) {
-  return text.replace(TOKEN_PATTERN, (_token, name) => values[name])
-}
-
 async function renderTree(source, destination, values, identifiers) {
   const entries = await readdir(source, { withFileTypes: true })
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
@@ -69,7 +63,7 @@ async function renderTree(source, destination, values, identifiers) {
     }
     if (!entry.isFile()) continue
 
-    await writeFile(destinationPath, renderText(await readFile(sourcePath, 'utf8'), values), 'utf8')
+    await writeFile(destinationPath, renderTemplateText(await readFile(sourcePath, 'utf8'), values), 'utf8')
     const sourceMode = (await stat(sourcePath)).mode & 0o777
     await chmod(destinationPath, sourceMode)
   }
@@ -240,16 +234,7 @@ export async function generateSkill({ recordingDir, skillName, description, targ
     await reserveSkillDir(skillDir, ownershipToken)
     temporaryDir = await mkdtemp(join(resolvedOutputRoot, `.browser-forge-${identifiers.skillName}-`))
     await testHooks?.beforeRender?.({ skillDir, temporaryDir, lockPath })
-    const values = {
-      SKILL_NAME: identifiers.skillName,
-      SKILL_ID: identifiers.skillId,
-      PACKAGE_NAME: identifiers.packageName,
-      ENTRYPOINT_NAME: identifiers.entrypointName,
-      DESCRIPTION: JSON.stringify(description),
-      TARGET_DOMAINS_JSON: JSON.stringify(targetDomains),
-      SPEC_VERSION,
-      AUTH_RUNTIME_VERSION
-    }
+    const values = templateValues(identifiers, description, targetDomains)
     await renderTree(TEMPLATE_ROOT, temporaryDir, values, identifiers)
     await publishTree(temporaryDir, skillDir, skillDir, ownershipToken, testHooks)
     await testHooks?.beforeReady?.({ skillDir, temporaryDir, lockPath })

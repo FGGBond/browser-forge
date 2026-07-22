@@ -1,12 +1,14 @@
-import { readFile, stat } from 'node:fs/promises'
-import { spawnSync } from 'node:child_process'
+import { lstat, readFile, readdir, stat } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
-import { BUILTIN_COMMAND_IDS } from './constants.js'
+import { AUTH_RUNTIME_VERSION, BUILTIN_COMMAND_IDS, SPEC_VERSION } from './constants.js'
 import { validateDependencyGraph } from './dependency-graph.js'
 import { readReadyMarker } from './generator.js'
+import { normalizeSkillName } from './names.js'
 import { scanTree } from './secret-scanner.js'
+import { renderTemplateText, TEMPLATE_ROOT, templateValues } from './template-renderer.js'
 
 const schema = JSON.parse(await readFile(new URL('../../skills/browser-forge/schemas/manifest.schema.json', import.meta.url)))
 const ajv = new Ajv2020({ allErrors: true, strict: true })
@@ -37,15 +39,26 @@ const REQUIRED_HELP_SECTIONS = Object.freeze([
   'Idempotency',
   'Examples'
 ])
-const ENVELOPE_FIELDS = Object.freeze([
-  'spec_version',
-  'ok',
-  'command',
-  'status',
-  'data',
-  'artifacts',
-  'auth',
-  'next_actions'
+const REQUIRED_COMMAND_DOC_SECTIONS = Object.freeze([
+  'Inputs',
+  ...REQUIRED_HELP_SECTIONS
+])
+const IMMUTABLE_RUNTIME_TEMPLATES = Object.freeze([
+  ['scripts/install.sh', 'scripts/install.sh'],
+  ['scripts/cli/pyproject.toml.tmpl', 'scripts/cli/pyproject.toml'],
+  ['scripts/cli/src/browser_forge_generated/__init__.py', '__init__.py'],
+  ['scripts/cli/src/browser_forge_generated/__main__.py', '__main__.py'],
+  ['scripts/cli/src/browser_forge_generated/cli.py', 'cli.py'],
+  ['scripts/cli/src/browser_forge_generated/client.py', 'client.py'],
+  ['scripts/cli/src/browser_forge_generated/config.py', 'config.py'],
+  ['scripts/cli/src/browser_forge_generated/envelope.py', 'envelope.py'],
+  ['scripts/cli/src/browser_forge_generated/manifest.py', 'manifest.py'],
+  ['scripts/cli/src/browser_forge_generated/auth/__init__.py', 'auth/__init__.py'],
+  ['scripts/cli/src/browser_forge_generated/auth/browser_cookies.py', 'auth/browser_cookies.py'],
+  ['scripts/cli/src/browser_forge_generated/auth/cookie_jar.py', 'auth/cookie_jar.py'],
+  ['scripts/cli/src/browser_forge_generated/auth/jdme_sso.py', 'auth/jdme_sso.py'],
+  ['scripts/cli/src/browser_forge_generated/auth/provider.py', 'auth/provider.py'],
+  ['scripts/cli/src/browser_forge_generated/auth/session_store.py', 'auth/session_store.py']
 ])
 
 function issue(code, path, message) {
@@ -69,11 +82,13 @@ export function commandIdsFromSkillDocument(text) {
     if (inCommandsSection && /^#{1,2}[ \t]+/.test(line)) break
     if (!inCommandsSection) continue
 
-    const item = line.match(/^\s*(?:[-*+]\s+|\d+\.\s+|#{3,6}\s+)(.*)$/)?.[1]
+    const headingItem = line.match(/^\s*#{3,6}\s+(.*)$/)?.[1]
+    const listItem = line.match(/^\s*(?:[-*+]\s+|\d+\.\s+)(.*)$/)?.[1]
+    const item = headingItem ?? listItem
     if (!item) continue
     const commandId = item.match(/^`([a-z0-9]+(?:-[a-z0-9]+)*)`/i)?.[1] ??
       item.match(/^\[`?([a-z0-9]+(?:-[a-z0-9]+)*)`?\]\([^)]+\)/i)?.[1] ??
-      item.match(/^([a-z0-9]+(?:-[a-z0-9]+)*)\b/i)?.[1]
+      (headingItem ? item.match(/^([a-z0-9]+(?:-[a-z0-9]+)*)\b/i)?.[1] : null)
     if (commandId) ids.push(commandId.toLowerCase())
   }
   return [...new Set(ids)].sort()
@@ -83,189 +98,113 @@ function sameValues(left, right) {
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
-function runtimePackageName(manifest) {
-  const skillName = String(manifest?.id ?? '').match(/^browser_forge\.([a-z0-9]+(?:-[a-z0-9]+)*)$/)?.[1]
-  return skillName ? `browser_forge_${skillName.replaceAll('-', '_')}` : null
-}
-
-function findSystemPython() {
-  for (const command of ['python3', 'python']) {
-    const result = spawnSync(command, [
-      '-c',
-      'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'
-    ], { encoding: 'utf8', timeout: 5_000 })
-    if (result.status === 0) return command
-  }
-  return null
-}
-
-function runGeneratedPython(python, skillDir, packageName, args) {
-  const environment = {
-    ...process.env,
-    PYTHONPATH: join(skillDir, 'scripts', 'cli', 'src'),
-    BROWSER_FORGE_MANIFEST_PATH: join(skillDir, 'manifest.json'),
-    BROWSER_FORGE_DISABLE_NETWORK: '1'
-  }
-  delete environment.PYTHONHOME
-  delete environment.BROWSER_FORGE_BASE_URL
-  delete environment.BROWSER_FORGE_AUTH_VALUE
-  delete environment.BROWSER_FORGE_COOKIE_VALUE
-  return spawnSync(python, args[0] === '-c' ? args : ['-m', packageName, ...args], {
-    cwd: skillDir,
-    encoding: 'utf8',
-    env: environment,
-    timeout: 10_000,
-    maxBuffer: 1024 * 1024
-  })
-}
-
-function parseSingleJsonLine(text) {
-  const lines = String(text ?? '').trim().split(/\r?\n/)
-  if (lines.length !== 1 || lines[0] === '') return null
+function trustedIdentifiers(manifest) {
   try {
-    const parsed = JSON.parse(lines[0])
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+    if (typeof manifest?.name !== 'string') return null
+    const identifiers = normalizeSkillName(manifest.name)
+    return identifiers.skillId === manifest?.id ? identifiers : null
   } catch {
     return null
   }
 }
 
-async function entrypointContractIssues(skillDir, manifest, packageName) {
-  const issues = []
-  const relativePath = manifest?.cli?.entrypoint
-  if (typeof relativePath !== 'string' || !packageName) {
-    return [issue('ENTRYPOINT_TARGET_MISMATCH', 'manifest.json/cli/entrypoint', 'CLI entrypoint does not target the generated runtime package')]
-  }
-
-  const entrypointPath = join(skillDir, relativePath)
-  let details
-  try {
-    details = await stat(entrypointPath)
-  } catch {
-    return [issue('ENTRYPOINT_MISSING', relativePath, 'Declared CLI entrypoint file is missing')]
-  }
-  if (!details.isFile()) {
-    issues.push(issue('ENTRYPOINT_MISSING', relativePath, 'Declared CLI entrypoint is not a file'))
-    return issues
-  }
-  if ((details.mode & 0o111) === 0) {
-    issues.push(issue('ENTRYPOINT_NOT_EXECUTABLE', relativePath, 'Declared CLI entrypoint is not executable'))
-  }
-
-  try {
-    const source = await readFile(entrypointPath, 'utf8')
-    if (!source.includes(`PACKAGE_NAME="${packageName}"`) || !source.includes('-m "$PACKAGE_NAME"')) {
-      issues.push(issue('ENTRYPOINT_TARGET_MISMATCH', relativePath, 'CLI entrypoint does not target the generated runtime package'))
-    }
-  } catch {
-    issues.push(issue('ENTRYPOINT_TARGET_MISMATCH', relativePath, 'CLI entrypoint could not be inspected'))
-  }
-  return issues
+function sha256(contents) {
+  return createHash('sha256').update(contents).digest('hex')
 }
 
-function runtimeExecutionIssues(skillDir, manifest, packageName) {
-  const issues = []
-  const python = findSystemPython()
-  if (!python || !packageName) {
+async function renderedTemplateFile(templateRelativePath, values) {
+  const templatePath = join(TEMPLATE_ROOT, templateRelativePath)
+  const source = await readFile(templatePath, 'utf8')
+  return {
+    contents: Buffer.from(renderTemplateText(source, values), 'utf8'),
+    mode: (await stat(templatePath)).mode & 0o777
+  }
+}
+
+async function artifactFileIntegrity(skillDir, artifactRelativePath, expected) {
+  try {
+    const artifactPath = join(skillDir, artifactRelativePath)
+    const details = await lstat(artifactPath)
+    if (!details.isFile() || details.isSymbolicLink()) return false
+    const actual = await readFile(artifactPath)
+    return (details.mode & 0o777) === expected.mode && actual.equals(expected.contents)
+  } catch {
+    return false
+  }
+}
+
+async function entrypointIntegrityIssues(skillDir, manifest, identifiers, values) {
+  const expectedPath = identifiers ? `scripts/${identifiers.entrypointName}` : null
+  if (!expectedPath || manifest?.cli?.entrypoint !== expectedPath) {
     return [issue(
-      'RUNTIME_PYTHON_UNAVAILABLE',
-      'manifest.json/cli/python_requires',
-      'Python 3.10 or newer is required to validate the generated runtime'
+      'ENTRYPOINT_INVALID',
+      'manifest.json/cli/entrypoint',
+      'CLI entrypoint path must exactly match the trusted generated wrapper path'
     )]
   }
 
-  const authProbe = runGeneratedPython(python, skillDir, packageName, [
-    '-c',
-    `import json; from ${packageName}.auth import AUTH_RUNTIME_VERSION; print(json.dumps(AUTH_RUNTIME_VERSION))`
-  ])
-  let authVersion = null
-  if (authProbe.status === 0) {
-    try {
-      authVersion = JSON.parse(String(authProbe.stdout).trim())
-    } catch {
-      // The stable mismatch below covers unreadable runtime version output.
-    }
+  const expected = await renderedTemplateFile('scripts/browser_forge-skill.tmpl', values)
+  if (!await artifactFileIntegrity(skillDir, expectedPath, expected)) {
+    return [issue(
+      'ENTRYPOINT_INVALID',
+      expectedPath,
+      `CLI entrypoint content and mode must exactly match trusted template SHA256 ${sha256(expected.contents)}`
+    )]
   }
-  if (authVersion !== manifest?.auth?.runtime_version) {
-    issues.push(issue(
-      'AUTH_VERSION_MISMATCH',
-      'manifest.json/auth/runtime_version',
-      'Manifest auth runtime version does not match the copied runtime code version'
-    ))
-  }
-
-  const described = runGeneratedPython(python, skillDir, packageName, ['describe'])
-  const describedPayload = described.status === 0 ? parseSingleJsonLine(described.stdout) : null
-  if (described.status !== 0) {
-    issues.push(issue(
-      'RUNTIME_DESCRIBE_FAILED',
-      'manifest.json/commands',
-      'Generated runtime could not execute describe from its source tree'
-    ))
-  } else if (!describedPayload) {
-    issues.push(issue(
-      'RUNTIME_DESCRIBE_INVALID_JSON',
-      'manifest.json/commands',
-      'Generated runtime describe output must be exactly one JSON object'
-    ))
-  } else {
-    if (
-      describedPayload.ok !== true ||
-      ENVELOPE_FIELDS.some(field => !Object.hasOwn(describedPayload, field))
-    ) {
-      issues.push(issue(
-        'ENVELOPE_CONTRACT_MISSING',
-        'manifest.json/cli/envelope_version',
-        'Generated runtime describe output does not implement the JSON envelope contract'
-      ))
-    }
-    if (describedPayload.spec_version !== manifest?.cli?.envelope_version) {
-      issues.push(issue(
-        'ENVELOPE_VERSION_MISMATCH',
-        'manifest.json/cli/envelope_version',
-        'Manifest envelope version does not match generated runtime output'
-      ))
-    }
-    const describedIds = commandIds(describedPayload?.data?.manifest).sort()
-    const manifestIds = commandIds(manifest).sort()
-    if (!sameValues(describedIds, manifestIds)) {
-      issues.push(issue(
-        'RUNTIME_COMMAND_MISMATCH',
-        'manifest.json/commands',
-        'Generated runtime describe command set must exactly match manifest commands'
-      ))
-    }
-  }
-
-  for (const commandId of commandIds(manifest)) {
-    const help = runGeneratedPython(python, skillDir, packageName, [commandId, '--help'])
-    if (help.status !== 0) {
-      issues.push(issue(
-        'COMMAND_HELP_FAILED',
-        `${manifest.cli.entrypoint}#${commandId}`,
-        `Generated runtime help failed for command: ${commandId}`
-      ))
-      continue
-    }
-    const missingSections = REQUIRED_HELP_SECTIONS.filter(section => {
-      const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      return !new RegExp(`^\\s*${escaped}:\\s*$`, 'm').test(help.stdout)
-    })
-    if (missingSections.length > 0) {
-      issues.push(issue(
-        'HELP_CONTRACT_MISSING',
-        `${manifest.cli.entrypoint}#${commandId}`,
-        `Generated runtime help is missing required sections for ${commandId}: ${missingSections.join(', ')}`
-      ))
-    }
-  }
-
-  return issues
+  return []
 }
 
-async function runtimeContractIssues(skillDir, manifest) {
+async function unexpectedRuntimePaths(skillDir, identifiers) {
+  const sourceRoot = join(skillDir, 'scripts', 'cli', 'src')
+  const packageRoot = identifiers.packageName
+  const allowedDirectories = new Set([
+    packageRoot,
+    `${packageRoot}/auth`,
+    `${packageRoot}/commands`
+  ])
+  const allowedFiles = new Set(IMMUTABLE_RUNTIME_TEMPLATES.flatMap(([, runtimeRelativePath]) =>
+    runtimeRelativePath.startsWith('scripts/') ? [] : [`${packageRoot}/${runtimeRelativePath}`]
+  ))
+  const unexpected = []
+
+  async function visit(directory, relativeDirectory = '') {
+    const entries = await readdir(directory, { withFileTypes: true })
+    for (const entry of entries) {
+      if (entry.name === '__pycache__') continue
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
+      if (entry.isSymbolicLink()) {
+        unexpected.push(relativePath)
+        continue
+      }
+      if (entry.isDirectory()) {
+        if (!allowedDirectories.has(relativePath) && !relativePath.startsWith(`${packageRoot}/commands/`)) {
+          unexpected.push(relativePath)
+          continue
+        }
+        await visit(join(directory, entry.name), relativePath)
+        continue
+      }
+      if (!entry.isFile()) {
+        unexpected.push(relativePath)
+        continue
+      }
+      if (!allowedFiles.has(relativePath) && !relativePath.startsWith(`${packageRoot}/commands/`)) {
+        unexpected.push(relativePath)
+      }
+    }
+  }
+
+  try {
+    await visit(sourceRoot)
+  } catch {
+    return ['scripts/cli/src']
+  }
+  return unexpected.sort()
+}
+
+async function runtimeIntegrityIssues(skillDir, manifest) {
   const issues = []
-  const packageName = runtimePackageName(manifest)
+  const identifiers = trustedIdentifiers(manifest)
   const manifestCommandIds = commandIds(manifest)
   for (const builtin of BUILTIN_COMMAND_IDS) {
     if (!manifestCommandIds.includes(builtin)) {
@@ -277,50 +216,119 @@ async function runtimeContractIssues(skillDir, manifest) {
     }
   }
 
-  if (!packageName) {
-    issues.push(...await entrypointContractIssues(skillDir, manifest, packageName))
-    issues.push(...runtimeExecutionIssues(skillDir, manifest, packageName))
-    return issues
-  }
-
-  const runtimeRoot = join(skillDir, 'scripts', 'cli', 'src', packageName)
-
-  const requiredAuthFiles = ['provider.py', 'jdme_sso.py', 'browser_cookies.py', 'cookie_jar.py', 'session_store.py']
-  for (const filename of requiredAuthFiles) {
-    try {
-      await readFile(join(runtimeRoot, 'auth', filename), 'utf8')
-    } catch {
-      issues.push(issue(
-        'AUTH_RUNTIME_MISSING',
-        `scripts/cli/src/${packageName}/auth/${filename}`,
-        `Generated authentication runtime file is missing: ${filename}`
-      ))
-    }
-  }
-
-  try {
-    const clientSource = await readFile(join(runtimeRoot, 'client.py'), 'utf8')
-    const hasNetworkEnvironmentGate = clientSource.includes('BROWSER_FORGE_DISABLE_NETWORK') ||
-      /BROWSER_FORGE_["']\s*["']DISABLE_NETWORK/.test(clientSource)
-    if (!hasNetworkEnvironmentGate || !clientSource.includes('NETWORK_DISABLED')) {
-      issues.push(issue(
-        'OFFLINE_GATE_MISSING',
-        `scripts/cli/src/${packageName}/client.py`,
-        'Generated client does not contain the network-disabled execution gate'
-      ))
-    }
-  } catch {
+  if (manifest?.auth?.runtime_version !== AUTH_RUNTIME_VERSION) {
     issues.push(issue(
-      'OFFLINE_GATE_MISSING',
-      `scripts/cli/src/${packageName}/client.py`,
-      'Generated client runtime is missing'
+      'AUTH_VERSION_MISMATCH',
+      'manifest.json/auth/runtime_version',
+      `Manifest auth runtime version must equal trusted runtime version ${AUTH_RUNTIME_VERSION}`
+    ))
+  }
+  if (manifest?.cli?.envelope_version !== SPEC_VERSION) {
+    issues.push(issue(
+      'ENVELOPE_VERSION_MISMATCH',
+      'manifest.json/cli/envelope_version',
+      `Manifest envelope version must equal trusted runtime version ${SPEC_VERSION}`
     ))
   }
 
-  issues.push(...await entrypointContractIssues(skillDir, manifest, packageName))
-  issues.push(...runtimeExecutionIssues(skillDir, manifest, packageName))
+  if (!identifiers) {
+    issues.push(issue(
+      'RUNTIME_INTEGRITY_FAILED',
+      'manifest.json/id',
+      'Manifest identity cannot be mapped to trusted generated runtime identifiers'
+    ))
+    issues.push(...await entrypointIntegrityIssues(skillDir, manifest, identifiers, null))
+    return issues
+  }
+
+  const values = templateValues(identifiers, manifest?.description, manifest?.auth?.target_domains)
+  const runtimeRoot = `scripts/cli/src/${identifiers.packageName}`
+  for (const [templateRelativePath, runtimeRelativePath] of IMMUTABLE_RUNTIME_TEMPLATES) {
+    const artifactRelativePath = runtimeRelativePath.startsWith('scripts/')
+      ? runtimeRelativePath
+      : `${runtimeRoot}/${runtimeRelativePath}`
+    const expected = await renderedTemplateFile(templateRelativePath, values)
+    if (!await artifactFileIntegrity(skillDir, artifactRelativePath, expected)) {
+      issues.push(issue(
+        'RUNTIME_INTEGRITY_FAILED',
+        artifactRelativePath,
+        `Immutable runtime file must exactly match trusted template SHA256 ${sha256(expected.contents)}`
+      ))
+    }
+  }
+  const unexpectedPaths = await unexpectedRuntimePaths(skillDir, identifiers)
+  if (unexpectedPaths.length > 0) {
+    issues.push(issue(
+      'RUNTIME_INTEGRITY_FAILED',
+      unexpectedPaths[0],
+      `Generated runtime contains paths outside the trusted infrastructure and commands extension allowlist: ${unexpectedPaths.join(', ')}`
+    ))
+  }
+  issues.push(...await entrypointIntegrityIssues(skillDir, manifest, identifiers, values))
 
   return issues
+}
+
+function helpMetadataIssues(manifest) {
+  const issues = []
+  const commands = Array.isArray(manifest?.commands) ? manifest.commands : []
+  for (const [commandIndex, rawCommand] of commands.entries()) {
+    const command = rawCommand && typeof rawCommand === 'object' && !Array.isArray(rawCommand) ? rawCommand : {}
+    const missingMetadata = [
+      typeof command.summary === 'string' && command.summary.trim() !== '',
+      typeof command.side_effect === 'boolean',
+      typeof command.idempotent === 'boolean',
+      Array.isArray(command.inputs),
+      typeof command.outputs?.schema_ref === 'string' && command.outputs.schema_ref !== '',
+      typeof command.requires?.auth === 'boolean',
+      Array.isArray(command.requires?.commands),
+      Array.isArray(command.next_actions)
+    ].some(valid => !valid)
+    const invalidInputs = (Array.isArray(command.inputs) ? command.inputs : []).some(input =>
+      typeof input?.name !== 'string' || input.name === '' ||
+      typeof input?.type !== 'string' || input.type === '' ||
+      typeof input?.required !== 'boolean' ||
+      !Array.isArray(input?.sources)
+    )
+    const missingSourcePath = (Array.isArray(command.inputs) ? command.inputs : []).some(input =>
+      (Array.isArray(input?.sources) ? input.sources : []).some(source =>
+        typeof source?.command !== 'string' || source.command === '' ||
+        typeof source?.json_path !== 'string' || source.json_path === ''
+      )
+    )
+    if (missingMetadata || invalidInputs || missingSourcePath) {
+      issues.push(issue(
+        'HELP_CONTRACT_MISSING',
+        `manifest.json/commands/${commandIndex}`,
+        `Command help metadata or input source JSONPath is incomplete: ${command.id ?? commandIndex}`
+      ))
+    }
+  }
+  return issues
+}
+
+function markdownSectionMissing(text, section) {
+  const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return !new RegExp(`^#{2,6}[ \\t]+${escaped}[ \\t]*#*[ \\t]*$`, 'im').test(text)
+}
+
+function commandDocumentIssues(text, command, relativePath) {
+  const missingSections = REQUIRED_COMMAND_DOC_SECTIONS.filter(section => markdownSectionMissing(text, section))
+  const missingSources = (Array.isArray(command?.inputs) ? command.inputs : []).flatMap(input =>
+    (Array.isArray(input?.sources) ? input.sources : [])
+  ).filter(source =>
+    typeof source?.command !== 'string' || !text.includes(source.command) ||
+    typeof source?.json_path !== 'string' || !text.includes(source.json_path)
+  )
+  const schemaRef = command?.outputs?.schema_ref
+  if (missingSections.length === 0 && missingSources.length === 0 && typeof schemaRef === 'string' && text.includes(schemaRef)) {
+    return []
+  }
+  return [issue(
+    'HELP_CONTRACT_MISSING',
+    relativePath,
+    `Command documentation lacks required help metadata or source JSONPath: ${command?.id ?? 'unknown'}`
+  )]
 }
 
 async function readyContractIssues(skillDir, manifest) {
@@ -343,7 +351,8 @@ async function readyContractIssues(skillDir, manifest) {
   for (const commandId of manifestIds.filter(commandId => !BUILTIN_COMMAND_IDS.includes(commandId))) {
     const relativePath = `references/commands/${commandId}.md`
     try {
-      await readFile(join(skillDir, relativePath), 'utf8')
+      const command = manifest.commands.find(candidate => candidate?.id === commandId)
+      issues.push(...commandDocumentIssues(await readFile(join(skillDir, relativePath), 'utf8'), command, relativePath))
     } catch {
       issues.push(issue('COMMAND_DOC_MISSING', relativePath, `Business command documentation is missing: ${commandId}`))
     }
@@ -360,7 +369,8 @@ async function readyContractIssues(skillDir, manifest) {
     }
   }
 
-  issues.push(...await runtimeContractIssues(skillDir, manifest))
+  issues.push(...helpMetadataIssues(manifest))
+  issues.push(...await runtimeIntegrityIssues(skillDir, manifest))
   return issues
 }
 
@@ -402,13 +412,6 @@ export async function validateSkill(skillDir) {
     } catch (error) {
       issues.push({ code: 'DEPENDENCY_GRAPH_VALIDATION_ERROR', path: 'manifest.json', message: error.message })
     }
-    if (manifest?.status === 'ready') {
-      try {
-        issues.push(...await readyContractIssues(skillDir, manifest))
-      } catch (error) {
-        issues.push({ code: 'READY_CONTRACT_VALIDATION_ERROR', path: '.', message: error.message })
-      }
-    }
   }
 
   let findings = []
@@ -416,6 +419,14 @@ export async function validateSkill(skillDir) {
     findings = await scanTree(skillDir)
   } catch (error) {
     issues.push({ code: 'SKILL_SCAN_ERROR', path: '.', message: error.message })
+  }
+
+  if (manifest?.status === 'ready') {
+    try {
+      issues.push(...await readyContractIssues(skillDir, manifest))
+    } catch (error) {
+      issues.push({ code: 'READY_CONTRACT_VALIDATION_ERROR', path: '.', message: error.message })
+    }
   }
 
   if (manifest?.status === 'ready' && (issues.length > 0 || findings.length > 0)) {
