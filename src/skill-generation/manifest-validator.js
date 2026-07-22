@@ -117,7 +117,7 @@ async function renderedTemplateFile(templateRelativePath, values) {
   const source = await readFile(templatePath, 'utf8')
   return {
     contents: Buffer.from(renderTemplateText(source, values), 'utf8'),
-    mode: (await stat(templatePath)).mode & 0o777
+    mode: (await stat(templatePath)).mode & 0o7777
   }
 }
 
@@ -127,7 +127,7 @@ async function artifactFileIntegrity(skillDir, artifactRelativePath, expected) {
     const details = await lstat(artifactPath)
     if (!details.isFile() || details.isSymbolicLink()) return false
     const actual = await readFile(artifactPath)
-    return (details.mode & 0o777) === expected.mode && actual.equals(expected.contents)
+    return (details.mode & 0o7777) === expected.mode && actual.equals(expected.contents)
   } catch {
     return false
   }
@@ -307,6 +307,63 @@ function helpMetadataIssues(manifest) {
   return issues
 }
 
+function duplicateCommandIssues(manifest) {
+  const seen = new Set()
+  const duplicates = []
+  for (const commandId of commandIds(manifest)) {
+    if (seen.has(commandId)) duplicates.push(commandId)
+    seen.add(commandId)
+  }
+  return [...new Set(duplicates)].map(commandId => issue(
+    'DUPLICATE_COMMAND_ID',
+    'manifest.json/commands',
+    `Command ids must be unique; duplicate found: ${commandId}`
+  ))
+}
+
+function outputSchemaIssues(manifest) {
+  const definitions = manifest?.$defs && typeof manifest.$defs === 'object' && !Array.isArray(manifest.$defs)
+    ? manifest.$defs
+    : {}
+  return (Array.isArray(manifest?.commands) ? manifest.commands : []).flatMap((command, index) => {
+    const schemaRef = command?.outputs?.schema_ref
+    const definitionName = typeof schemaRef === 'string' ? schemaRef.match(/^#\/\$defs\/([^/]+)$/)?.[1] : null
+    if (definitionName && Object.hasOwn(definitions, definitionName)) return []
+    return [issue(
+      'OUTPUT_SCHEMA_MISSING',
+      `manifest.json/commands/${index}/outputs/schema_ref`,
+      `Command output schema_ref must resolve to a manifest $defs entry: ${schemaRef ?? command?.id ?? index}`
+    )]
+  })
+}
+
+function readyMarkerIssues(marker) {
+  const markerBuiltinCommands = Array.isArray(marker?.builtin_commands) ? marker.builtin_commands : []
+  const issues = []
+  if (marker?.spec_version !== SPEC_VERSION) {
+    issues.push(issue(
+      'READY_MARKER_VERSION_MISMATCH',
+      '.browser-forge-ready/spec_version',
+      `Ready marker spec_version must equal ${SPEC_VERSION}`
+    ))
+  }
+  if (marker?.auth_runtime_version !== AUTH_RUNTIME_VERSION) {
+    issues.push(issue(
+      'READY_MARKER_VERSION_MISMATCH',
+      '.browser-forge-ready/auth_runtime_version',
+      `Ready marker auth_runtime_version must equal ${AUTH_RUNTIME_VERSION}`
+    ))
+  }
+  if (!sameValues([...markerBuiltinCommands].sort(), [...BUILTIN_COMMAND_IDS].sort())) {
+    issues.push(issue(
+      'READY_MARKER_VERSION_MISMATCH',
+      '.browser-forge-ready/builtin_commands',
+      'Ready marker builtin_commands must match the trusted builtin command set'
+    ))
+  }
+  return issues
+}
+
 function markdownSectionMissing(text, section) {
   const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return !new RegExp(`^#{2,6}[ \\t]+${escaped}[ \\t]*#*[ \\t]*$`, 'im').test(text)
@@ -333,14 +390,15 @@ function commandDocumentIssues(text, command, relativePath) {
 
 async function readyContractIssues(skillDir, manifest) {
   const issues = []
-  const manifestIds = [...new Set(commandIds(manifest))].sort()
+  const manifestIds = commandIds(manifest).sort()
+  const uniqueManifestIds = [...new Set(manifestIds)]
   let skillIds = []
   try {
     skillIds = commandIdsFromSkillDocument(await readFile(join(skillDir, 'SKILL.md'), 'utf8'))
   } catch {
     // The parity issue below is stable for both a missing and unreadable SKILL.md.
   }
-  if (!sameValues(manifestIds, skillIds)) {
+  if (!sameValues(uniqueManifestIds, skillIds)) {
     issues.push(issue(
       'SKILL_COMMAND_MISMATCH',
       'SKILL.md#commands',
@@ -348,7 +406,7 @@ async function readyContractIssues(skillDir, manifest) {
     ))
   }
 
-  for (const commandId of manifestIds.filter(commandId => !BUILTIN_COMMAND_IDS.includes(commandId))) {
+  for (const commandId of uniqueManifestIds.filter(commandId => !BUILTIN_COMMAND_IDS.includes(commandId))) {
     const relativePath = `references/commands/${commandId}.md`
     try {
       const command = manifest.commands.find(candidate => candidate?.id === commandId)
@@ -369,7 +427,9 @@ async function readyContractIssues(skillDir, manifest) {
     }
   }
 
+  issues.push(...duplicateCommandIssues(manifest))
   issues.push(...helpMetadataIssues(manifest))
+  issues.push(...outputSchemaIssues(manifest))
   issues.push(...await runtimeIntegrityIssues(skillDir, manifest))
   return issues
 }
@@ -382,6 +442,8 @@ export async function validateSkill(skillDir) {
     readyMarker = await readReadyMarker(skillDir)
     if (!readyMarker) {
       issues.push({ code: 'SKILL_NOT_READY', path: '.browser-forge-ready', message: 'Generated skill is incomplete or has no ready marker' })
+    } else {
+      issues.push(...readyMarkerIssues(readyMarker))
     }
   } catch (error) {
     issues.push({ code: 'READY_MARKER_READ_ERROR', path: '.browser-forge-ready', message: error.message })

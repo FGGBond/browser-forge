@@ -1,7 +1,7 @@
 import { chmod, link, mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { SPEC_VERSION } from './constants.js'
+import { AUTH_RUNTIME_VERSION, BUILTIN_COMMAND_IDS, SPEC_VERSION } from './constants.js'
 import { normalizeSkillName } from './names.js'
 import { renderTemplateText, TEMPLATE_ROOT, templateValues } from './template-renderer.js'
 
@@ -176,7 +176,10 @@ async function writeReadyMarker(skillDir, token) {
   await assertOwnership(skillDir, token)
   const readyMarker = join(skillDir, READY_MARKER)
   const contents = `${JSON.stringify({
-    completed: true
+    completed: true,
+    spec_version: SPEC_VERSION,
+    auth_runtime_version: AUTH_RUNTIME_VERSION,
+    builtin_commands: BUILTIN_COMMAND_IDS
   })}\n`
   try {
     await writeFile(readyMarker, contents, { flag: 'wx' })
@@ -190,7 +193,7 @@ export async function readReadyMarker(skillDir) {
   try {
     const marker = JSON.parse(await readFile(join(skillDir, READY_MARKER), 'utf8'))
     if (marker?.completed !== true) return null
-    return { completed: true }
+    return marker
   } catch (error) {
     if (error.code === 'ENOENT' || error instanceof SyntaxError) return null
     throw error
