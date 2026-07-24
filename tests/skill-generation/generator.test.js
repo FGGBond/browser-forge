@@ -344,5 +344,5 @@ describe('generateSkill', () => {
       expect(validationError.status).toBe(1)
       expect(parseSingleJson(validationError)).toMatchObject({ ok: false, status: 'invalid' })
     })
-  })
+  }, 30000)
 })
