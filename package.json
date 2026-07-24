@@ -1,9 +1,12 @@
 {
   "name": "browser-forge",
   "version": "0.1.0",
-  "main": "src/main/index.js",
+  "main": "out/main/index.js",
   "scripts": {
+    "build": "electron-vite build",
     "dev": "node recorder.mjs",
+    "package:mac": "npm run build && electron-forge package --platform=darwin",
+    "make:mac": "npm run build && electron-forge make --platform=darwin",
     "test": "vitest run",
     "test:skill-generation": "vitest run tests/skill-generation",
     "test:watch": "vitest"
@@ -21,6 +24,8 @@
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.1",
+    "@electron-forge/maker-dmg": "^7.11.1",
+    "@electron-forge/maker-zip": "^7.11.1",
     "@vitejs/plugin-react": "^4.7.0",
     "@vitest/coverage-v8": "^4.1.10",
     "electron": "^43.1.1",

@@ -8,7 +8,7 @@ function createWindow() {
     width: 480,
     height: 600,
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true
     }
   })
