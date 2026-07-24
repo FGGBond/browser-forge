@@ -84,6 +84,7 @@
     let startTime = null
     let sessionDir = null
     let ws = null
+    let isStarting = false
 
     function showView(name) {
       document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'))
@@ -93,7 +94,7 @@
     function updateStartBtn() {
       const cp = document.getElementById('chrome-path').value.trim()
       const od = document.getElementById('output-dir').value.trim()
-      document.getElementById('start-btn').disabled = !cp || !od
+      document.getElementById('start-btn').disabled = isStarting || !cp || !od
     }
 
     document.getElementById('chrome-path').addEventListener('input', updateStartBtn)
@@ -114,15 +115,29 @@
     }
 
     async function startRecording() {
+      if (isStarting) return
       const chromePath = document.getElementById('chrome-path').value.trim()
       const outputDir = document.getElementById('output-dir').value.trim()
+      const startBtn = document.getElementById('start-btn')
       document.getElementById('setup-error').textContent = ''
+      isStarting = true
+      startBtn.textContent = '正在启动 Chrome...'
+      updateStartBtn()
 
-      const res = await fetch('/api/start-recording', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chromePath, outputDir })
-      }).then(r => r.json())
+      let res
+      try {
+        res = await fetch('/api/start-recording', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chromePath, outputDir })
+        }).then(r => r.json())
+      } catch (e) {
+        res = { ok: false, error: e.message }
+      } finally {
+        isStarting = false
+        startBtn.textContent = '启动 Chrome 并开始录制'
+        updateStartBtn()
+      }
 
       if (!res.ok) {
         document.getElementById('setup-error').textContent = '启动失败：' + res.error

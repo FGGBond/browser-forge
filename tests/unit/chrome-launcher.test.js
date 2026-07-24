@@ -11,6 +11,18 @@ describe('buildChromeArgs', () => {
     const args = buildChromeArgs({ port: 9222, userDataDir: '/tmp/test' })
     expect(args.some(a => a.startsWith('--user-data-dir='))).toBe(true)
   })
+
+  it('opens the configured recording start URL in a new window', () => {
+    const args = buildChromeArgs({
+      port: 9222,
+      userDataDir: '/tmp/test',
+      startUrl: 'http://localhost:3456/recording-start.html'
+    })
+
+    expect(args).toContain('--new-window')
+    expect(args.at(-1)).toBe('http://localhost:3456/recording-start.html')
+    expect(args).not.toContain('about:blank')
+  })
 })
 
 describe('findChromePath', () => {
