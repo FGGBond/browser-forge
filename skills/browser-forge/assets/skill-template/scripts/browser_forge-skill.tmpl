@@ -1,0 +1,41 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+COMMAND_NAME="{{ENTRYPOINT_NAME}}"
+PACKAGE_NAME="{{PACKAGE_NAME}}"
+POSIX_VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
+WINDOWS_VENV_PYTHON="$SCRIPT_DIR/.venv/Scripts/python.exe"
+
+export BROWSER_FORGE_MANIFEST_\
+PATH="${BROWSER_FORGE_MANIFEST_\
+PATH:-$SCRIPT_DIR/../manifest.json}"
+
+export PYTHONPATH="$SCRIPT_DIR/cli/src"
+cd "$SCRIPT_DIR/cli/src"
+
+run_python() {
+  candidate="$1"
+  shift
+  if "$candidate" -E -s -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+    exec "$candidate" -E -s -m "$PACKAGE_NAME" "$@"
+  fi
+}
+
+if [ -f "$SCRIPT_DIR/.venv/pyvenv.cfg" ] && [ -x "$POSIX_VENV_PYTHON" ]; then
+  run_python "$POSIX_VENV_PYTHON" "$@"
+fi
+
+if [ -f "$SCRIPT_DIR/.venv/pyvenv.cfg" ] && [ -x "$WINDOWS_VENV_PYTHON" ]; then
+  run_python "$WINDOWS_VENV_PYTHON" "$@"
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+  run_python "$(command -v python3)" "$@"
+fi
+if command -v python >/dev/null 2>&1; then
+  run_python "$(command -v python)" "$@"
+fi
+
+printf '%s\n' '{"spec_version":"{{SPEC_VERSION}}","ok":false,"command":null,"status":"failure","data":null,"artifacts":[],"auth":{},"next_actions":[],"error":{"code":"PYTHON_NOT_FOUND","message":"Python 3.10 or newer is required.","recoverable":true}}'
+exit 127

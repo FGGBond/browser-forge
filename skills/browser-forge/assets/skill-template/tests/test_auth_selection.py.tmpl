@@ -1,0 +1,1302 @@
+import base64
+import hashlib
+import json
+import os
+import sqlite3
+import stat
+import sys
+import threading
+from contextlib import contextmanager
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib import import_module
+from pathlib import Path
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
+
+import pytest
+
+
+manifest = json.loads((Path(__file__).parents[1] / "manifest.json").read_text())
+package = "browser_forge_" + manifest["id"].split(".", 1)[1].replace("-", "_")
+cookie_module = import_module(package + ".auth.cookie_jar")
+browser_module = import_module(package + ".auth.browser_cookies")
+provider_module = import_module(package + ".auth.provider")
+jdme_module = import_module(package + ".auth.jdme_sso")
+session_module = import_module(package + ".auth.session_store")
+cli_module = import_module(package + ".cli")
+client_module = import_module(package + ".client")
+config_module = import_module(package + ".config")
+CookieRecord = cookie_module.CookieRecord
+cookies_for_url = cookie_module.cookies_for_url
+cookie_header_for_url = cookie_module.cookie_header_for_url
+BrowserCookieProvider = browser_module.BrowserCookieProvider
+BrowserCookieError = browser_module.BrowserCookieError
+AuthResolver = provider_module.AuthResolver
+AuthUnavailableError = provider_module.AuthUnavailableError
+AuthTargetError = provider_module.AuthTargetError
+AuthProviderError = provider_module.AuthProviderError
+is_jd_target = provider_module.is_jd_target
+JdmeSsoError = jdme_module.JdmeSsoError
+JdmeSsoProvider = jdme_module.JdmeSsoProvider
+JdmeEndpoints = jdme_module.JdmeEndpoints
+validate_redirect_url = jdme_module.validate_redirect_url
+db_candidates = jdme_module.db_candidates
+find_jdme_db = jdme_module.find_jdme_db
+open_jdme_db = jdme_module.open_jdme_db
+decrypt_cookie = jdme_module.decrypt_cookie
+AuthSession = session_module.AuthSession
+SessionStore = session_module.SessionStore
+
+ME_TOKEN = "<ME-TOKEN-SECRET>"
+AUTH_CODE = "<AUTH-CODE-SECRET>"
+GETCODE_FLOW = "<GETCODE-FLOW-SECRET>"
+SSO_TICKET = "<SSO-TICKET-SECRET>"
+TARGET_SESSION = "<TARGET-SESSION-SECRET>"
+ANALYTICS_COOKIE = "<ANALYTICS-SECRET>"
+DEVICE_EID = "<DEVICE-EID-SECRET>"
+DEVICE_UUID = "<DEVICE-UUID-SECRET>"
+DEVICE_ACCOUNT = "<DEVICE-ACCOUNT-SECRET>"
+TEAM_ID = "<TEAM-ID-SECRET>"
+
+
+def cookie(name, *, domain, path="/", secure=False, expires_at=None, host_only=False, value="<REDACTED>"):
+    return CookieRecord(
+        name=name,
+        value=value,
+        domain=domain,
+        path=path,
+        secure=secure,
+        expires_at=expires_at,
+        host_only=host_only,
+    )
+
+
+def test_host_only_scope():
+    records = [cookie("host", domain="app.example.test", host_only=True)]
+
+    assert cookies_for_url(records, "https://app.example.test/orders") == records
+    assert cookies_for_url(records, "https://api.example.test/orders") == []
+
+
+def test_domain_scope():
+    records = [cookie("domain", domain=".example.test")]
+
+    assert cookies_for_url(records, "https://api.example.test/") == records
+    assert cookies_for_url(records, "https://notexample.test/") == []
+
+
+def test_request_restrictions():
+    records = [
+        cookie("path", domain="example.test", path="/orders"),
+        cookie("secure", domain="example.test", secure=True),
+        cookie("expired", domain="example.test", expires_at=10),
+    ]
+
+    assert [item.name for item in cookies_for_url(records, "https://example.test/orders/1", now=20)] == ["path", "secure"]
+    assert [item.name for item in cookies_for_url(records, "http://example.test/orders/1", now=20)] == ["path"]
+    assert cookies_for_url(records, "https://example.test/order-summary", now=20)[0].name == "secure"
+
+
+def test_name_specificity():
+    records = [
+        cookie("session", domain="example.test", path="/", value="<ROOT>"),
+        cookie("session", domain="example.test", path="/orders", value="<DOMAIN>"),
+        cookie("session", domain="app.example.test", path="/orders", host_only=True, value="<HOST>"),
+        cookie("locale", domain="example.test", path="/", value="<LOCALE>"),
+    ]
+
+    selected = cookies_for_url(records, "https://app.example.test/orders/1")
+
+    assert [(item.name, item.value) for item in selected] == [
+        ("session", "<HOST>"),
+        ("locale", "<LOCALE>"),
+    ]
+    assert cookie_header_for_url(records, "https://app.example.test/orders/1") == "session=<HOST>; locale=<LOCALE>"
+
+
+def test_cache_isolation(tmp_path):
+    first = SessionStore("browser_forge.Order Tools/../", {"browsers": ["edge"]}, root=tmp_path)
+    second = SessionStore("browser_forge.Order Tools/../", {"browsers": ["chrome"]}, root=tmp_path)
+
+    first_path = first.cache_path("https://api.example.test/orders")
+    second_path = second.cache_path("https://api.example.test/orders")
+
+    assert first_path.parent == tmp_path / "browser_forge.Order-Tools" / "auth"
+    assert first_path.name.startswith("api.example.test-")
+    assert first_path.suffix == ".json"
+    assert first_path != second_path
+
+
+def test_cache_expiry_mode(tmp_path):
+    clock = lambda: 1_000
+    store = SessionStore("browser_forge.order-tools", {"browsers": ["edge"]}, root=tmp_path, now=clock)
+    target_url = "https://api.example.test/orders"
+    expired = AuthSession(
+        provider="browser_cookie",
+        target_url=target_url,
+        cookie_jar=(cookie("session", domain="api.example.test", host_only=True),),
+        fallback_used=False,
+        expires_at=999,
+    )
+
+    cache_path = store.save(expired)
+
+    assert store.load(target_url) is None
+    if os.name == "posix":
+        assert stat.S_IMODE(cache_path.stat().st_mode) == 0o600
+
+
+def test_cache_reuses_a_session_for_the_same_host(tmp_path):
+    store = SessionStore(
+        "browser_forge.order-tools",
+        {"browsers": ["edge"]},
+        root=tmp_path,
+        now=lambda: 1_000,
+    )
+    session = AuthSession(
+        provider="browser_cookie",
+        target_url="https://api.example.test/orders",
+        cookie_jar=(cookie("session", domain="api.example.test", host_only=True),),
+        fallback_used=False,
+        expires_at=2_000,
+    )
+
+    store.save(session)
+
+    cached = store.load("https://api.example.test/profile")
+
+    assert cached is not None
+    assert cached.cached is True
+    assert cached.cookie_header("https://api.example.test/profile") == "session=<REDACTED>"
+
+
+def test_path_cache(tmp_path, monkeypatch):
+    @dataclass
+    class FakeBrowserCookie:
+        name: str
+        value: str
+        domain: str = "api.example.test"
+        path: str = "/"
+        secure: bool = True
+        expires: int | None = None
+        domain_specified: bool = False
+
+    calls = []
+
+    class FakeBrowserCookies:
+        def edge(self, **_kwargs):
+            calls.append("edge")
+            return [
+                FakeBrowserCookie("orders", "<ORDERS>", path="/orders"),
+                FakeBrowserCookie("profile", "<PROFILE>", path="/profile"),
+                FakeBrowserCookie("unrelated", "<UNRELATED>", domain="other.example.test"),
+            ]
+
+    monkeypatch.setitem(sys.modules, "browser_cookie3", FakeBrowserCookies())
+    provider = BrowserCookieProvider(
+        "browser_forge.order-tools",
+        browsers=("edge",),
+        cache_root=tmp_path,
+        now=lambda: 1_000,
+    )
+
+    orders = provider.resolve("https://api.example.test/orders")
+    profile = provider.resolve("https://api.example.test/profile")
+
+    assert calls == ["edge"]
+    assert [item.name for item in orders.cookie_jar] == ["orders", "profile"]
+    assert orders.cookie_header() == "orders=<ORDERS>"
+    assert profile.cookie_header() == "profile=<PROFILE>"
+
+
+def test_targeted_refresh(tmp_path, monkeypatch):
+    @dataclass
+    class FakeBrowserCookie:
+        name: str = "session"
+        value: str = "<BROWSER>"
+        domain: str = "api.example.test"
+        path: str = "/"
+        secure: bool = True
+        expires: int | None = None
+        domain_specified: bool = False
+
+    calls = []
+
+    class FakeBrowserCookies:
+        def edge(self, **_kwargs):
+            calls.append("edge")
+            return [FakeBrowserCookie()]
+
+    monkeypatch.setitem(sys.modules, "browser_cookie3", FakeBrowserCookies())
+    provider = BrowserCookieProvider(
+        "browser_forge.order-tools",
+        browsers=("edge",),
+        cache_root=tmp_path,
+        now=lambda: 1_000,
+    )
+    first_url = "https://api.example.test/orders"
+    second_url = "https://other.example.test/orders"
+    other_session = AuthSession(
+        provider="browser_cookie",
+        target_url=second_url,
+        cookie_jar=(cookie("other", domain="other.example.test", host_only=True),),
+        fallback_used=False,
+        expires_at=2_000,
+    )
+    provider.store.save(other_session)
+
+    provider.resolve(first_url)
+    provider.resolve(first_url)
+    provider.resolve(first_url, force_refresh=True)
+
+    assert calls == ["edge", "edge"]
+    assert provider.store.load(second_url) == other_session
+
+
+def test_lazy_browser_order(tmp_path, monkeypatch):
+    real_import = browser_module.importlib.import_module
+    imports = []
+    calls = []
+
+    @dataclass
+    class FakeBrowserCookie:
+        name: str = "session"
+        value: str = "<BROWSER>"
+        domain: str = "api.example.test"
+        path: str = "/"
+        secure: bool = True
+        expires: int | None = None
+        domain_specified: bool = False
+
+    class FakeBrowserCookies:
+        def edge(self, **_kwargs):
+            calls.append("edge")
+            raise PermissionError("private user path must not escape")
+
+        def chrome(self, **_kwargs):
+            calls.append("chrome")
+            return [FakeBrowserCookie()]
+
+    def fake_import(name):
+        if name == "browser_cookie3":
+            imports.append(name)
+            return FakeBrowserCookies()
+        return real_import(name)
+
+    monkeypatch.setattr(browser_module.importlib, "import_module", fake_import)
+    provider = BrowserCookieProvider(
+        "browser_forge.order-tools",
+        browsers=("edge", "chrome"),
+        cache_root=tmp_path,
+        now=lambda: 1_000,
+    )
+
+    assert imports == []
+    session = provider.resolve("https://api.example.test/orders")
+
+    assert imports == ["browser_cookie3"]
+    assert calls == ["edge", "chrome"]
+    assert session.metadata() == {
+        "provider": "browser_cookie",
+        "target_host": "api.example.test",
+        "fallback_used": False,
+        "expires_at": 15_400,
+        "cookie_count": 1,
+        "cached": False,
+    }
+    assert "<BROWSER>" not in json.dumps(session.metadata())
+
+
+def test_redacted_failures(tmp_path, monkeypatch):
+    class FakeBrowserCookies:
+        def edge(self, **_kwargs):
+            raise PermissionError("/Users/private-person/browser-data")
+
+        def chrome(self, **_kwargs):
+            raise OSError("/home/private-person/browser-data")
+
+    monkeypatch.setitem(sys.modules, "browser_cookie3", FakeBrowserCookies())
+    provider = BrowserCookieProvider(
+        "browser_forge.order-tools",
+        cache_root=tmp_path,
+        now=lambda: 1_000,
+    )
+
+    with pytest.raises(BrowserCookieError) as raised:
+        provider.resolve("https://api.example.test/orders")
+
+    assert raised.value.code == "BROWSER_COOKIE_" "UNAVAILABLE"
+    assert raised.value.attempts == (
+        {"browser": "edge", "error": "PermissionError"},
+        {"browser": "chrome", "error": "OSError"},
+    )
+    assert "private-person" not in str(raised.value)
+
+
+def test_raw_creds_ignored(monkeypatch, capsys):
+    monkeypatch.setenv("BROWSER_FORGE_" "AUTHORIZATION", "Bearer <RUNTIME-COOKIE>")
+    monkeypatch.setenv("BROWSER_FORGE_COOKIE", "<RUNTIME-COOKIE>")
+    monkeypatch.setattr(cli_module, "_build_auth_resolver", lambda _manifest: None)
+
+    assert cli_module.main(["auth-status"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data"] == {
+        "configured": True,
+        "resolved": False,
+        "providers": ["browser_cookie"],
+    }
+    runtime_config = config_module.load_config(manifest)
+    assert not hasattr(runtime_config, "auth_value")
+    assert not hasattr(runtime_config, "cookie_value")
+    assert "<RUNTIME-COOKIE>" not in json.dumps(payload)
+
+
+def test_auth_status_metadata(monkeypatch, capsys):
+    session = auth_session("browser_cookie", "https://api.example.test")
+
+    class Resolver:
+        def resolve(self, target_url, force_refresh=False):
+            assert target_url == "https://api.example.test"
+            assert force_refresh is False
+            return session
+
+    monkeypatch.setattr(cli_module, "_build_auth_resolver", lambda _manifest: Resolver())
+
+    assert cli_module.main(["auth-status"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data"] == session.metadata()
+    assert payload["auth"] == session.metadata()
+
+
+def test_refresh_flag():
+    runtime_manifest = {
+        **manifest,
+        "commands": [
+            *manifest["commands"],
+            {
+                "id": "list-orders",
+                "summary": "List orders.",
+                "inputs": [],
+                "outputs": {"schema_ref": "#/$defs/list-orders-output"},
+                "requires": {"auth": True, "commands": []},
+                "next_actions": [],
+                "steps": [{"id": "list", "request": "GET /orders", "depends_on": []}],
+            },
+        ],
+    }
+
+    args = cli_module.build_parser(runtime_manifest).parse_args(["list-orders", "--refresh-auth"])
+
+    assert args.refresh_auth is True
+
+
+def test_cli_refresh_cookie(tmp_path, monkeypatch, capsys):
+    runtime_manifest = {
+        **manifest,
+        "commands": [
+            *manifest["commands"],
+            {
+                "id": "list-orders",
+                "summary": "List orders.",
+                "inputs": [],
+                "outputs": {"schema_ref": "#/$defs/list-orders-output"},
+                "requires": {"auth": True, "commands": []},
+                "next_actions": [],
+                "steps": [{"id": "list", "request": "GET /orders", "depends_on": []}],
+            },
+        ],
+    }
+
+    @dataclass
+    class FakeBrowserCookie:
+        name: str = "session"
+        value: str = "<FRESH-BROWSER-SECRET>"
+        domain: str = "api.example.test"
+        path: str = "/"
+        secure: bool = True
+        expires: int | None = None
+        domain_specified: bool = False
+
+    browser_calls = []
+
+    class FakeBrowserCookies:
+        def edge(self, **_kwargs):
+            browser_calls.append("edge")
+            return [FakeBrowserCookie()]
+
+    provider = BrowserCookieProvider(
+        manifest["id"],
+        browsers=("edge",),
+        cache_root=tmp_path,
+    )
+    provider.store.save(AuthSession(
+        provider="browser_cookie",
+        target_url="https://api.example.test/orders",
+        cookie_jar=(cookie(
+            "session",
+            domain="api.example.test",
+            secure=True,
+            host_only=True,
+            value="<STALE-CACHED-SECRET>",
+        ),),
+        fallback_used=False,
+        expires_at=provider.now() + 1_000,
+    ))
+    refresh_calls = []
+    real_resolve = provider.resolve
+
+    def tracked_resolve(target_url, force_refresh=False):
+        refresh_calls.append(force_refresh)
+        return real_resolve(target_url, force_refresh=force_refresh)
+
+    provider.resolve = tracked_resolve
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"orders":[]}'
+
+    requests = []
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            requests.append(request)
+            assert timeout == 30
+            return FakeResponse()
+
+    monkeypatch.delenv("BROWSER_FORGE_" "DISABLE_NETWORK", raising=False)
+    monkeypatch.delenv("BROWSER_FORGE_COOKIE", raising=False)
+    monkeypatch.setitem(sys.modules, "browser_cookie3", FakeBrowserCookies())
+    monkeypatch.setattr(cli_module, "load_manifest", lambda: runtime_manifest)
+    monkeypatch.setattr(cli_module, "_build_auth_resolver", lambda _manifest: provider, raising=False)
+    monkeypatch.setattr(client_module, "build_opener", lambda *_handlers: FakeOpener())
+
+    assert cli_module.main(["list-orders", "--refresh-auth"]) == 0
+
+    output = capsys.readouterr()
+    payload = json.loads(output.out)
+    assert refresh_calls == [True]
+    assert browser_calls == ["edge"]
+    assert requests[0].get_header("Cookie") == "session=<FRESH-BROWSER-SECRET>"
+    assert payload["ok"] is True
+    assert payload["auth"] == {
+        "provider": "browser_cookie",
+        "target_host": "api.example.test",
+        "fallback_used": False,
+        "expires_at": provider.store.load("https://api.example.test/orders").expires_at,
+        "cookie_count": 1,
+        "cached": False,
+    }
+    assert "<FRESH-BROWSER-SECRET>" not in output.out + output.err
+    assert "<STALE-CACHED-SECRET>" not in output.out + output.err
+
+
+def auth_session(provider, target_url):
+    return AuthSession(
+        provider=provider,
+        target_url=target_url,
+        cookie_jar=(cookie("session", domain=target_url.split("/")[2], host_only=True),),
+        fallback_used=False,
+        expires_at=2_000,
+    )
+
+
+class FakeProvider:
+    def __init__(self, provider, events, *, error=None):
+        self.provider = provider
+        self.events = events
+        self.error = error
+
+    def resolve(self, target_url, force_refresh=False):
+        self.events.append((self.provider, target_url, force_refresh))
+        if self.error is not None:
+            raise self.error
+        return auth_session(self.provider, target_url)
+
+
+def test_jdme_only_resolver():
+    resolver = cli_module._build_auth_resolver({
+        "id": "browser_forge.order-tools",
+        "auth": {
+            "target_domains": ["orders.jd.com"],
+            "providers": ["jdme_sso"],
+        },
+    })
+
+    assert resolver is not None
+    assert resolver.providers == ("jdme_sso",)
+
+
+def test_jdme_first():
+    events = []
+    target_url = "https://orders.jd.com/list"
+
+    def jdme_factory():
+        events.append(("instantiate", "jdme_sso"))
+        return FakeProvider("jdme_sso", events)
+
+    def browser_factory():
+        events.append(("instantiate", "browser_cookie"))
+        return FakeProvider("browser_cookie", events)
+
+    resolver = AuthResolver(
+        "browser_forge.order-tools",
+        allowed_domains=("orders.jd.com",),
+        jdme_factory=jdme_factory,
+        browser_factory=browser_factory,
+    )
+
+    session = resolver.resolve(target_url, force_refresh=True)
+
+    assert session.provider == "jdme_sso"
+    assert events == [
+        ("instantiate", "jdme_sso"),
+        ("jdme_sso", target_url, True),
+    ]
+
+
+def test_jdme_fallback():
+    events = []
+    target_url = "https://orders.jd.com/list"
+    resolver = AuthResolver(
+        "browser_forge.order-tools",
+        allowed_domains=("orders.jd.com",),
+        jdme_factory=lambda: FakeProvider(
+            "jdme_sso",
+            events,
+            error=JdmeSsoError("JDME_NOT_LOGGED_IN"),
+        ),
+        browser_factory=lambda: FakeProvider("browser_cookie", events),
+    )
+
+    session = resolver.resolve(target_url)
+
+    assert [event[0] for event in events] == ["jdme_sso", "browser_cookie"]
+    assert session.provider == "browser_cookie"
+    assert session.fallback_used is True
+
+
+def test_non_jd_skips_jdme():
+    jdme_instantiations = []
+    browser_calls = []
+
+    for target_url in (
+        "https://api.example.test/list",
+        "https://eviljd.com/list",
+        "https://jd.com.attacker.test/list",
+    ):
+        resolver = AuthResolver(
+            "browser_forge.order-tools",
+            allowed_domains=("api.example.test", "eviljd.com", "jd.com.attacker.test"),
+            jdme_factory=lambda: jdme_instantiations.append(target_url),
+            browser_factory=lambda: FakeProvider("browser_cookie", browser_calls),
+        )
+
+        assert resolver.resolve(target_url).provider == "browser_cookie"
+
+    assert jdme_instantiations == []
+    assert [call[1] for call in browser_calls] == [
+        "https://api.example.test/list",
+        "https://eviljd.com/list",
+        "https://jd.com.attacker.test/list",
+    ]
+    assert is_jd_target("https://sub.orders.jd.com/", ("orders.jd.com",)) is True
+    assert is_jd_target("https://orders.jd.com.attacker.test/", ("orders.jd.com",)) is False
+
+
+def test_jdme_security_error():
+    target_url = "https://orders.jd.com/list"
+    security_error = JdmeSsoError("TARGET_NOT_ALLOWED")
+    browser_instantiations = []
+    resolver = AuthResolver(
+        "browser_forge.order-tools",
+        allowed_domains=("orders.jd.com",),
+        jdme_factory=lambda: FakeProvider("jdme_sso", [], error=security_error),
+        browser_factory=lambda: browser_instantiations.append(True),
+    )
+
+    with pytest.raises(JdmeSsoError) as raised:
+        resolver.resolve(target_url)
+
+    assert raised.value is security_error
+    assert raised.value.recoverable is False
+    assert browser_instantiations == []
+
+
+def test_fallback_metadata_redacted():
+    target_url = "https://orders.jd.com/list"
+    resolver = AuthResolver(
+        "browser_forge.order-tools",
+        allowed_domains=("orders.jd.com",),
+        jdme_factory=lambda: FakeProvider(
+            "jdme_sso",
+            [],
+            error=JdmeSsoError("SSO_EXCHANGE_FAILED"),
+        ),
+        browser_factory=lambda: FakeProvider("browser_cookie", []),
+    )
+
+    session = resolver.resolve(target_url)
+    serialized = json.dumps(session.metadata())
+
+    assert session.metadata()["fallback_used"] is True
+    assert session.metadata()["provider"] == "browser_cookie"
+    assert "Cookie" not in serialized
+    assert "session=" not in serialized
+
+
+def write_jdme_db(path, *, plain=ME_TOKEN, encrypted=b"", extra_rows=()):
+    db = sqlite3.connect(path)
+    db.execute(
+        "CREATE TABLE cookies "
+        "(name TEXT, value TEXT, encrypted_value BLOB, host_key TEXT, path TEXT, "
+        "is_secure INTEGER, expires_utc INTEGER)"
+    )
+    db.execute(
+        "INSERT INTO cookies VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("me_token", plain, encrypted, ".jd.com", "/", 1, 0),
+    )
+    db.executemany("INSERT INTO cookies VALUES (?, ?, ?, ?, ?, ?, ?)", extra_rows)
+    db.commit()
+    db.close()
+
+
+@contextmanager
+def fake_sso_server(
+    *,
+    code_ok=True,
+    union_ok=True,
+    callback_ok=True,
+    probe_ok=True,
+    get_code_redirect=False,
+    unauthenticated_200=False,
+    callback_cookie_path="/",
+):
+    encoded_redirect = base64.urlsafe_b64encode(
+        urlencode({"client_id": "orders-app", "state": "trusted-state"}).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    state = {
+        "paths": [],
+        "code_form": set(),
+        "code_headers": set(),
+        "getcode_cookies": set(),
+        "redirect_headers": set(),
+        "redirect_cookies": set(),
+        "target_cookies": set(),
+        "union_form": {},
+        "union_redirect": None,
+        "probe_cookies": set(),
+        "target_redirect": None,
+    }
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, _format, *_args):
+            return
+
+        def _cookie_names(self):
+            return {
+                item.partition("=")[0].strip()
+                for item in self.headers.get("Cookie", "").split(";")
+                if "=" in item
+            }
+
+        def _cookie(self, name):
+            return name in self._cookie_names()
+
+        def _redirect(self, path, cookie_name=None, cookie_value="<REDACTED>"):
+            self.send_response(302)
+            self.send_header("Location", path)
+            if cookie_name:
+                self.send_header("Set-Cookie", f"{cookie_name}={cookie_value}; Path=/; HttpOnly")
+            self.end_headers()
+
+        def do_GET(self):
+            path = urlsplit(self.path).path
+            state["paths"].append(path)
+            if path == "/get-code-final":
+                state["redirect_headers"] = {name.lower() for name in self.headers}
+                state["redirect_cookies"] = self._cookie_names()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"code":0,"data":{"code":"<AUTH-CODE-SECRET>"}}')
+                return
+            if path == "/target":
+                state["target_cookies"] = self._cookie_names()
+                location = state["target_redirect"] or (
+                    "/oidc/authorize?" + urlencode({
+                        "client_id": "orders-app",
+                        "redirect_uri": encoded_redirect,
+                        "state": "trusted-state",
+                    })
+                )
+                self._redirect(location, "analytics", ANALYTICS_COOKIE)
+                return
+            if path == "/oidc/authorize":
+                self._redirect("/sso/login?" + urlencode({
+                    "redirect_uri": encoded_redirect,
+                    "state": "trusted-state",
+                }))
+                return
+            if path == "/sso/login":
+                self.send_response(200)
+                self.end_headers()
+                return
+            if path == "/callback":
+                if not callback_ok or not self._cookie("getcode_flow") or not self._cookie("sso.jd.com"):
+                    self.send_response(403)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header(
+                    "Set-Cookie",
+                    f"ssa.orders-app={TARGET_SESSION}; Path={callback_cookie_path}; HttpOnly",
+                )
+                self.end_headers()
+                return
+            if path == "/probe":
+                state["probe_cookies"] = self._cookie_names()
+                ok = all(self._cookie(name) for name in ("getcode_flow", "sso.jd.com", "ssa.orders-app"))
+                self.send_response(200 if unauthenticated_200 or (ok and probe_ok) else 401)
+                self.end_headers()
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            form = parse_qs(self.rfile.read(length).decode("utf-8"))
+            path = urlsplit(self.path).path
+            state["paths"].append(path)
+            if path == "/get-code":
+                state["code_form"] = set(form)
+                state["code_headers"] = {name.lower() for name in self.headers}
+                state["getcode_cookies"] = self._cookie_names()
+                if get_code_redirect:
+                    self.send_response(302)
+                    self.send_header("Location", "/get-code-final")
+                    self.send_header(f"Set-Cookie", f"getcode_flow={GETCODE_FLOW}; Path=/; HttpOnly")
+                    self.end_headers()
+                    return
+                self.send_response(200 if self._cookie("me_token") and code_ok else 401)
+                self.send_header("Content-Type", "application/json")
+                self.send_header(f"Set-Cookie", f"getcode_flow={GETCODE_FLOW}; Path=/; HttpOnly")
+                self.end_headers()
+                payload = b'{"code":0,"data":{"code":"<AUTH-CODE-SECRET>"}}' if code_ok else b'{"code":1}'
+                self.wfile.write(payload)
+                return
+            if path == "/jdme-union-login":
+                state["union_form"] = form
+                state["union_redirect"] = parse_qs(urlsplit(self.path).query).get("redirect_uri", [None])[0]
+                if not union_ok or form.get("jme_auth_code") != [AUTH_CODE]:
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                if callback_ok:
+                    self.send_response(302)
+                    self.send_header("Location", "/callback")
+                    self.send_header(f"Set-Cookie", f"sso.jd.com={SSO_TICKET}; Path=/; HttpOnly")
+                    self.end_headers()
+                else:
+                    self.send_response(200)
+                    self.send_header(f"Set-Cookie", f"sso.jd.com={SSO_TICKET}; Path=/; HttpOnly")
+                    self.end_headers()
+                return
+            self.send_response(404)
+            self.end_headers()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", state
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+def jdme_provider(base, db_path, cache_root, *, now=lambda: 1_000, probe=True, decryptor=None):
+    return JdmeSsoProvider(
+        "browser_forge.order-tools",
+        allowed_domains=("127.0.0.1",),
+        endpoints=JdmeEndpoints(
+            get_code_url=base + "/get-code",
+            union_login_url=base + "/jdme-union-login",
+            probe_url=base + "/probe" if probe else None,
+            allow_insecure_loopback=True,
+        ),
+        cookie_db_finder=lambda: db_path,
+        decryptor=decryptor,
+        cache_root=cache_root,
+        now=now,
+    )
+
+
+def test_sso_security_flow(tmp_path, monkeypatch, capsys):
+    db_path = tmp_path / "Cookies"
+    write_jdme_db(db_path, extra_rows=(
+        ("focus-team-id", TEAM_ID, b"", ".jd.com", "/", 1, 0),
+        ("me_token", "<HOSTILE-COOKIE-SECRET>", b"", ".attacker.test", "/", 1, 0),
+        ("jdsec_client_info", "<EXPIRED-COOKIE-SECRET>", b"", ".jd.com", "/", 1, 500),
+        ("jdsec_client_info", "<BAD-PATH-COOKIE-SECRET>", b"", ".jd.com", "bad", 1, 0),
+    ))
+    (tmp_path / "global.json").write_text(json.dumps({"DeviceId": DEVICE_UUID}))
+    (tmp_path / "login.json").write_text(json.dumps({"KEY_RISK_JS_EID": DEVICE_EID}))
+    monkeypatch.setenv("USER", DEVICE_ACCOUNT)
+    with fake_sso_server(get_code_redirect=True) as (base, state):
+        provider = jdme_provider(base, db_path, tmp_path / "cache")
+
+        session = provider.resolve(base + "/target?client_id=attacker-app")
+
+    output = capsys.readouterr()
+    assert session.provider == "jdme_sso"
+    assert session.fallback_used is False
+    assert session.expires_at == 15_400
+    assert state["union_redirect"]
+    decoded_redirect = base64.urlsafe_b64decode(
+        state["union_redirect"] + "=" * (-len(state["union_redirect"]) % 4)
+    ).decode("utf-8")
+    assert parse_qs(decoded_redirect) == {
+        "client_id": ["orders-app"],
+        "state": ["trusted-state"],
+    }
+    assert state["union_form"].get("client_id") is None
+    assert state["union_form"]["jme_auth_code"] == [AUTH_CODE]
+    assert {"appName", "appid", "body", "client", "clientVersion", "d_brand", "functionId", "t", "uuid"} <= state["code_form"]
+    assert {"functionid", "logintype", "x-device-type", "x-language", "x-tenant-code"} <= state["code_headers"]
+    assert state["getcode_cookies"] == {"me_token", "focus-team-id"}
+    assert not ({"cookie", "x-sso-deviceaccountname", "x-sso-devicedomain", "x-team-id"} & state["redirect_headers"])
+    assert state["redirect_cookies"] == set()
+    assert "getcode_flow" in state["target_cookies"]
+    assert state["paths"] == [
+        "/get-code",
+        "/get-code-final",
+        "/target",
+        "/oidc/authorize",
+        "/sso/login",
+        "/jdme-union-login",
+        "/callback",
+        "/probe",
+    ]
+    assert {item.name for item in session.cookie_jar} == {"ssa.orders-app"}
+    assert "ssa.orders-app" in state["probe_cookies"]
+    for secret in (
+        ME_TOKEN, AUTH_CODE, GETCODE_FLOW, SSO_TICKET, TARGET_SESSION,
+        DEVICE_EID, DEVICE_UUID, DEVICE_ACCOUNT, TEAM_ID,
+        "<HOSTILE-COOKIE-SECRET>", "<EXPIRED-COOKIE-SECRET>", "<BAD-PATH-COOKIE-SECRET>",
+    ):
+        assert secret not in output.out + output.err
+
+
+def test_redirect_security(tmp_path):
+    db_path = tmp_path / "Cookies"
+    write_jdme_db(db_path)
+    with fake_sso_server() as (attacker, attacker_state):
+        with fake_sso_server() as (base, state):
+            state["target_redirect"] = attacker + "/steal?client_id=attacker-app"
+            provider = jdme_provider(base, db_path, tmp_path / "cache")
+
+            with pytest.raises(JdmeSsoError) as raised:
+                provider.resolve(base + "/target")
+
+    assert raised.value.code == "REDIRECT_" "SECURITY_ERROR"
+    assert raised.value.recoverable is False
+
+    target_origin = "http://127.0.0.1:41001"
+    control_origin = "http://127.0.0.1:41002"
+    assert validate_redirect_url(
+        target_origin + "/target",
+        control_origin + "/oidc/authorize",
+        allowed_origins={target_origin, control_origin},
+        allow_insecure_loopback=True,
+    ) == control_origin + "/oidc/authorize"
+    assert attacker_state["paths"] == []
+
+    with pytest.raises(JdmeSsoError) as raised:
+        validate_redirect_url(
+            "https://ssa.jd.com/oidc/authorize",
+            "http://ssa.jd.com/sso/login",
+            allowed_origins={"https://ssa.jd.com", "http://ssa.jd.com"},
+            allow_insecure_loopback=False,
+        )
+    assert raised.value.code == "REDIRECT_" "SECURITY_ERROR"
+    assert raised.value.recoverable is False
+
+
+def test_injected_http_gate(tmp_path):
+    db_path = tmp_path / "Cookies"
+    write_jdme_db(db_path)
+    with fake_sso_server() as (base, _state):
+        provider = JdmeSsoProvider(
+            "browser_forge.order-tools",
+            allowed_domains=("127.0.0.1",),
+            endpoints=JdmeEndpoints(
+                get_code_url=base + "/get-code",
+                union_login_url=base + "/jdme-union-login",
+                probe_url=base + "/probe",
+            ),
+            cookie_db_finder=lambda: db_path,
+            cache_root=tmp_path / "cache",
+        )
+
+        with pytest.raises(JdmeSsoError) as raised:
+            provider.resolve(base + "/target")
+
+    assert raised.value.code == "TLS_REQUIRED"
+    assert raised.value.recoverable is False
+
+
+def test_requires_new_session(tmp_path):
+    db_path = tmp_path / "Cookies"
+    write_jdme_db(db_path)
+    with fake_sso_server(callback_ok=False, unauthenticated_200=True) as (base, state):
+        provider = jdme_provider(base, db_path, tmp_path / "cache")
+
+        with pytest.raises(JdmeSsoError) as raised:
+            provider.resolve(base + "/target")
+
+    assert raised.value.code == "TARGET_SESSION_FAILED"
+    assert "analytics" in state["probe_cookies"]
+
+
+def test_callback_scope(tmp_path):
+    db_path = tmp_path / "Cookies"
+    write_jdme_db(db_path)
+    with fake_sso_server(
+        callback_cookie_path="/callback",
+        unauthenticated_200=True,
+    ) as (base, state):
+        provider = jdme_provider(base, db_path, tmp_path / "cache")
+
+        with pytest.raises(JdmeSsoError) as raised:
+            provider.resolve(base + "/target")
+
+    assert raised.value.code == "TARGET_SESSION_FAILED"
+    assert "ssa.orders-app" not in state["probe_cookies"]
+
+
+def test_stable_local_errors(tmp_path):
+    inaccessible = JdmeSsoProvider(
+        "browser_forge.order-tools",
+        allowed_domains=("orders.jd.com",),
+        cookie_db_finder=lambda: (_ for _ in ()).throw(PermissionError("private path")),
+        cache_root=tmp_path / "database",
+    )
+    with pytest.raises(JdmeSsoError) as raised:
+        inaccessible.resolve("https://orders.jd.com/")
+    assert raised.value.code == "JDME_DATABASE_ERROR"
+    assert raised.value.recoverable is False
+    assert "private path" not in str(raised.value)
+
+    path = tmp_path / "Cookies"
+    write_jdme_db(path, plain="", encrypted=b"v10<ENCRYPTED-COOKIE-SECRET>")
+    with fake_sso_server() as (base, _state):
+        provider = jdme_provider(
+            base,
+            path,
+            tmp_path / "decrypt",
+            decryptor=lambda _value, _path: None,
+        )
+        with pytest.raises(JdmeSsoError) as raised:
+            provider.resolve(base + "/target")
+    assert raised.value.code == "JDME_DECRYPTION_ERROR"
+    assert raised.value.recoverable is False
+
+
+def test_decryption(tmp_path, monkeypatch):
+    from cryptography.hazmat.primitives import padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key = b"0123456789abcdef"
+    plaintext = b"synthetic-cookie-value"
+    monkeypatch.setattr(jdme_module, "_os_key", lambda _path, system=None: key)
+
+    padder = padding.PKCS7(128).padder()
+    padded = padder.update(plaintext) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(b" " * 16)).encryptor()
+    mac_value = b"v10" + encryptor.update(padded) + encryptor.finalize()
+    assert decrypt_cookie(mac_value, tmp_path / "Cookies", system="Darwin") == plaintext.decode()
+
+    hashed = hashlib.sha256(b".jd.com").digest() + plaintext
+    padder = padding.PKCS7(128).padder()
+    padded = padder.update(hashed) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(b" " * 16)).encryptor()
+    current_value = b"v10" + encryptor.update(padded) + encryptor.finalize()
+    assert decrypt_cookie(
+        current_value,
+        tmp_path / "Cookies",
+        system="Darwin",
+        host_key=".jd.com",
+        db_version=24,
+    ) == plaintext.decode()
+
+    nonce = b"synthetic-iv"
+    windows_value = b"v10" + nonce + AESGCM(key).encrypt(nonce, plaintext, None)
+    assert decrypt_cookie(windows_value, tmp_path / "Cookies", system="Windows") == plaintext.decode()
+
+    with pytest.raises(JdmeSsoError) as raised:
+        decrypt_cookie(mac_value, tmp_path / "Cookies", system="Plan9")
+    assert raised.value.code == "JDME_DECRYPTION_ERROR"
+    assert raised.value.recoverable is False
+
+
+def test_malformed_session():
+    resolver = AuthResolver(
+        "browser_forge.order-tools",
+        allowed_domains=("api.example.test",),
+        browser_factory=lambda: FakeProvider("browser_cookie", []),
+    )
+    resolver._browser = lambda: type("MalformedProvider", (), {
+        "resolve": lambda self, *_args, **_kwargs: {"cookie": "<MALFORMED-SECRET>"},
+    })()
+
+    with pytest.raises(AuthProviderError) as raised:
+        resolver.resolve("https://api.example.test/")
+
+    assert raised.value.code == "AUTH_PROVIDER_ERROR"
+    assert raised.value.recoverable is False
+    assert "<MALFORMED-SECRET>" not in str(raised.value)
+
+
+def test_db_candidates():
+    mac = db_candidates(home=Path("/Users/current"), system="Darwin", environ={})
+    win = db_candidates(
+        home=Path("C:/Users/current"),
+        system="Windows",
+        environ={"APPDATA": "C:/Users/current/AppData/Roaming"},
+    )
+    linux = db_candidates(home=Path("/home/current"), system="Linux", environ={})
+    wsl = db_candidates(
+        home=Path("/home/current"),
+        system="Linux",
+        environ={"WSL_DISTRO_NAME": "Ubuntu"},
+        wsl_users=(Path("/mnt/c/Users/current"),),
+    )
+
+    assert Path("/Users/current/Library/Application Support/ME/Network/Cookies") in mac
+    assert Path("C:/Users/current/AppData/Roaming/ME/Network/Cookies") in win
+    assert Path("/home/current/.config/ME/Network/Cookies") in linux
+    assert Path("/mnt/c/Users/current/AppData/Roaming/ME/Network/Cookies") in wsl
+
+
+def test_db_read_only(tmp_path):
+    path = tmp_path / "Cookies"
+    write_jdme_db(path)
+
+    with open_jdme_db(path) as db:
+        assert db.execute("SELECT value FROM cookies WHERE name = 'me_token'").fetchone() is not None
+        with pytest.raises(sqlite3.OperationalError):
+            db.execute("DELETE FROM cookies")
+
+    assert find_jdme_db([path]) == path
+
+
+def test_db_decrypt_hook(tmp_path):
+    path = tmp_path / "Cookies"
+    write_jdme_db(path, plain="", encrypted=b"v10<REDACTED>")
+    calls = []
+    with fake_sso_server() as (base, _state):
+        provider = JdmeSsoProvider(
+            "browser_forge.order-tools",
+            allowed_domains=("127.0.0.1",),
+            endpoints=JdmeEndpoints(
+                get_code_url=base + "/get-code",
+                union_login_url=base + "/jdme-union-login",
+                allow_insecure_loopback=True,
+                probe_url=base + "/probe",
+            ),
+            cookie_db_finder=lambda: path,
+            decryptor=lambda value, db_path: calls.append((value[:3], db_path.name)) or "<REDACTED>",
+            cache_root=tmp_path / "cache",
+        )
+
+        session = provider.resolve(base + "/target")
+
+    assert session.provider == "jdme_sso"
+    assert calls == [(b"v10", "Cookies")]
+
+    with fake_sso_server() as (base, _state):
+        broken = JdmeSsoProvider(
+            "browser_forge.order-tools",
+            allowed_domains=("127.0.0.1",),
+            endpoints=JdmeEndpoints(
+                get_code_url=base + "/get-code",
+                union_login_url=base + "/jdme-union-login",
+                allow_insecure_loopback=True,
+            ),
+            cookie_db_finder=lambda: path,
+            decryptor=lambda _value, _path: (_ for _ in ()).throw(ValueError("programming failure")),
+            cache_root=tmp_path / "broken",
+        )
+        with pytest.raises(JdmeSsoError) as raised:
+            broken.resolve(base + "/target")
+    assert raised.value.code == "JDME_DECRYPTION_ERROR"
+    assert "programming failure" not in str(raised.value)
+
+
+def test_jdme_error_codes(tmp_path):
+    missing = JdmeSsoProvider(
+        "browser_forge.order-tools",
+        allowed_domains=("orders.jd.com",),
+        cookie_db_finder=lambda: None,
+        cache_root=tmp_path / "missing",
+    )
+    with pytest.raises(JdmeSsoError) as raised:
+        missing.resolve("https://orders.jd.com/")
+    assert raised.value.code == "JDME_NOT_LOGGED_IN"
+
+    with pytest.raises(JdmeSsoError) as raised:
+        missing.resolve("https://eviljd.com/")
+    assert raised.value.code == "TARGET_NOT_ALLOWED"
+    assert raised.value.recoverable is False
+
+    with pytest.raises(JdmeSsoError) as raised:
+        missing.resolve("http://orders.jd.com/")
+    assert raised.value.code == "TLS_REQUIRED"
+    assert raised.value.recoverable is False
+
+    path = tmp_path / "Cookies"
+    write_jdme_db(path)
+    with fake_sso_server(code_ok=False) as (base, _state):
+        rejected = JdmeSsoProvider(
+            "browser_forge.order-tools",
+            allowed_domains=("127.0.0.1",),
+            endpoints=JdmeEndpoints(
+                get_code_url=base + "/get-code",
+                union_login_url=base + "/jdme-union-login",
+                probe_url=base + "/probe",
+                allow_insecure_loopback=True,
+            ),
+            cookie_db_finder=lambda: path,
+            cache_root=tmp_path / "rejected",
+        )
+        with pytest.raises(JdmeSsoError) as raised:
+            rejected.resolve(base + "/target")
+    assert raised.value.code == "SSO_EXCHANGE_FAILED"
+
+    with fake_sso_server(probe_ok=False) as (base, _state):
+        failed_probe = JdmeSsoProvider(
+            "browser_forge.order-tools",
+            allowed_domains=("127.0.0.1",),
+            endpoints=JdmeEndpoints(
+                get_code_url=base + "/get-code",
+                union_login_url=base + "/jdme-union-login",
+                probe_url=base + "/probe",
+                allow_insecure_loopback=True,
+            ),
+            cookie_db_finder=lambda: path,
+            cache_root=tmp_path / "probe",
+        )
+        with pytest.raises(JdmeSsoError) as raised:
+            failed_probe.resolve(base + "/target")
+    assert raised.value.code == "TARGET_SESSION_FAILED"
+
+    with fake_sso_server(callback_ok=False) as (base, _state):
+        failed_callback = JdmeSsoProvider(
+            "browser_forge.order-tools",
+            allowed_domains=("127.0.0.1",),
+            endpoints=JdmeEndpoints(
+                get_code_url=base + "/get-code",
+                union_login_url=base + "/jdme-union-login",
+                probe_url=base + "/probe",
+                allow_insecure_loopback=True,
+            ),
+            cookie_db_finder=lambda: path,
+            cache_root=tmp_path / "callback",
+        )
+        with pytest.raises(JdmeSsoError) as raised:
+            failed_callback.resolve(base + "/target")
+    assert raised.value.code == "TARGET_SESSION_FAILED"
+
+
+def test_auth_boundaries(tmp_path):
+    created = []
+    resolver = AuthResolver(
+        "browser_forge.order-tools",
+        allowed_domains=("orders.jd.com",),
+        jdme_factory=lambda: created.append("jdme_sso"),
+        browser_factory=lambda: created.append("browser_cookie"),
+    )
+
+    with pytest.raises(AuthTargetError) as raised:
+        resolver.resolve("https://orders.jd.com.attacker.test/")
+
+    assert raised.value.code == "TARGET_NOT_ALLOWED"
+    assert raised.value.recoverable is False
+    assert created == []
+
+    provider = JdmeSsoProvider(
+        "browser_forge.order-tools",
+        allowed_domains=("127.0.0.1",),
+        endpoints=JdmeEndpoints(
+            get_code_url="https://attacker.test/get-code",
+            union_login_url="https://ssa.jd.com/sso/jdmeUnionLogin",
+        ),
+        cookie_db_finder=lambda: None,
+        cache_root=tmp_path / "blocked",
+    )
+    with pytest.raises(JdmeSsoError) as raised:
+        provider.resolve("http://127.0.0.1/target")
+    assert raised.value.code == "TLS_REQUIRED"
+    assert raised.value.recoverable is False
+
+
+def test_chain_error_redacted():
+    resolver = AuthResolver(
+        "browser_forge.order-tools",
+        allowed_domains=("orders.jd.com",),
+        jdme_factory=lambda: FakeProvider(
+            "jdme_sso",
+            [],
+            error=JdmeSsoError("JDME_NOT_LOGGED_IN"),
+        ),
+        browser_factory=lambda: FakeProvider(
+            "browser_cookie",
+            [],
+            error=BrowserCookieError([{"browser": "edge", "error": "PermissionError"}]),
+        ),
+    )
+
+    with pytest.raises(AuthUnavailableError) as raised:
+        resolver.resolve("https://orders.jd.com/")
+
+    assert raised.value.code == "AUTH_" "UNAVAILABLE"
+    assert raised.value.attempted_providers == ("jdme_sso", "browser_cookie")
+    assert "PermissionError" not in str(raised.value)
+    assert "Cookie" not in str(raised.value)
+
+    programming_error = ValueError("programming failure")
+    resolver = AuthResolver(
+        "browser_forge.order-tools",
+        allowed_domains=("api.example.test",),
+        browser_factory=lambda: FakeProvider("browser_cookie", [], error=programming_error),
+    )
+    with pytest.raises(AuthProviderError) as raised:
+        resolver.resolve("https://api.example.test/")
+    assert raised.value.code == "AUTH_PROVIDER_ERROR"
+    assert raised.value.recoverable is False
+    assert "programming failure" not in str(raised.value)
+
+
+def test_doctor_provider_report(monkeypatch, capsys):
+    monkeypatch.setenv("BROWSER_FORGE_COOKIE", "<REDACTED>")
+
+    assert cli_module.main(["doctor"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    report = payload["data"]["authentication"]
+    assert report == {
+        "attempted_providers": ["browser_cookie"],
+        "remediation": "Sign in to 京ME or a configured browser before an authenticated command.",
+    }
+    assert set(report) == {"attempted_providers", "remediation"}
+    assert "<REDACTED>" not in json.dumps(payload)

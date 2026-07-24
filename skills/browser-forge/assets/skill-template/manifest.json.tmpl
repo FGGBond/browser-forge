@@ -1,0 +1,65 @@
+{
+  "spec_version": "{{SPEC_VERSION}}",
+  "id": "{{SKILL_ID}}",
+  "name": "{{SKILL_NAME}}",
+  "description": {{DESCRIPTION}},
+  "status": "draft",
+  "required_features": [
+    "manifest-command-parity",
+    "progressive-help",
+    "json-envelope",
+    "offline-network-guard",
+    "standalone-auth-runtime"
+  ],
+  "cli": {
+    "entrypoint": "scripts/{{ENTRYPOINT_NAME}}",
+    "python_requires": ">=3.10",
+    "envelope_version": "{{SPEC_VERSION}}"
+  },
+  "auth": {
+    "runtime_version": "{{AUTH_RUNTIME_VERSION}}",
+    "target_domains": {{TARGET_DOMAINS_JSON}},
+    "providers": {{AUTH_PROVIDERS_JSON}}
+  },
+  "commands": [
+    {
+      "id": "doctor",
+      "summary": "Checks local prerequisites.",
+      "side_effect": false,
+      "idempotent": true,
+      "inputs": [],
+      "outputs": { "schema_ref": "#/$defs/doctor-output" },
+      "requires": { "auth": false, "commands": [] },
+      "next_actions": [],
+      "steps": []
+    },
+    {
+      "id": "auth-status",
+      "summary": "Reports redacted authentication status.",
+      "side_effect": false,
+      "idempotent": true,
+      "inputs": [],
+      "outputs": { "schema_ref": "#/$defs/auth-status-output" },
+      "requires": { "auth": false, "commands": [] },
+      "next_actions": [],
+      "steps": []
+    },
+    {
+      "id": "describe",
+      "summary": "Describes the generated command contract.",
+      "side_effect": false,
+      "idempotent": true,
+      "inputs": [],
+      "outputs": { "schema_ref": "#/$defs/describe-output" },
+      "requires": { "auth": false, "commands": [] },
+      "next_actions": [],
+      "steps": []
+    }
+  ],
+  "workflows": [],
+  "$defs": {
+    "doctor-output": { "type": "object" },
+    "auth-status-output": { "type": "object" },
+    "describe-output": { "type": "object" }
+  }
+}

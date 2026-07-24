@@ -8,9 +8,12 @@
     "package:mac": "npm run build && electron-forge package --platform=darwin",
     "make:mac": "npm run build && electron-forge make --platform=darwin",
     "test": "vitest run",
+    "test:skill-generation": "vitest run tests/skill-generation",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "chrome-remote-interface": "^0.34.0",
     "electron-vite": "^5.0.0",
     "express": "^5.2.1",

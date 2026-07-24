@@ -1,0 +1,4 @@
+interface:
+  display_name: "Browser Forge"
+  short_description: "Turn browser recordings into standalone skills and CLIs"
+  default_prompt: "Use $browser-forge to analyze this recording and create a validated standalone skill and CLI."

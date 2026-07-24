@@ -26,6 +26,7 @@ const wss = new WebSocketServer({ server })
 let chromeProcess = null
 let activeSession = null
 let sessionDir = null
+let isStarting = false
 
 // Serve the UI
 app.use(express.json())
@@ -39,11 +40,16 @@ app.get('/api/chrome-path', async (req, res) => {
 
 app.post('/api/start-recording', async (req, res) => {
   const { chromePath, outputDir, port = 9222 } = req.body
+  if (isStarting) return res.json({ ok: false, error: 'Recording is already starting' })
+  if (activeSession) return res.json({ ok: false, error: 'Recording is already active' })
+
+  isStarting = true
   try {
     chromeProcess = launchChrome({
       execPath: chromePath,
       port,
-      userDataDir: join(homedir(), '.browser-forge', 'chrome-profile')
+      userDataDir: join(homedir(), '.browser-forge', 'chrome-profile'),
+      startUrl: `http://localhost:${PORT}/recording-start.html`
     })
     await new Promise(r => setTimeout(r, 2000))
     // macOS：把新 Chrome 窗口置前
@@ -55,7 +61,11 @@ app.post('/api/start-recording', async (req, res) => {
     sessionDir = null
     res.json({ ok: true })
   } catch (e) {
+    chromeProcess?.kill()
+    chromeProcess = null
     res.json({ ok: false, error: e.message })
+  } finally {
+    isStarting = false
   }
 })
 

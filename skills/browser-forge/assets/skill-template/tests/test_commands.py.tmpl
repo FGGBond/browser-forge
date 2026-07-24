@@ -1,0 +1,100 @@
+import json
+from importlib import import_module
+from pathlib import Path
+
+manifest_data = json.loads((Path(__file__).parents[1] / "manifest.json").read_text())
+package = "browser_forge_" + manifest_data["id"].split(".", 1)[1].replace("-", "_")
+cli_module = import_module(package + ".cli")
+manifest_module = import_module(package + ".manifest")
+client_module = import_module(package + ".client")
+
+
+def test_registration():
+    parser = cli_module.build_parser(manifest_module.load_manifest())
+    choices = next(action for action in parser._actions if action.dest == "selected_command").choices
+
+    assert {"doctor", "auth-status", "describe"}.issubset(choices)
+
+
+def test_step_results():
+    command = {
+        "id": "update-order",
+        "steps": [
+            {"id": "load", "request": "GET /orders/{order_id}", "depends_on": []},
+            {
+                "id": "update",
+                "request": "POST /orders/{order_id}",
+                "body": {"state": "{state}"},
+                "depends_on": ["load"],
+            },
+        ],
+    }
+    calls = []
+
+    class FakeClient:
+        def request(self, method, path, body=None):
+            calls.append((method, path, body))
+            return {"sequence": len(calls)}
+
+    result = cli_module._execute_business(
+        command,
+        {"order_id": "ORDER-1", "state": "ready"},
+        FakeClient(),
+    )
+
+    assert calls == [
+        ("GET", "/orders/ORDER-1", None),
+        ("POST", "/orders/ORDER-1", {"state": "ready"}),
+    ]
+    assert result == {
+        "steps": {"load": {"sequence": 1}, "update": {"sequence": 2}},
+        "output": {"sequence": 2},
+    }
+
+
+def test_failure_envelope(monkeypatch, capsys):
+    runtime_manifest = {
+        **manifest_data,
+        "commands": [
+            *manifest_data["commands"],
+            {
+                "id": "list-orders",
+                "summary": "List orders.",
+                "side_effect": False,
+                "idempotent": True,
+                "inputs": [],
+                "outputs": {"schema_ref": "#/$defs/list-orders-output"},
+                "requires": {"auth": False, "commands": []},
+                "next_actions": [],
+                "steps": [{"id": "list", "request": "GET /orders", "depends_on": []}],
+            },
+        ],
+    }
+    monkeypatch.setattr(cli_module, "load_manifest", lambda: runtime_manifest)
+    monkeypatch.setattr(
+        cli_module,
+        "_execute_business",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("private detail")),
+    )
+
+    assert cli_module.main(["list-orders"]) == 1
+
+    output = capsys.readouterr()
+    assert output.err == ""
+    assert len(output.out.strip().splitlines()) == 1
+    payload = json.loads(output.out)
+    assert payload["command"] == "list-orders"
+    assert payload["error"] == {
+        "code": "INTERNAL_ERROR",
+        "message": "The command failed unexpectedly.",
+        "recoverable": False,
+    }
+
+
+def test_describe_string(monkeypatch, capsys):
+    monkeypatch.setattr(cli_module, "load_manifest", lambda: manifest_data)
+
+    assert cli_module.main(["describe"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "describe"

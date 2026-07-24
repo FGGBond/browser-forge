@@ -21,17 +21,18 @@ export async function findChromePath() {
   return 'google-chrome'
 }
 
-export function buildChromeArgs({ port, userDataDir }) {
+export function buildChromeArgs({ port, userDataDir, startUrl = 'about:blank' }) {
   return [
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${userDataDir}`,
     '--no-first-run',
     '--no-default-browser-check',
-    'about:blank'  // 确保打开一个可见的窗口
+    '--new-window',
+    startUrl
   ]
 }
 
-export function launchChrome({ execPath, port, userDataDir }) {
-  const args = buildChromeArgs({ port, userDataDir })
+export function launchChrome({ execPath, port, userDataDir, startUrl }) {
+  const args = buildChromeArgs({ port, userDataDir, startUrl })
   return spawn(execPath, args, { detached: false, stdio: 'ignore' })
 }
