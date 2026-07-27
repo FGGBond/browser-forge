@@ -53,4 +53,5 @@ describe('macOS packaging configuration', () => {
     expect(ignored('/design/icon-concepts/example.png')).toBe(true)
     expect(ignored('/assets/icon-concepts/example.png')).toBe(true)
     expect(ignored('/src/renderer/index.html')).toBe(true)
+    expect(ignored('/docs/superpowers/plans/integration-plan.md')).toBe(true)
   })

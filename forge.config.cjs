@@ -41,6 +41,7 @@ module.exports = {
     ignore: [
       /^\/\.git($|\/)/,
       /^\/\.superpowers($|\/)/,
+      /^\/docs\/superpowers($|\/)/,
       /^\/tests($|\/)/,
       /^\/design($|\/)/,
       /^\/assets\/icon-concepts($|\/)/,
