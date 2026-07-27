@@ -61,7 +61,7 @@ Integrate the uncommitted `codex/ui-ux-native-polish` worktree changes, includin
 
 ### Design Assets
 
-Copy icon concepts into the integration branch under `design/icon-concepts/`. These assets must not be loaded by runtime code and must not affect tests, packaging, or app startup.
+Copy icon concepts into the integration branch under `design/icon-concepts/`. These assets must not be loaded by runtime code and must not affect tests, packaging, or app startup. Do not keep duplicate runtime-adjacent copies under `assets/icon-concepts/`.
 
 ### Early Claude Skill/Auth Branch
 

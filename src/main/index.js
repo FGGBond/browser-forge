@@ -5,6 +5,7 @@ import { createRecorderHttpServer } from './recorder/http-server.js'
 import { registerShellIpcHandlers } from './shell-ipc.js'
 
 let recorderServer = null
+let isQuitting = false
 
 async function createWindow() {
   recorderServer = createRecorderHttpServer({
@@ -33,6 +34,11 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', async () => {
-  await recorderServer?.close?.()
+app.on('before-quit', (event) => {
+  if (isQuitting) return
+  event.preventDefault()
+  isQuitting = true
+  Promise.resolve(recorderServer?.close?.())
+    .catch(error => console.error('[browser-forge] recorder shutdown failed:', error))
+    .finally(() => app.quit())
 })

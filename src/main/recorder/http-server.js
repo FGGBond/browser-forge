@@ -4,12 +4,22 @@ import { createServer } from 'http'
 import { join } from 'path'
 import { homedir } from 'os'
 import open from 'open'
-import { findChromePath, launchChrome } from '../chrome-launcher.js'
-import { RecordingSession } from './index.js'
+import { findChromePath as defaultFindChromePath, launchChrome as defaultLaunchChrome } from '../chrome-launcher.js'
+import { RecordingSession as DefaultRecordingSession } from './index.js'
 import { shouldClearActiveSession } from './session-state.js'
 import { resolveStartOptions } from './start-options.js'
 
-export function createRecorderHttpServer({ uiRoot, port = 0, startUrlBase, openFolder = open } = {}) {
+export function createRecorderHttpServer({
+  uiRoot,
+  port = 0,
+  startUrlBase,
+  openFolder = open,
+  findChromePath = defaultFindChromePath,
+  launchChrome = defaultLaunchChrome,
+  RecordingSession = DefaultRecordingSession,
+  startupDelayMs = 2000,
+  afterChromeLaunch = async () => {}
+} = {}) {
   const app = express()
   const server = createServer(app)
   const wss = new WebSocketServer({ server })
@@ -24,6 +34,16 @@ export function createRecorderHttpServer({ uiRoot, port = 0, startUrlBase, openF
     activeSession = null
     chromeProcess?.kill?.()
     chromeProcess = null
+  }
+
+  async function stopActiveRecording() {
+    if (!activeSession) return null
+    try {
+      sessionDir = await activeSession.stop()
+      return sessionDir
+    } finally {
+      await clearActiveSession()
+    }
   }
 
   function getSummary() {
@@ -67,10 +87,11 @@ export function createRecorderHttpServer({ uiRoot, port = 0, startUrlBase, openF
         userDataDir: join(homedir(), '.browser-forge', 'chrome-profile'),
         startUrl: `${baseUrl}/recording-start.html`
       })
-      chromeProcess.once('exit', () => {
+      chromeProcess.once?.('exit', () => {
         if (activeSession) clearActiveSession().catch(() => {})
       })
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      if (startupDelayMs > 0) await new Promise(resolve => setTimeout(resolve, startupDelayMs))
+      await afterChromeLaunch()
       activeSession = new RecordingSession({ port: chromePort, outputDir })
       await activeSession.start()
       sessionDir = null
@@ -86,9 +107,8 @@ export function createRecorderHttpServer({ uiRoot, port = 0, startUrlBase, openF
   app.post('/api/stop-recording', async (req, res) => {
     if (!activeSession) return res.json({ ok: false, error: 'No active session' })
     try {
-      sessionDir = await activeSession.stop()
-      await clearActiveSession()
-      res.json({ ok: true, sessionDir })
+      const stoppedDir = await stopActiveRecording()
+      res.json({ ok: true, sessionDir: stoppedDir })
     } catch (error) {
       await clearActiveSession()
       res.json({ ok: false, error: error.message })
@@ -132,10 +152,14 @@ export function createRecorderHttpServer({ uiRoot, port = 0, startUrlBase, openF
   }
 
   async function close() {
-    await clearActiveSession()
+    if (activeSession) await stopActiveRecording()
+    else await clearActiveSession()
     wss.close()
-    await new Promise(resolve => server.close(resolve))
+    await new Promise((resolve, reject) => {
+      if (!server.listening) return resolve()
+      server.close(error => error ? reject(error) : resolve())
+    })
   }
 
-  return { app, server, listen, close }
+  return { app, server, listen, close, getSummary }
 }

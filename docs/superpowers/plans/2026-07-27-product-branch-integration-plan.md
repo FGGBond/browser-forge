@@ -1,6 +1,6 @@
 # Product Branch Integration Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Consolidate all scattered branch and worktree changes into `codex/integrate-product-main` as a product-ready mainline candidate.
 
@@ -29,7 +29,7 @@
 - Consumes: branch inventory and user approval to integrate WIP on a dedicated branch.
 - Produces: committed design and plan documents for auditability.
 
-- [ ] **Step 1: Verify branch**
+- [x] **Step 1: Verify branch**
 
 Run:
 
@@ -43,7 +43,7 @@ Expected output:
 codex/integrate-product-main
 ```
 
-- [ ] **Step 2: Commit design and plan**
+- [x] **Step 2: Commit design and plan**
 
 Run:
 
@@ -76,7 +76,7 @@ Expected: commit succeeds.
 - Consumes: current local `main` code and WIP files from `/Users/zhukai.129/.codex/worktrees/a8ad/browser-forge`.
 - Produces: integrated native UI, HTTP recorder server, live summary APIs, screenshot APIs, Electron shell IPC, and tests.
 
-- [ ] **Step 1: Copy WIP files exactly into integration branch**
+- [x] **Step 1: Copy WIP files exactly into integration branch**
 
 Run from `/Users/zhukai.129/.codex/worktrees/6d6d/browser-forge`:
 
@@ -86,7 +86,7 @@ cp "$src/recorder.mjs" recorder.mjs
 cp "$src/src/main/chrome-launcher.js" src/main/chrome-launcher.js
 cp "$src/src/main/index.js" src/main/index.js
 cp "$src/src/main/recorder/index.js" src/main/recorder/index.js
-mkdir -p src/main/recorder tests/unit ui assets/icon-concepts
+mkdir -p src/main/recorder tests/unit ui
 cp "$src/src/main/recorder/http-server.js" src/main/recorder/http-server.js
 cp "$src/src/main/recorder/session-state.js" src/main/recorder/session-state.js
 cp "$src/src/main/recorder/start-options.js" src/main/recorder/start-options.js
@@ -101,12 +101,11 @@ cp "$src/tests/unit/ui-artifacts-gallery.test.js" tests/unit/ui-artifacts-galler
 cp "$src/tests/unit/ui-start-recording.test.js" tests/unit/ui-start-recording.test.js
 cp "$src/ui/index.html" ui/index.html
 cp "$src/ui/recording-start.html" ui/recording-start.html
-cp -R "$src/assets/icon-concepts/." assets/icon-concepts/
 ```
 
 Expected: files are copied into the integration branch; source worktree remains unchanged.
 
-- [ ] **Step 2: Inspect changes**
+- [x] **Step 2: Inspect changes**
 
 Run:
 
@@ -117,7 +116,7 @@ git status --short
 
 Expected: only integration branch files show modifications or additions.
 
-- [ ] **Step 3: Run focused tests likely affected by copied files**
+- [x] **Step 3: Run focused tests likely affected by copied files**
 
 Run:
 
@@ -127,12 +126,12 @@ npx vitest run tests/unit/chrome-launcher.test.js tests/unit/session-state.test.
 
 Expected: all listed tests pass. If any fail, fix the integration branch files only and rerun the same command.
 
-- [ ] **Step 4: Commit native UI integration**
+- [x] **Step 4: Commit native UI integration**
 
 Run:
 
 ```bash
-git add recorder.mjs src/main/chrome-launcher.js src/main/index.js src/main/recorder/index.js src/main/recorder/http-server.js src/main/recorder/session-state.js src/main/recorder/start-options.js src/main/shell-ipc.js tests/unit/chrome-launcher.test.js tests/unit/recorder-http-server.test.js tests/unit/recording-session-screenshots.test.js tests/unit/session-state.test.js tests/unit/shell-ipc.test.js tests/unit/start-options.test.js tests/unit/ui-artifacts-gallery.test.js tests/unit/ui-start-recording.test.js ui/index.html ui/recording-start.html assets/icon-concepts
+git add recorder.mjs src/main/chrome-launcher.js src/main/index.js src/main/recorder/index.js src/main/recorder/http-server.js src/main/recorder/session-state.js src/main/recorder/start-options.js src/main/shell-ipc.js tests/unit/chrome-launcher.test.js tests/unit/recorder-http-server.test.js tests/unit/recording-session-screenshots.test.js tests/unit/session-state.test.js tests/unit/shell-ipc.test.js tests/unit/start-options.test.js tests/unit/ui-artifacts-gallery.test.js tests/unit/ui-start-recording.test.js ui/index.html ui/recording-start.html
 git commit -m "feat: integrate native recorder UI"
 ```
 
@@ -149,7 +148,7 @@ Expected: commit succeeds.
 - Consumes: untracked design files from `/Users/zhukai.129/.codex/worktrees/62e4/browser-forge/design/icon-concepts`.
 - Produces: archived design concepts that do not affect runtime or tests.
 
-- [ ] **Step 1: Copy design concepts**
+- [x] **Step 1: Copy design concepts**
 
 Run:
 
@@ -160,7 +159,7 @@ cp -R /Users/zhukai.129/.codex/worktrees/62e4/browser-forge/design/icon-concepts
 
 Expected: concept PNGs and generation script are present under `design/icon-concepts/`.
 
-- [ ] **Step 2: Verify runtime does not reference design concepts**
+- [x] **Step 2: Verify runtime does not reference design concepts**
 
 Run:
 
@@ -170,7 +169,7 @@ grep -R "design/icon-concepts\|browser-forge-ai-\|browser-forge-drawn-" -n packa
 
 Expected: no runtime references; output is empty or limited to documentation.
 
-- [ ] **Step 3: Commit design concepts**
+- [x] **Step 3: Commit design concepts**
 
 Run:
 
@@ -192,7 +191,7 @@ Expected: commit succeeds.
 - Consumes: `origin/feat/claude-skill-and-auth` branch inventory.
 - Produces: explicit record that the branch was reviewed and not merged wholesale.
 
-- [ ] **Step 1: Write branch disposition note**
+- [x] **Step 1: Write branch disposition note**
 
 Create `/Users/zhukai.129/.codex/worktrees/6d6d/browser-forge/docs/superpowers/specs/2026-07-27-claude-skill-auth-branch-disposition.md` with this content:
 
@@ -220,7 +219,7 @@ If automatic skill installation becomes a product requirement, design it as a ne
 
 Expected: note clearly explains why the branch was not merged.
 
-- [ ] **Step 2: Verify excluded files are absent**
+- [x] **Step 2: Verify excluded files are absent**
 
 Run:
 
@@ -230,7 +229,7 @@ test ! -d skill
 
 Expected: exit code 0.
 
-- [ ] **Step 3: Commit disposition note**
+- [x] **Step 3: Commit disposition note**
 
 Run:
 
@@ -252,7 +251,7 @@ Expected: commit succeeds.
 - Consumes: integrated branch from Tasks 1-4.
 - Produces: verified product candidate branch.
 
-- [ ] **Step 1: Install dependencies if needed**
+- [x] **Step 1: Install dependencies if needed**
 
 Run:
 
@@ -262,7 +261,7 @@ npm install
 
 Expected: dependencies are installed and `package-lock.json` remains consistent or updates only for declared package changes.
 
-- [ ] **Step 2: Run full tests**
+- [x] **Step 2: Run full tests**
 
 Run:
 
@@ -272,7 +271,7 @@ npm test
 
 Expected: all tests pass.
 
-- [ ] **Step 3: Run skill generation tests**
+- [x] **Step 3: Run skill generation tests**
 
 Run:
 
@@ -282,7 +281,7 @@ npm run test:skill-generation
 
 Expected: all skill-generation tests pass.
 
-- [ ] **Step 4: Run production build**
+- [x] **Step 4: Run production build**
 
 Run:
 
@@ -292,7 +291,7 @@ npm run build
 
 Expected: electron-vite build succeeds.
 
-- [ ] **Step 5: Inspect final git state**
+- [x] **Step 5: Inspect final git state**
 
 Run:
 
@@ -303,7 +302,7 @@ git log --oneline --decorate -8
 
 Expected: branch is `codex/integrate-product-main`; status is clean after any final fixes are committed.
 
-- [ ] **Step 6: Commit verification fixes if needed**
+- [x] **Step 6: Commit verification fixes if needed**
 
 If Step 2, 3, or 4 required code changes, run:
 
@@ -313,3 +312,11 @@ git commit -m "fix: stabilize integrated product branch"
 ```
 
 Expected: final status is clean.
+
+
+## Final Integration Notes
+
+- `assets/icon-concepts/` was removed after review because icon concepts are archival, not runtime assets.
+- `design/icon-concepts/` is explicitly ignored by Forge packaging and remains the archival location for design concepts.
+- `recorder.mjs` now delegates HTTP routes and lifecycle behavior to `createRecorderHttpServer(...)`.
+- Electron preload now exposes only the currently backed `pickOutputDir` IPC method.

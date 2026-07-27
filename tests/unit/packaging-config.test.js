@@ -45,3 +45,12 @@ describe('macOS packaging configuration', () => {
     expect(viteConfig).toContain('plugins: [react()]')
   })
 })
+
+  it('keeps inert concepts and legacy renderer files out of packaged apps', () => {
+    const forgeConfig = require('../../forge.config.cjs')
+    const ignored = (path) => forgeConfig.packagerConfig.ignore.some((pattern) => pattern.test(path))
+
+    expect(ignored('/design/icon-concepts/example.png')).toBe(true)
+    expect(ignored('/assets/icon-concepts/example.png')).toBe(true)
+    expect(ignored('/src/renderer/index.html')).toBe(true)
+  })

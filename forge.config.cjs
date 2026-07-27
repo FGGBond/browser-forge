@@ -42,6 +42,9 @@ module.exports = {
       /^\/\.git($|\/)/,
       /^\/\.superpowers($|\/)/,
       /^\/tests($|\/)/,
+      /^\/design($|\/)/,
+      /^\/assets\/icon-concepts($|\/)/,
+      /^\/src\/renderer($|\/)/,
       /^\/recorder\.mjs$/,
       /^\/build-main\.mjs$/
     ]

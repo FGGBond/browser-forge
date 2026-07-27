@@ -30,4 +30,62 @@ describe('recorder HTTP server', () => {
       totals: { events: 0, network: 0, console: 0, artifacts: 0 }
     }))
   })
+
+  it('stops and saves an active recording before server shutdown', async () => {
+    const stoppedSessions = []
+    const killedProcesses = []
+
+    class FakeRecordingSession {
+      constructor({ port, outputDir }) {
+        this.port = port
+        this.outputDir = outputDir
+        this._cdp = { getTargets: () => [], disconnect: async () => {} }
+      }
+
+      async start() {}
+
+      async stop() {
+        stoppedSessions.push({ port: this.port, outputDir: this.outputDir })
+        return `${this.outputDir}/session-stopped`
+      }
+
+      getLiveSummary() {
+        return {
+          type: 'summary',
+          startedAt: 1,
+          updatedAt: 2,
+          tabs: [],
+          totals: { events: 0, network: 0, console: 0, artifacts: 0 }
+        }
+      }
+    }
+
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      startupDelayMs: 0,
+      findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      launchChrome: () => ({
+        exitCode: null,
+        killed: false,
+        once: () => {},
+        kill: () => killedProcesses.push('killed')
+      }),
+      RecordingSession: FakeRecordingSession
+    })
+    const url = await recorderServer.listen()
+
+    const start = await fetch(`${url}/api/start-recording`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outputDir: '/tmp/browser-forge-test', port: 9333 })
+    }).then(response => response.json())
+
+    expect(start).toEqual({ ok: true })
+
+    await recorderServer.close()
+    recorderServer = null
+
+    expect(stoppedSessions).toEqual([{ port: 9333, outputDir: '/tmp/browser-forge-test' }])
+    expect(killedProcesses).toEqual(['killed'])
+  })
 })
