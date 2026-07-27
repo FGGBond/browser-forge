@@ -1,7 +1,19 @@
+import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { AUTH_RUNTIME_VERSION, SPEC_VERSION } from './constants.js'
 
-export const TEMPLATE_ROOT = fileURLToPath(new URL('../../skills/browser-forge/assets/skill-template/', import.meta.url))
+function firstExistingPath(urls) {
+  for (const url of urls) {
+    const path = fileURLToPath(url)
+    if (existsSync(path)) return path
+  }
+  return fileURLToPath(urls.at(-1))
+}
+
+export const TEMPLATE_ROOT = firstExistingPath([
+  new URL('../../assets/skill-template/', import.meta.url),
+  new URL('../../skills/browser-forge/assets/skill-template/', import.meta.url)
+])
 
 const TEMPLATE_TOKENS = Object.freeze([
   'SKILL_NAME',

@@ -2,5 +2,8 @@
 set -euo pipefail
 
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+if [ -f "$script_dir/runtime/cli.mjs" ]; then
+  exec node "$script_dir/runtime/cli.mjs" generate "$@"
+fi
 repository_root="$(cd "$script_dir/../../.." && pwd)"
 exec node "$repository_root/src/skill-generation/cli.mjs" generate "$@"

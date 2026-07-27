@@ -1,17 +1,21 @@
-import electronModule from 'electron'
-const { app, BrowserWindow, ipcMain, dialog } = electronModule['module.exports'] || electronModule.default || electronModule
-import { join } from 'path'
-import { createRecorderHttpServer } from './recorder/http-server.js'
-import { registerShellIpcHandlers } from './shell-ipc.js'
+import { dirname, join } from 'path'
+import { fileURLToPath } from 'url'
+import { createRecorderHttpServer as defaultCreateRecorderHttpServer } from './recorder/http-server.js'
+import { registerShellIpcHandlers as defaultRegisterShellIpcHandlers } from './shell-ipc.js'
+import { ensureAgentSkillsInstalled as defaultEnsureAgentSkillsInstalled } from './agent-skill-installer.js'
 
-let recorderServer = null
-let isQuitting = false
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
-async function createWindow() {
-  recorderServer = createRecorderHttpServer({
+export async function createWindow({
+  app,
+  BrowserWindow,
+  createRecorderHttpServer = defaultCreateRecorderHttpServer,
+  state
+}) {
+  state.recorderServer = createRecorderHttpServer({
     uiRoot: join(app.getAppPath(), 'ui')
   })
-  const url = await recorderServer.listen()
+  const url = await state.recorderServer.listen()
   const win = new BrowserWindow({
     width: 1080,
     height: 760,
@@ -23,22 +27,65 @@ async function createWindow() {
     }
   })
   win.loadURL(`${url}/?shell=electron`)
+  return win
 }
 
-app.whenReady().then(() => {
-  registerShellIpcHandlers({ ipcMain, dialog })
-  createWindow()
-})
+export function startApp({
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  createRecorderHttpServer = defaultCreateRecorderHttpServer,
+  registerShellIpcHandlers = defaultRegisterShellIpcHandlers,
+  ensureAgentSkillsInstalled = defaultEnsureAgentSkillsInstalled,
+  logger = console,
+  env = process.env,
+  state = { recorderServer: null, isQuitting: false }
+} = {}) {
+  if (!app || !BrowserWindow || !ipcMain || !dialog) {
+    throw new Error('startApp requires Electron app, BrowserWindow, ipcMain, and dialog')
+  }
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
-})
+  const readyPromise = app.whenReady().then(async () => {
+    const appPath = app.getAppPath()
+    const installPromise = Promise.resolve().then(() => ensureAgentSkillsInstalled({
+      sourceSkillDir: join(appPath, 'skills', 'browser-forge'),
+      runtimeSourceDir: join(appPath, 'src', 'skill-generation'),
+      packageVersion: app.getVersion?.() ?? '0.0.0',
+      sourceCommit: env.BROWSER_FORGE_SOURCE_COMMIT || 'unknown',
+      logFile: join(app.getPath('userData'), 'skill-installation.json')
+    })).catch(error => {
+      logger.error('[browser-forge] skill installation failed:', error)
+    })
 
-app.on('before-quit', (event) => {
-  if (isQuitting) return
-  event.preventDefault()
-  isQuitting = true
-  Promise.resolve(recorderServer?.close?.())
-    .catch(error => console.error('[browser-forge] recorder shutdown failed:', error))
-    .finally(() => app.quit())
-})
+    registerShellIpcHandlers({ ipcMain, dialog })
+    await createWindow({ app, BrowserWindow, createRecorderHttpServer, state })
+    await installPromise
+  })
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit()
+  })
+
+  app.on('before-quit', (event) => {
+    if (state.isQuitting) return
+    event.preventDefault()
+    state.isQuitting = true
+    Promise.resolve(state.recorderServer?.close?.())
+      .catch(error => logger.error('[browser-forge] recorder shutdown failed:', error))
+      .finally(() => app.quit())
+  })
+
+  return readyPromise
+}
+
+async function bootstrapElectronApp() {
+  const electronModule = await import('electron')
+  const electronExports = electronModule['module.exports'] || electronModule.default || electronModule
+  const { app, BrowserWindow, ipcMain, dialog } = electronExports
+  startApp({ app, BrowserWindow, ipcMain, dialog })
+}
+
+if (process.versions.electron && !process.env.VITEST_POOL_ID && !process.env.VITEST && process.env.NODE_ENV !== 'test') {
+  bootstrapElectronApp().catch(error => console.error('[browser-forge] app bootstrap failed:', error))
+}

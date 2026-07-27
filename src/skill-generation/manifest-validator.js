@@ -10,7 +10,22 @@ import { normalizeSkillName } from './names.js'
 import { scanTree } from './secret-scanner.js'
 import { renderTemplateText, TEMPLATE_ROOT, templateValues } from './template-renderer.js'
 
-const schema = JSON.parse(await readFile(new URL('../../skills/browser-forge/schemas/manifest.schema.json', import.meta.url)))
+async function readFirstAvailableJson(urls) {
+  const errors = []
+  for (const url of urls) {
+    try {
+      return JSON.parse(await readFile(url, 'utf8'))
+    } catch (error) {
+      errors.push(`${url.pathname}: ${error.message}`)
+    }
+  }
+  throw new Error(`Unable to read Browser Forge manifest schema from known locations: ${errors.join('; ')}`)
+}
+
+const schema = await readFirstAvailableJson([
+  new URL('../../schemas/manifest.schema.json', import.meta.url),
+  new URL('../../skills/browser-forge/schemas/manifest.schema.json', import.meta.url)
+])
 const ajv = new Ajv2020({ allErrors: true, strict: true })
 addFormats(ajv)
 const validateSchema = ajv.compile(schema)
