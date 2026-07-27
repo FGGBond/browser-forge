@@ -18,6 +18,7 @@ export class RecordingSession {
     this._tabCollectors = new Map()
     this._timelineEvents = []
     this._startedAt = null
+    this._lastActiveTargetId = null
   }
 
   async start() {
@@ -42,31 +43,42 @@ export class RecordingSession {
     await session.Runtime.enable()
     await session.DOM.enable()
 
-    // 注入点击监听：每次用户点击时通过 binding 回调触发截图
+    // 注入用户操作监听：点击和 Enter 都通过 binding 回调触发截图
     await session.Runtime.addBinding({ name: 'bfClick' })
+    await session.Runtime.addBinding({ name: 'bfKey' })
     await session.Page.addScriptToEvaluateOnNewDocument({
       source: `
-        document.addEventListener('click', function(e) {
+        document.addEventListener('pointerdown', function(e) {
+          if (e.button !== 0) return
           try { window.bfClick(JSON.stringify({ x: e.clientX, y: e.clientY, selector: (e.target && e.target.tagName) || '' })) } catch(err) {}
+        }, true)
+        document.addEventListener('keydown', function(e) {
+          if (e.key !== 'Enter' || e.repeat || e.isComposing) return
+          try { window.bfKey(JSON.stringify({ key: e.key, selector: (e.target && e.target.tagName) || '' })) } catch(err) {}
         }, true)
       `
     })
 
     session.Runtime.bindingCalled(async ({ name, payload }) => {
-      if (name !== 'bfClick') return
+      if (name !== 'bfClick' && name !== 'bfKey') return
       const ts = Date.now()
+      this._lastActiveTargetId = targetId
       try {
         const info = JSON.parse(payload)
-        collectors.events.addEvent({ type: 'click', timestamp: ts, x: info.x, y: info.y, selector: info.selector })
-        this._timelineEvents.push({ timestamp: ts, type: 'click', targetId, x: info.x, y: info.y })
+        if (name === 'bfClick') {
+          collectors.events.addEvent({ type: 'click', timestamp: ts, x: info.x, y: info.y, selector: info.selector })
+          this._timelineEvents.push({ timestamp: ts, type: 'click', targetId, x: info.x, y: info.y })
+        } else {
+          collectors.events.addEvent({ type: 'keydown', timestamp: ts, key: info.key, selector: info.selector })
+          this._timelineEvents.push({ timestamp: ts, type: 'keydown', targetId, key: info.key })
+        }
       } catch {}
-      // 截图：点击后等 300ms 让 UI 响应完成
-      setTimeout(async () => {
-        try {
-          const { data } = await session.Page.captureScreenshot({ format: 'png' })
-          collectors.screenshots.addScreenshot({ timestamp: ts, dataBase64: data })
-        } catch {}
-      }, 300)
+      if (name === 'bfClick') {
+        await this._captureScreenshot({ session, collectors, timestamp: ts })
+        return
+      }
+      // Enter：保留轻微延迟，等待键盘触发的提交/导航先进入稳定状态
+      this._scheduleScreenshot({ session, collectors, timestamp: ts })
     })
 
     session.Network.requestWillBeSent(params => collectors.network.onRequestWillBeSent(params))
@@ -111,8 +123,86 @@ export class RecordingSession {
     })
   }
 
+  _scheduleScreenshot({ session, collectors, timestamp }) {
+    setTimeout(() => {
+      this._captureScreenshot({ session, collectors, timestamp })
+    }, 300)
+  }
+
+  async _captureScreenshot({ session, collectors, timestamp = Date.now() }) {
+    try {
+      const { data } = await session.Page.captureScreenshot({ format: 'png' })
+      collectors.screenshots.addScreenshot({ timestamp, dataBase64: data })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  getLiveSummary() {
+    const targets = this._cdp.getTargets()
+    const tabs = targets.map(target => {
+      const collectors = this._tabCollectors.get(target.targetId)
+      if (!collectors) {
+        return {
+          targetId: target.targetId,
+          title: target.title,
+          url: target.url,
+          counts: { events: 0, network: 0, console: 0, artifacts: 0 },
+          artifacts: { screenshots: [] },
+          recent: { events: [], network: [], console: [], artifacts: [] }
+        }
+      }
+
+      const events = collectors.events.getEvents()
+      const network = collectors.network.getEntries()
+      const consoleEntries = collectors.console.getEntries()
+      const domSnapshots = collectors.dom.getSnapshots()
+      const screenshots = collectors.screenshots.getScreenshots()
+      const scripts = collectors.scripts.getScripts()
+
+      return {
+        targetId: target.targetId,
+        title: target.title,
+        url: target.url,
+        counts: {
+          events: events.length,
+          network: network.length,
+          console: consoleEntries.length,
+          artifacts: domSnapshots.length + screenshots.length + scripts.length
+        },
+        artifacts: {
+          screenshots: summarizeScreenshotArtifacts({ targetId: target.targetId, screenshots })
+        },
+        recent: {
+          events: events.slice(-8).reverse().map(summarizeEvent),
+          network: network.slice(-8).reverse().map(summarizeNetworkEntry),
+          console: consoleEntries.slice(-8).reverse().map(summarizeConsoleEntry),
+          artifacts: summarizeArtifacts({ targetId: target.targetId, domSnapshots, screenshots, scripts }).slice(0, 8)
+        }
+      }
+    })
+
+    const totals = tabs.reduce((acc, tab) => {
+      acc.events += tab.counts.events
+      acc.network += tab.counts.network
+      acc.console += tab.counts.console
+      acc.artifacts += tab.counts.artifacts
+      return acc
+    }, { events: 0, network: 0, console: 0, artifacts: 0 })
+
+    return {
+      type: 'summary',
+      startedAt: this._startedAt,
+      updatedAt: Date.now(),
+      tabs,
+      totals
+    }
+  }
+
   async stop() {
     const durationMs = Date.now() - this._startedAt
+    await this._captureActiveTabScreenshot()
     const targets = this._cdp.getTargets()
 
     const tabs = {}
@@ -139,7 +229,7 @@ export class RecordingSession {
     const timeline = buildTimeline(this._timelineEvents)
 
     const sessionName = `session-${formatDate(this._startedAt)}`
-    const sessionDir = await writeSession({
+    const sessionDir = await this._writeSession({
       outputDir: this.outputDir,
       sessionName,
       metadata: {
@@ -157,10 +247,123 @@ export class RecordingSession {
     await this._cdp.disconnect()
     return sessionDir
   }
+
+  async _captureActiveTabScreenshot() {
+    const targetId = await this._findVisibleTargetId() ?? this._lastActiveTargetId
+    if (!targetId) return false
+
+    const collectors = this._tabCollectors.get(targetId)
+    const session = this._cdp._targets?.get(targetId)?.session
+    if (!collectors || !session) return false
+
+    return this._captureScreenshot({ session, collectors })
+  }
+
+  async _findVisibleTargetId() {
+    const targets = this._cdp.getTargets()
+    for (const target of targets) {
+      const session = this._cdp._targets?.get(target.targetId)?.session
+      if (!session) continue
+      try {
+        const { result } = await session.Runtime.evaluate({
+          expression: 'document.visibilityState',
+          returnByValue: true
+        })
+        if (result?.value === 'visible') return target.targetId
+      } catch {}
+    }
+    return null
+  }
+
+  _writeSession(data) {
+    return writeSession(data)
+  }
+
+  getScreenshot(targetId, timestamp) {
+    const collectors = this._tabCollectors.get(targetId)
+    const screenshot = collectors?.screenshots.getScreenshots()
+      .find(item => String(item.timestamp) === String(timestamp))
+    if (!screenshot?.dataBase64) return null
+    return Buffer.from(screenshot.dataBase64, 'base64')
+  }
 }
 
 function formatDate(ts) {
   const d = new Date(ts)
   const pad = n => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`
+}
+
+function summarizeEvent(event) {
+  return {
+    time: event.timestamp,
+    kind: event.type ?? 'event',
+    title: event.selector ? `${event.type} ${event.selector}` : event.type ?? 'event',
+    detail: event.url ?? formatPoint(event)
+  }
+}
+
+function summarizeNetworkEntry(entry) {
+  return {
+    time: entry.responseTimestamp ?? entry.startedTimestamp,
+    kind: entry.request?.method ?? 'GET',
+    title: entry.request?.url ?? entry.response?.url ?? 'request',
+    detail: entry.response ? `${entry.response.status} ${entry.response.mimeType ?? ''}`.trim() : 'pending'
+  }
+}
+
+function summarizeConsoleEntry(entry) {
+  return {
+    time: entry.timestamp,
+    kind: entry.type ?? 'log',
+    title: stringifyConsoleArgs(entry.args),
+    detail: entry.stackTrace?.callFrames?.[0]?.url ?? ''
+  }
+}
+
+function summarizeScreenshotArtifacts({ targetId, screenshots }) {
+  return screenshots.map(item => ({
+    timestamp: item.timestamp,
+    kind: 'Screenshot',
+    title: `screenshot-${item.timestamp}.png`,
+    thumbnailUrl: `/api/screenshots/${encodeURIComponent(targetId)}/${encodeURIComponent(item.timestamp)}.png`
+  }))
+}
+
+function summarizeArtifacts({ targetId, domSnapshots, screenshots, scripts }) {
+  return [
+    ...domSnapshots.map(item => ({
+      time: item.timestamp,
+      kind: 'DOM',
+      title: item.url ?? 'DOM snapshot',
+      detail: 'snapshot'
+    })),
+    ...summarizeScreenshotArtifacts({ targetId, screenshots }).map(item => ({
+      time: item.timestamp,
+      kind: item.kind,
+      title: item.title,
+      detail: 'image',
+      thumbnailUrl: item.thumbnailUrl
+    })),
+    ...scripts.map(item => ({
+      time: null,
+      kind: 'Script',
+      title: item.url ?? item.hash,
+      detail: item.hash
+    }))
+  ].sort((a, b) => (b.time ?? 0) - (a.time ?? 0))
+}
+
+function formatPoint(event) {
+  if (typeof event.x !== 'number' || typeof event.y !== 'number') return ''
+  return `${Math.round(event.x)}, ${Math.round(event.y)}`
+}
+
+function stringifyConsoleArgs(args = []) {
+  return args.map(arg => {
+    if (typeof arg === 'string') return arg
+    if (arg?.value !== undefined) return String(arg.value)
+    if (arg?.description) return arg.description
+    try { return JSON.stringify(arg) } catch { return String(arg) }
+  }).join(' ')
 }

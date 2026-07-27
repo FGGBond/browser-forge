@@ -2,112 +2,1097 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>browser-forge</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; display: flex; justify-content: center; padding: 40px 20px; }
-    .card { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1); width: 480px; padding: 28px; }
-    h1 { font-size: 20px; font-weight: 600; margin-bottom: 24px; color: #1a1a1a; }
-    label { display: block; font-size: 13px; color: #555; margin-bottom: 6px; }
-    .row { display: flex; gap: 8px; margin-bottom: 16px; }
-    input { flex: 1; padding: 7px 10px; font-size: 13px; border: 1px solid #ddd; border-radius: 4px; outline: none; }
-    input:focus { border-color: #1a73e8; }
-    button { padding: 7px 14px; font-size: 13px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; background: white; }
-    button:hover { background: #f0f0f0; }
-    .btn-primary { background: #1a73e8; color: white; border-color: #1a73e8; width: 100%; padding: 10px; font-size: 14px; }
-    .btn-primary:hover { background: #1557b0; }
-    .btn-primary:disabled { background: #aaa; border-color: #aaa; cursor: not-allowed; }
-    .btn-danger { background: #d93025; color: white; border-color: #d93025; width: 100%; padding: 10px; font-size: 14px; }
-    .btn-danger:hover { background: #a52019; }
-    .timer { font-size: 22px; font-weight: 600; color: #1a1a1a; margin-bottom: 4px; display: flex; align-items: center; gap: 10px; }
-    .dot { width: 10px; height: 10px; border-radius: 50%; background: red; animation: blink 1s infinite; }
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
-    .tab-count { font-size: 13px; color: #666; margin-bottom: 12px; }
-    .tab-list { list-style: none; margin-bottom: 24px; border: 1px solid #eee; border-radius: 4px; max-height: 200px; overflow-y: auto; }
-    .tab-list li { padding: 8px 12px; font-size: 12px; border-bottom: 1px solid #f0f0f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .tab-list li:last-child { border-bottom: none; }
-    .tab-title { font-weight: 500; }
-    .tab-url { color: #888; margin-left: 6px; }
-    .path-box { background: #f5f5f5; border-radius: 4px; padding: 10px 12px; font-size: 12px; color: #555; word-break: break-all; margin-bottom: 16px; }
-    .btn-row { display: flex; gap: 8px; margin-bottom: 12px; }
-    .btn-row button { flex: 1; }
-    .hidden { display: none; }
+    * { box-sizing: border-box; }
+
+    :root {
+      color-scheme: dark;
+      --window: #171718;
+      --titlebar: #202021;
+      --sidebar: #202021;
+      --sidebar-width: 244px;
+      --panel: #1e1e1f;
+      --panel-raised: #252526;
+      --panel-hover: #2b2b2c;
+      --selected: #37373a;
+      --line: rgba(255, 255, 255, .075);
+      --line-soft: rgba(255, 255, 255, .05);
+      --text: rgba(246, 246, 247, .9);
+      --muted: rgba(235, 235, 236, .54);
+      --faint: rgba(235, 235, 236, .35);
+      --green: #6ee7a8;
+      --red: #ff6b5f;
+      --blue: #93c5fd;
+      --purple: #c4b5fd;
+      --ease-out: cubic-bezier(.23, 1, .32, 1);
+      --ease-in-out: cubic-bezier(.77, 0, .175, 1);
+    }
+
+    html,
+    body {
+      width: 100%;
+      min-height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #111112;
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+      font-size: 13px;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .app-window {
+      width: 100vw;
+      height: 100vh;
+      min-width: 760px;
+      min-height: 560px;
+      display: grid;
+      grid-template-rows: 34px 1fr;
+      overflow: hidden;
+      background: var(--window);
+    }
+
+    body.shell-electron .app-window {
+      grid-template-rows: 1fr;
+    }
+
+    body.shell-electron .titlebar {
+      display: none;
+    }
+
+    .titlebar {
+      display: grid;
+      grid-template-columns: 88px 1fr 88px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      background: var(--titlebar);
+      color: var(--muted);
+      font-size: 11px;
+      user-select: none;
+    }
+
+    .traffic {
+      display: flex;
+      gap: 8px;
+      padding-left: 13px;
+    }
+
+    .traffic span {
+      width: 11px;
+      height: 11px;
+      border-radius: 999px;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .18);
+    }
+
+    .traffic-red { background: #ff5f57; }
+    .traffic-yellow { background: #febc2e; }
+    .traffic-green { background: #28c840; }
+
+    .window-title {
+      overflow: hidden;
+      text-align: center;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .app-body {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: var(--sidebar-width) 5px minmax(0, 1fr);
+    }
+
+    body.view-setup .app-body,
+    body.view-done .app-body {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.view-setup .sidebar,
+    body.view-setup .sidebar-resizer,
+    body.view-setup .toolbar,
+    body.view-setup .statusbar,
+    body.view-done .sidebar,
+    body.view-done .sidebar-resizer,
+    body.view-done .toolbar,
+    body.view-done .statusbar {
+      display: none;
+    }
+
+    .sidebar {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      background: var(--sidebar);
+    }
+
+    .sidebar-resizer {
+      width: 5px;
+      min-width: 5px;
+      cursor: col-resize;
+      background: linear-gradient(90deg, rgba(255, 255, 255, .065), rgba(255, 255, 255, .015));
+      transition: background 140ms var(--ease-out);
+    }
+
+    .sidebar-resizer.dragging {
+      background: linear-gradient(90deg, rgba(147, 197, 253, .34), rgba(147, 197, 253, .08));
+    }
+
+    body.resizing-sidebar {
+      cursor: col-resize;
+      user-select: none;
+    }
+
+    body.sidebar-collapsed .stop-area {
+      display: none;
+    }
+
+    body.sidebar-collapsed .sidebar-main {
+      padding: 9px 5px;
+    }
+
+    body.sidebar-collapsed .sidebar-head,
+    body.sidebar-collapsed .tab-title,
+    body.sidebar-collapsed .tab-badge {
+      display: none;
+    }
+
+    body.sidebar-collapsed .browser-tabs {
+      justify-items: center;
+    }
+
+    body.sidebar-collapsed .browser-tab {
+      width: 34px;
+      min-height: 34px;
+      grid-template-columns: 18px;
+      justify-content: center;
+      padding: 8px;
+    }
+
+    body.sidebar-collapsed .empty-state {
+      display: none;
+    }
+
+    .stop-area {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      background: #222223;
+    }
+
+    .stop-button {
+      width: 100%;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: 1px solid rgba(255, 255, 255, .105);
+      border-radius: 7px;
+      background: #2b2b2c;
+      color: var(--text);
+      font-weight: 590;
+      font-size: 12px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .055);
+      transition: background 160ms var(--ease-out), transform 120ms var(--ease-out), opacity 160ms var(--ease-out);
+    }
+
+    .stop-button::before {
+      width: 8px;
+      height: 8px;
+      content: "";
+      border-radius: 2px;
+      background: var(--red);
+      box-shadow: 0 0 0 1px rgba(255, 107, 95, .18);
+    }
+
+    .stop-button:active {
+      transform: scale(.985);
+    }
+
+    .stop-button:disabled {
+      cursor: default;
+      opacity: .38;
+    }
+
+    .sidebar-main {
+      min-height: 0;
+      overflow: auto;
+      padding: 11px 8px;
+    }
+
+    .sidebar-head {
+      height: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 7px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 650;
+      text-transform: uppercase;
+    }
+
+    .sidebar-count {
+      color: var(--faint);
+      font-variant-numeric: tabular-nums;
+      text-transform: none;
+    }
+
+    .browser-tabs {
+      display: grid;
+      gap: 2px;
+    }
+
+    .browser-tab {
+      width: 100%;
+      min-height: 34px;
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 6px 8px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: rgba(235, 235, 236, .68);
+      text-align: left;
+      transition: background 140ms var(--ease-out), color 140ms var(--ease-out);
+    }
+
+    .browser-tab.active {
+      background: var(--selected);
+      color: var(--text);
+    }
+
+    .favicon {
+      width: 17px;
+      height: 17px;
+      display: grid;
+      place-items: center;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, .1);
+      color: rgba(255, 255, 255, .76);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .tab-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tab-badge {
+      color: var(--faint);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .main {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 50px 1fr 24px;
+      background: #1b1b1c;
+    }
+
+    body.view-setup .main,
+    body.view-done .main {
+      grid-template-rows: minmax(0, 1fr);
+    }
+
+    .toolbar {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
+      gap: 12px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-raised);
+    }
+
+    .live-state {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .live-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--green);
+      box-shadow: 0 0 0 3px rgba(110, 231, 168, .08);
+    }
+
+    .live-dot.idle {
+      background: var(--faint);
+      box-shadow: none;
+    }
+
+    .addressbar {
+      min-width: 0;
+      height: 32px;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 9px;
+      padding: 0 11px;
+      border: 1px solid rgba(255, 255, 255, .09);
+      border-radius: 7px;
+      background: #1f1f20;
+      color: var(--muted);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
+      font-size: 12px;
+    }
+
+    .address-lock {
+      color: rgba(110, 231, 168, .8);
+      font-size: 11px;
+    }
+
+    .address-url {
+      min-width: 0;
+      overflow: hidden;
+      color: rgba(246, 246, 247, .76);
+      font-variant-ligatures: none;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .address-time {
+      color: var(--faint);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .workspace {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 1fr;
+      padding: 14px 14px 0;
+      background: #1b1b1c;
+    }
+
+    body.view-setup .workspace,
+    body.view-done .workspace {
+      place-items: center;
+      padding: 24px;
+    }
+
+    .inspector-tabs {
+      height: 36px;
+      display: flex;
+      align-items: end;
+      padding-left: 8px;
+      border: 1px solid rgba(255, 255, 255, .08);
+      border-bottom: 0;
+      border-radius: 8px 8px 0 0;
+      background: #222223;
+    }
+
+    #view-recording {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .dimension-tab {
+      position: relative;
+      bottom: -1px;
+      height: 35px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 14px;
+      border: 1px solid transparent;
+      border-bottom: 0;
+      border-radius: 7px 7px 0 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 520;
+      transition: background 140ms var(--ease-out), color 140ms var(--ease-out);
+    }
+
+    .dimension-tab.active {
+      z-index: 2;
+      border-color: rgba(255, 255, 255, .08);
+      background: var(--panel);
+      color: var(--text);
+    }
+
+    .dimension-tab.active::after {
+      position: absolute;
+      right: 0;
+      bottom: -1px;
+      left: 0;
+      height: 1px;
+      content: "";
+      background: var(--panel);
+    }
+
+    .count {
+      min-width: 17px;
+      height: 16px;
+      display: inline-flex;
+      justify-content: flex-end;
+      overflow: hidden;
+      color: var(--faint);
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+
+    .count-number {
+      display: inline-flex;
+      height: 16px;
+    }
+
+    .count-digit {
+      width: .62em;
+      height: 16px;
+      overflow: hidden;
+    }
+
+    .count-reel {
+      display: grid;
+      transform: translateY(0);
+    }
+
+    .count.is-rolling .count-reel {
+      animation: countRoll var(--roll-duration, 1.2s) var(--ease-out) var(--roll-delay, 0ms) both;
+    }
+
+    .count-reel span {
+      height: 16px;
+      line-height: 16px;
+    }
+
+    .inspector-body {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 36px 1fr;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, .08);
+      border-radius: 0 0 8px 8px;
+      background: var(--panel);
+    }
+
+    .filterbar {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line-soft);
+      color: var(--faint);
+      font-size: 12px;
+    }
+
+    .filter-left {
+      min-width: 0;
+      display: flex;
+      gap: 12px;
+    }
+
+    .filter-item {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .filter-right {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .log {
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .log-row {
+      min-height: 34px;
+      display: grid;
+      grid-template-columns: 64px 92px minmax(0, 1fr) 148px;
+      align-items: center;
+      gap: 10px;
+      padding: 0 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, .045);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .log-row.selected {
+      background: rgba(72, 123, 255, .11);
+    }
+
+    .time,
+    .source {
+      color: var(--faint);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .chip {
+      width: fit-content;
+      max-width: 86px;
+      overflow: hidden;
+      padding: 2px 7px;
+      border-radius: 5px;
+      background: rgba(255, 255, 255, .065);
+      color: rgba(235, 235, 236, .62);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .chip.navigation,
+    .chip.get,
+    .chip.post {
+      color: var(--blue);
+      background: rgba(59, 130, 246, .13);
+    }
+
+    .chip.input,
+    .chip.log {
+      color: var(--purple);
+      background: rgba(139, 92, 246, .13);
+    }
+
+    .chip.snapshot,
+    .chip.dom,
+    .chip.screenshot,
+    .chip.script {
+      color: #86efac;
+      background: rgba(34, 197, 94, .12);
+    }
+
+    .chip.error,
+    .chip.exception {
+      color: #fca5a5;
+      background: rgba(239, 68, 68, .13);
+    }
+
+    .message {
+      min-width: 0;
+      overflow: hidden;
+      color: rgba(246, 246, 247, .78);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .artifact-view {
+      min-height: 0;
+      height: 100%;
+      overflow: auto;
+      padding: 14px;
+    }
+
+    .screenshot-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 220px));
+      gap: 12px clamp(4px, .5vw, 8px);
+      align-content: start;
+      justify-content: start;
+    }
+
+    .screenshot-card {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, .08);
+      border-radius: 8px;
+      background: #19191a;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035);
+    }
+
+    .screenshot-card.is-new {
+      animation: screenshotFadeIn 260ms var(--ease-out) both;
+    }
+
+    .screenshot-card.is-shifted {
+      will-change: transform;
+    }
+
+    .screenshot-thumb {
+      position: relative;
+      aspect-ratio: 16 / 10;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, .075), rgba(255, 255, 255, .035)),
+        #222223;
+      background-size: 220% 100%;
+      animation: thumbnailSheen 1.4s ease-in-out infinite;
+    }
+
+    .screenshot-thumb img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      opacity: 0;
+      transform: scale(.985);
+      transition:
+        opacity 240ms var(--ease-out),
+        transform 240ms var(--ease-out);
+    }
+
+    .screenshot-thumb img.is-loaded {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    .screenshot-time {
+      height: 26px;
+      display: flex;
+      align-items: center;
+      padding: 0 9px;
+      border-top: 1px solid rgba(255, 255, 255, .055);
+      color: var(--faint);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    @keyframes screenshotFadeIn {
+      from { opacity: 0; transform: translateY(6px) scale(.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @keyframes thumbnailSheen {
+      from { background-position: 100% 0; }
+      to { background-position: -120% 0; }
+    }
+
+    @keyframes countRoll {
+      from { transform: translateY(var(--from-y, 0)); }
+      to { transform: translateY(var(--to-y, 0)); }
+    }
+
+    .empty-state {
+      height: 100%;
+      display: grid;
+      place-items: center;
+      color: var(--faint);
+      text-align: center;
+      line-height: 1.7;
+    }
+
+    .setup-panel,
+    .done-panel {
+      width: min(680px, calc(100vw - 48px));
+      margin: 0;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035);
+    }
+
+    .done-panel {
+      width: min(360px, calc(100vw - 48px));
+    }
+
+    .setup-panel h1,
+    .done-panel h1 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      font-weight: 620;
+    }
+
+    .setup-panel p,
+    .done-panel p {
+      margin: 0 0 20px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+      margin-bottom: 14px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 560;
+    }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+    }
+
+    .text-input,
+    .path-box {
+      width: 100%;
+      min-width: 0;
+      height: 34px;
+      padding: 0 10px;
+      border: 1px solid rgba(255, 255, 255, .09);
+      border-radius: 7px;
+      outline: none;
+      background: #19191a;
+      color: var(--text);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
+    }
+
+    .text-input:focus {
+      border-color: rgba(147, 197, 253, .44);
+    }
+
+    .path-box {
+      height: auto;
+      min-height: 38px;
+      display: flex;
+      align-items: center;
+      word-break: break-all;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .button {
+      min-height: 34px;
+      padding: 0 13px;
+      border: 1px solid rgba(255, 255, 255, .09);
+      border-radius: 7px;
+      background: #2b2b2c;
+      color: var(--text);
+      transition: background 140ms var(--ease-out), transform 120ms var(--ease-out), opacity 140ms var(--ease-out);
+    }
+
+    .button:active {
+      transform: scale(.98);
+    }
+
+    .button.primary {
+      width: 100%;
+      margin-top: 6px;
+      background: #d9d9dc;
+      border-color: #d9d9dc;
+      color: #171718;
+      font-weight: 620;
+    }
+
+    .button:disabled {
+      cursor: default;
+      opacity: .38;
+      transform: none;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .button-row .button {
+      flex: 1;
+    }
+
+    .error-text {
+      min-height: 18px;
+      margin-top: 10px;
+      color: #fca5a5;
+      font-size: 12px;
+    }
+
+    .statusbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 11px;
+      border-top: 1px solid var(--line-soft);
+      background: #181819;
+      color: var(--faint);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .status-left,
+    .status-right {
+      min-width: 0;
+      display: flex;
+      gap: 14px;
+    }
+
+    @media (hover: hover) and (pointer: fine) {
+      .sidebar-resizer:hover {
+        background: linear-gradient(90deg, rgba(147, 197, 253, .34), rgba(147, 197, 253, .08));
+      }
+
+      .stop-button:hover {
+        background: #303031;
+      }
+
+      .button:hover {
+        background: #303031;
+      }
+
+      .button.primary:hover {
+        background: #ededee;
+      }
+
+      .browser-tab:hover {
+        background: rgba(255, 255, 255, .045);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation: none !important;
+      }
+
+      .button,
+      .stop-button {
+        transition:
+          background 160ms var(--ease-out),
+          color 160ms var(--ease-out),
+          border-color 160ms var(--ease-out),
+          opacity 160ms var(--ease-out);
+      }
+
+      .button:active,
+      .stop-button:active {
+        transform: none;
+      }
+
+      .screenshot-thumb img {
+        opacity: 1;
+        transform: none;
+        transition: opacity 160ms var(--ease-out);
+      }
+    }
   </style>
 </head>
-<body>
-  <div class="card">
-    <!-- Setup View -->
-    <div id="view-setup">
-      <h1>browser-forge</h1>
-      <label>Chrome 路径</label>
-      <div class="row">
-        <input id="chrome-path" placeholder="自动探测..." />
-        <button onclick="detectChrome()">探测</button>
-      </div>
-      <label>录制输出目录</label>
-      <div class="row" style="margin-bottom:24px">
-        <input id="output-dir" placeholder="选择目录..." readonly onclick="pickDir()" style="cursor:pointer" />
-        <button onclick="pickDir()">选择</button>
-      </div>
-      <button class="btn-primary" id="start-btn" onclick="startRecording()" disabled>
-        启动 Chrome 并开始录制
-      </button>
-      <p id="setup-error" style="color:red;font-size:12px;margin-top:8px"></p>
-    </div>
+<body class="view-setup">
+  <div class="app-window">
+    <header class="titlebar">
+      <div class="traffic"><span class="traffic-red"></span><span class="traffic-yellow"></span><span class="traffic-green"></span></div>
+      <div class="window-title">browser-forge</div>
+    </header>
 
-    <!-- Recording View -->
-    <div id="view-recording" class="hidden">
-      <div class="timer">
-        <span class="dot"></span>
-        <span id="timer-display">00:00</span>
-        录制中
-      </div>
-      <div class="tab-count" id="tab-count">已打开 Tab：0</div>
-      <ul class="tab-list" id="tab-list"></ul>
-      <button class="btn-danger" onclick="stopRecording()">停止录制</button>
-    </div>
+    <div class="app-body">
+      <aside class="sidebar">
+        <section class="stop-area">
+          <button class="stop-button" id="global-stop-btn" onclick="stopRecording()" disabled>停止录制</button>
+        </section>
 
-    <!-- Done View -->
-    <div id="view-done" class="hidden">
-      <h1>录制完成</h1>
-      <div class="path-box" id="session-path"></div>
-      <div class="btn-row">
-        <button onclick="openFolder()">在 Finder 中打开</button>
-        <button onclick="copyPath()">复制路径</button>
-      </div>
-      <button class="btn-primary" onclick="reset()">新建录制</button>
+        <section class="sidebar-main">
+          <div class="sidebar-head">
+            <span>Browser Tabs</span>
+            <span class="sidebar-count" id="tab-count">0</span>
+          </div>
+          <div class="browser-tabs" id="browser-tabs">
+            <div class="empty-state">启动录制后，新打开的浏览器标签会出现在这里。</div>
+          </div>
+        </section>
+      </aside>
+      <div class="sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="调整 Browser Tabs 宽度"></div>
+
+      <main class="main">
+        <div class="toolbar">
+          <div class="live-state"><span class="live-dot idle" id="live-dot"></span><span id="live-label">Idle</span></div>
+          <div class="addressbar">
+            <span class="address-lock">▣</span>
+            <span class="address-url" id="address-url">准备开始录制</span>
+            <span class="address-time" id="timer-display">00:00</span>
+          </div>
+        </div>
+
+        <section class="workspace">
+          <div id="view-setup" class="setup-panel">
+            <h1>新建录制</h1>
+            <p>选择 Chrome 和输出目录后，browser-forge 会打开一个新的 Chrome 窗口并开始记录。</p>
+
+            <div class="field">
+              <label for="chrome-path">Chrome 路径</label>
+              <div class="field-row">
+                <input class="text-input" id="chrome-path" placeholder="自动探测..." />
+                <button class="button" onclick="detectChrome()">探测</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="output-dir">录制输出目录</label>
+              <div class="field-row">
+                <input class="text-input" id="output-dir" placeholder="选择目录..." readonly onclick="pickDir()" />
+                <button class="button" onclick="pickDir()">选择</button>
+              </div>
+            </div>
+
+            <button class="button primary" id="start-btn" onclick="startRecording()" disabled>启动 Chrome 并开始录制</button>
+            <div class="error-text" id="setup-error"></div>
+          </div>
+
+          <div id="view-recording" class="hidden">
+            <div class="inspector-tabs" id="dimension-tabs"></div>
+            <div class="inspector-body">
+              <div class="filterbar">
+                <div class="filter-left">
+                  <span class="filter-item" id="current-tab-label">Current tab: none</span>
+                  <span class="filter-item" id="dimension-label">Show: Events</span>
+                  <span class="filter-item">Live updates</span>
+                </div>
+                <div class="filter-right" id="dimension-total">0 total</div>
+              </div>
+              <div class="log" id="dimension-log"></div>
+            </div>
+          </div>
+
+          <div id="view-done" class="done-panel hidden">
+            <h1>录制完成</h1>
+            <p>录制文件已经写入下面的 session 目录。</p>
+            <div class="path-box" id="session-path"></div>
+            <div class="button-row">
+              <button class="button" onclick="openFolder()">在 Finder 中打开</button>
+              <button class="button" onclick="copyPath(event)">复制路径</button>
+            </div>
+            <button class="button primary" onclick="reset()">新建录制</button>
+          </div>
+        </section>
+
+        <footer class="statusbar">
+          <div class="status-left">
+            <span id="status-tabs">Tabs 0</span>
+            <span id="status-events">Events 0</span>
+            <span id="status-network">Network 0</span>
+          </div>
+          <div class="status-right">
+            <span id="status-console">Console 0</span>
+            <span id="status-update">Idle</span>
+          </div>
+        </footer>
+      </main>
     </div>
   </div>
 
   <script>
+    const DIMENSIONS = [
+      { id: 'artifacts', label: 'Artifacts' },
+      { id: 'network', label: 'Network' },
+      { id: 'console', label: 'Console' },
+      { id: 'events', label: 'Events' }
+    ]
+    const SIDEBAR_MIN = 52
+    const SIDEBAR_COLLAPSE_THRESHOLD = 96
+
     let timerInterval = null
     let startTime = null
     let sessionDir = null
     let ws = null
     let isStarting = false
 
+    const state = {
+      isRecording: false,
+      tabs: [],
+      selectedTargetId: null,
+      activeDimension: 'artifacts',
+      summary: null,
+      seenScreenshotIds: new Set(),
+      previousScreenshotOrder: [],
+      previousCounts: {}
+    }
+
+    if (new URLSearchParams(location.search).get('shell') === 'electron') {
+      document.body.classList.add('shell-electron')
+    }
+
     function showView(name) {
       document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'))
       document.getElementById('view-' + name).classList.remove('hidden')
+      document.body.classList.remove('view-setup', 'view-recording', 'view-done')
+      document.body.classList.add('view-' + name)
     }
 
     function updateStartBtn() {
-      const cp = document.getElementById('chrome-path').value.trim()
-      const od = document.getElementById('output-dir').value.trim()
-      document.getElementById('start-btn').disabled = isStarting || !cp || !od
+      const outputDir = document.getElementById('output-dir').value.trim()
+      document.getElementById('start-btn').disabled = isStarting || !outputDir
     }
 
     document.getElementById('chrome-path').addEventListener('input', updateStartBtn)
     document.getElementById('output-dir').addEventListener('input', updateStartBtn)
 
+    function initSidebarResize() {
+      const savedWidth = Number(localStorage.getItem('browserForgeSidebarWidth'))
+      if (savedWidth) setSidebarWidth(savedWidth)
+
+      const resizer = document.getElementById('sidebar-resizer')
+      resizer.addEventListener('pointerdown', (event) => {
+        event.preventDefault()
+        resizer.setPointerCapture(event.pointerId)
+        resizer.classList.add('dragging')
+        document.body.classList.add('resizing-sidebar')
+      })
+
+      resizer.addEventListener('pointermove', (event) => {
+        if (!resizer.classList.contains('dragging')) return
+        const appLeft = document.querySelector('.app-body').getBoundingClientRect().left
+        setSidebarWidth(event.clientX - appLeft)
+      })
+
+      function stopResize(event) {
+        if (!resizer.classList.contains('dragging')) return
+        resizer.releasePointerCapture(event.pointerId)
+        resizer.classList.remove('dragging')
+        document.body.classList.remove('resizing-sidebar')
+        localStorage.setItem('browserForgeSidebarWidth', getSidebarWidth())
+      }
+
+      resizer.addEventListener('pointerup', stopResize)
+      resizer.addEventListener('pointercancel', stopResize)
+      window.addEventListener('resize', () => setSidebarWidth(Number(getSidebarWidth())))
+    }
+
+    function setSidebarWidth(width) {
+      const maxWidth = getSidebarMaxWidth()
+      const clampedWidth = Math.min(maxWidth, Math.max(SIDEBAR_MIN, Math.round(width)))
+      document.documentElement.style.setProperty('--sidebar-width', clampedWidth + 'px')
+      document.body.classList.toggle('sidebar-collapsed', clampedWidth <= SIDEBAR_COLLAPSE_THRESHOLD)
+    }
+
+    function getSidebarWidth() {
+      const value = getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width')
+      return String(parseInt(value, 10) || 244)
+    }
+
+    function getSidebarMaxWidth() {
+      const appWidth = document.querySelector('.app-window')?.clientWidth || window.innerWidth
+      return Math.max(SIDEBAR_MIN, Math.floor(appWidth / 2))
+    }
+
     async function detectChrome() {
       const res = await fetch('/api/chrome-path').then(r => r.json())
-      document.getElementById('chrome-path').value = res.path
+      document.getElementById('chrome-path').value = res.path || ''
       updateStartBtn()
     }
 
     async function pickDir() {
-      const dir = prompt('输入录制输出目录路径（例如：/Users/你的用户名/Desktop）：')
+      const dir = window.electronAPI?.pickOutputDir
+        ? await window.electronAPI.pickOutputDir()
+        : prompt('输入录制输出目录路径（例如：/Users/你的用户名/Desktop）：')
       if (dir) {
         document.getElementById('output-dir').value = dir.trim()
         updateStartBtn()
@@ -116,16 +1101,22 @@
 
     async function startRecording() {
       if (isStarting) return
-      const chromePath = document.getElementById('chrome-path').value.trim()
+      let chromePath = document.getElementById('chrome-path').value.trim()
       const outputDir = document.getElementById('output-dir').value.trim()
       const startBtn = document.getElementById('start-btn')
       document.getElementById('setup-error').textContent = ''
       isStarting = true
-      startBtn.textContent = '正在启动 Chrome...'
+      startBtn.textContent = chromePath ? '正在启动 Chrome...' : '正在查找 Chrome...'
       updateStartBtn()
 
       let res
       try {
+        if (!chromePath) {
+          const detected = await fetch('/api/chrome-path').then(r => r.json())
+          chromePath = detected.path || ''
+          document.getElementById('chrome-path').value = chromePath
+          startBtn.textContent = '正在启动 Chrome...'
+        }
         res = await fetch('/api/start-recording', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -144,35 +1135,90 @@
         return
       }
 
+      state.isRecording = true
       startTime = Date.now()
       showView('recording')
+      render()
+      startTimer()
+      connectWebSocket()
+      await fetchSummary()
+    }
 
+    function startTimer() {
+      clearInterval(timerInterval)
       timerInterval = setInterval(() => {
-        const elapsed = Date.now() - startTime
-        const m = Math.floor(elapsed / 60000)
-        const s = Math.floor((elapsed % 60000) / 1000)
-        document.getElementById('timer-display').textContent =
-          String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0')
+        document.getElementById('timer-display').textContent = formatElapsed(Date.now() - startTime)
       }, 1000)
+    }
 
-      ws = new WebSocket('ws://localhost:3456')
-      ws.onmessage = (e) => {
-        const data = JSON.parse(e.data)
+    function connectWebSocket() {
+      ws?.close()
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+      ws = new WebSocket(`${protocol}//${location.host}`)
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data)
+        if (data.type === 'summary') updateSummary(data)
         if (data.type === 'tabs') updateTabs(data.tabs)
+      }
+      ws.onclose = () => {
+        if (state.isRecording) document.getElementById('status-update').textContent = 'Reconnecting...'
       }
     }
 
+    async function fetchSummary() {
+      try {
+        const summary = await fetch('/api/summary').then(r => r.json())
+        updateSummary(summary)
+      } catch {}
+    }
+
+    function updateSummary(summary) {
+      state.summary = summary
+      syncTabs(summary.tabs || [])
+      document.getElementById('status-update').textContent = 'Last update ' + formatTime(summary.updatedAt)
+      render()
+    }
+
     function updateTabs(tabs) {
-      document.getElementById('tab-count').textContent = '已打开 Tab：' + tabs.length
-      const list = document.getElementById('tab-list')
-      list.innerHTML = tabs.map(t =>
-        `<li><span class="tab-title">${escapeHtml(t.title || '')}</span><span class="tab-url">— ${escapeHtml(t.url || '')}</span></li>`
-      ).join('')
+      if (isRedundantTabsUpdate(tabs)) return
+      syncTabs(tabs)
+      render()
+    }
+
+    function isRedundantTabsUpdate(tabs) {
+      const nextTabs = tabs || []
+      if (nextTabs.length !== state.tabs.length) return false
+      return nextTabs.every((tab, index) => {
+        const current = state.tabs[index]
+        if (!current || tab.targetId !== current.targetId) return false
+        return JSON.stringify(getCounts(tab)) === JSON.stringify(getCounts(current)) &&
+          JSON.stringify(getScreenshotKeys(tab)) === JSON.stringify(getScreenshotKeys(current))
+      })
+    }
+
+    function syncTabs(tabs) {
+      state.tabs = tabs || []
+      if (!state.selectedTargetId || !state.tabs.some(tab => tab.targetId === state.selectedTargetId)) {
+        state.selectedTargetId = state.tabs[0]?.targetId || null
+      }
+    }
+
+    function selectTab(targetId) {
+      state.selectedTargetId = targetId
+      render()
+    }
+
+    function selectDimension(dimension) {
+      state.activeDimension = dimension
+      render()
     }
 
     async function stopRecording() {
+      if (!state.isRecording) return
       clearInterval(timerInterval)
       ws?.close()
+      state.isRecording = false
+      render()
 
       const res = await fetch('/api/stop-recording', { method: 'POST' }).then(r => r.json())
       if (res.ok) {
@@ -190,24 +1236,290 @@
       })
     }
 
-    function copyPath() {
+    function copyPath(event) {
       navigator.clipboard.writeText(sessionDir).then(() => {
         const btn = event.target
-        btn.textContent = '已复制！'
-        setTimeout(() => btn.textContent = '复制路径', 2000)
+        btn.textContent = '已复制'
+        setTimeout(() => btn.textContent = '复制路径', 1800)
       })
     }
 
     function reset() {
       sessionDir = null
+      state.isRecording = false
+      state.tabs = []
+      state.selectedTargetId = null
+      state.summary = null
+      state.seenScreenshotIds.clear()
+      state.previousScreenshotOrder = []
+      state.previousCounts = {}
+      document.getElementById('timer-display').textContent = '00:00'
       showView('setup')
+      render()
     }
 
-    function escapeHtml(str) {
-      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    function render() {
+      const selectedTab = getSelectedTab()
+      const counts = getCounts(selectedTab)
+      const totals = state.summary?.totals || { events: 0, network: 0, console: 0, artifacts: 0 }
+
+      document.getElementById('global-stop-btn').disabled = !state.isRecording
+      document.getElementById('live-label').textContent = state.isRecording ? 'Recording' : 'Idle'
+      document.getElementById('live-dot').classList.toggle('idle', !state.isRecording)
+      document.getElementById('address-url').textContent = selectedTab?.url || (state.isRecording ? '等待浏览器标签连接...' : '准备开始录制')
+
+      document.getElementById('tab-count').textContent = state.tabs.length
+      document.getElementById('status-tabs').textContent = `Tabs ${state.tabs.length}`
+      document.getElementById('status-events').textContent = `Events ${totals.events}`
+      document.getElementById('status-network').textContent = `Network ${totals.network}`
+      document.getElementById('status-console').textContent = `Console ${totals.console}`
+
+      renderBrowserTabs()
+      renderDimensions(counts)
+      renderDimensionLog(selectedTab)
     }
 
-    // Auto-detect Chrome on load
+    function renderBrowserTabs() {
+      const container = document.getElementById('browser-tabs')
+      if (!state.tabs.length) {
+        container.innerHTML = '<div class="empty-state">启动录制后，新打开的浏览器标签会出现在这里。</div>'
+        return
+      }
+
+      container.innerHTML = state.tabs.map(tab => {
+        const active = tab.targetId === state.selectedTargetId ? ' active' : ''
+        const counts = getCounts(tab)
+        return `
+          <button class="browser-tab${active}" onclick="selectTab('${escapeAttr(tab.targetId)}')">
+            <span class="favicon">${escapeHtml(getInitial(tab.title || tab.url))}</span>
+            <span class="tab-title">${escapeHtml(tab.title || 'Untitled')}</span>
+            <span class="tab-badge">${counts.events}</span>
+          </button>
+        `
+      }).join('')
+    }
+
+    function renderDimensions(counts) {
+      const container = document.getElementById('dimension-tabs')
+      container.innerHTML = DIMENSIONS.map(item => {
+        const active = item.id === state.activeDimension ? ' active' : ''
+        const value = counts[item.id] || 0
+        const previousValue = state.previousCounts[item.id] ?? value
+        const isRolling = previousValue !== value
+        return `
+          <button class="dimension-tab${active}" onclick="selectDimension('${item.id}')">
+            <span class="dimension-label">${item.label}</span>
+            ${renderRollingCount(previousValue, value, isRolling)}
+          </button>
+        `
+      }).join('')
+      state.previousCounts = { ...counts }
+    }
+
+    function renderRollingCount(previousValue, value, isRolling) {
+      const previousText = String(Math.max(0, Number(previousValue) || 0))
+      const valueText = String(Math.max(0, Number(value) || 0))
+      const length = Math.max(previousText.length, valueText.length)
+      const previousDigits = previousText.padStart(length, '0')
+      const valueDigits = valueText.padStart(length, '0')
+      const digits = Array.from(valueDigits).map((digit, index) => {
+        const previousDigit = Number(previousDigits[index]) || 0
+        const targetDigit = Number(digit) || 0
+        const maxDigit = Math.max(previousDigit, targetDigit)
+        const placeFromRight = length - index - 1
+        const duration = getCountRollDuration(placeFromRight)
+        const delay = getCountRollDelay(placeFromRight)
+        const values = Array.from({ length: maxDigit + 1 }, (_, number) => `<span>${number}</span>`).join('')
+        return `
+          <span class="count-digit">
+            <span class="count-reel" style="--from-y: -${previousDigit * 16}px; --to-y: -${targetDigit * 16}px; --roll-duration: ${duration}ms; --roll-delay: ${delay}ms; transform: translateY(-${targetDigit * 16}px)">
+              ${values}
+            </span>
+          </span>
+        `
+      }).join('')
+
+      return `
+        <span class="count${isRolling ? ' is-rolling' : ''}" data-target="${escapeAttr(valueText)}">
+          <span class="count-number">${digits}</span>
+        </span>
+      `
+    }
+
+    function getCountRollDuration(placeFromRight) {
+      return Math.min(3000, 1200 + placeFromRight * 1200)
+    }
+
+    function getCountRollDelay(placeFromRight) {
+      return placeFromRight === 0 ? 120 : 0
+    }
+
+    function renderDimensionLog(tab) {
+      const dimension = state.activeDimension
+      const rows = getRecentRows(tab, dimension)
+      const total = getCounts(tab)[dimension] || 0
+      const label = DIMENSIONS.find(item => item.id === dimension)?.label || dimension
+      const screenshots = getScreenshots(tab)
+
+      document.getElementById('current-tab-label').textContent = 'Current tab: ' + (tab?.title || 'none')
+      document.getElementById('dimension-label').textContent = 'Show: ' + label
+      document.getElementById('dimension-total').textContent = `${total} total`
+
+      const log = document.getElementById('dimension-log')
+      if (dimension === 'artifacts') {
+        renderArtifacts(log, { rows, screenshots, total })
+        return
+      }
+
+      if (!state.isRecording && !rows.length) {
+        log.innerHTML = '<div class="empty-state">开始录制后，这里会显示当前浏览器标签的实时记录。</div>'
+        return
+      }
+      if (!rows.length) {
+        log.innerHTML = `<div class="empty-state">当前标签暂时没有 ${label} 数据。</div>`
+        return
+      }
+
+      log.innerHTML = rows.map((row, index) => `
+        <div class="log-row${index === 0 ? ' selected' : ''}">
+          <span class="time">${escapeHtml(formatEventTime(row.time))}</span>
+          <span class="chip ${escapeHtml(String(row.kind || '').toLowerCase())}">${escapeHtml(row.kind || label)}</span>
+          <span class="message">${escapeHtml(row.title || '')}</span>
+          <span class="source">${escapeHtml(row.detail || '')}</span>
+        </div>
+      `).join('')
+    }
+
+    function renderArtifacts(container, { rows, screenshots, total }) {
+      const sortedScreenshots = [...screenshots].sort((a, b) => Number(b.timestamp) - Number(a.timestamp))
+      const previousPositions = new Map(state.previousScreenshotOrder.map((key, index) => [key, index]))
+      const previousRects = new Map(Array.from(container.querySelectorAll('.screenshot-card')).map(card => [
+        card.dataset.screenshotId,
+        card.getBoundingClientRect()
+      ]))
+      const currentOrder = sortedScreenshots.map(item => getScreenshotKey(item))
+
+      if (!state.isRecording && total === 0) {
+        container.innerHTML = '<div class="empty-state">开始录制后，截图会以缩略图形式在这里实时出现。</div>'
+        state.previousScreenshotOrder = currentOrder
+        return
+      }
+      if (!sortedScreenshots.length && total === 0) {
+        container.innerHTML = '<div class="empty-state">当前标签暂时没有截图物料。</div>'
+        state.previousScreenshotOrder = currentOrder
+        return
+      }
+
+      container.innerHTML = `
+        <div class="artifact-view">
+          ${sortedScreenshots.length ? `
+            <div class="screenshot-grid">
+              ${sortedScreenshots.map((item, index) => {
+                const screenshotKey = getScreenshotKey(item)
+                const isNew = !state.seenScreenshotIds.has(screenshotKey)
+                const previousIndex = previousPositions.get(screenshotKey)
+                const isShifted = !isNew && previousIndex !== undefined && previousIndex < index
+                state.seenScreenshotIds.add(screenshotKey)
+                return `
+                <figure class="screenshot-card${isNew ? ' is-new' : ''}${isShifted ? ' is-shifted' : ''}" data-screenshot-id="${escapeAttr(item.timestamp)}">
+                  <div class="screenshot-thumb">
+                    <img class="${isNew ? '' : 'is-loaded'}" src="${escapeAttr(item.thumbnailUrl)}" alt="${escapeAttr(item.title)}" loading="lazy" onload="this.classList.add('is-loaded')">
+                  </div>
+                  <time class="screenshot-time" datetime="${escapeAttr(new Date(Number(item.timestamp) || Date.now()).toISOString())}">${escapeHtml(formatEventTime(item.timestamp))}</time>
+                </figure>
+              `}).join('')}
+            </div>
+          ` : '<div class="empty-state">截图生成后会在这里淡入。</div>'}
+        </div>
+      `
+      container.querySelectorAll('.screenshot-card.is-shifted').forEach(card => {
+        const previousRect = previousRects.get(card.dataset.screenshotId)
+        if (!previousRect) return
+        const currentRect = card.getBoundingClientRect()
+        const moveX = previousRect.left - currentRect.left
+        const moveY = previousRect.top - currentRect.top
+        card.style.setProperty('--move-x', `${moveX}px`)
+        card.style.setProperty('--move-y', `${moveY}px`)
+        if (shouldReduceMotion()) return
+        card.animate([
+          { transform: `translate(${moveX}px, ${moveY}px) scale(.992)` },
+          { transform: 'translate(0, 0) scale(1)' }
+        ], {
+          duration: 240,
+          easing: 'cubic-bezier(0.77, 0, 0.175, 1)'
+        })
+      })
+      state.previousScreenshotOrder = currentOrder
+    }
+
+    function shouldReduceMotion() {
+      return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    }
+
+    function getSelectedTab() {
+      return state.tabs.find(tab => tab.targetId === state.selectedTargetId) || null
+    }
+
+    function getCounts(tab) {
+      if (!tab) return { events: 0, network: 0, console: 0, artifacts: 0 }
+      return tab.counts || { events: 0, network: 0, console: 0, artifacts: 0 }
+    }
+
+    function getRecentRows(tab, dimension) {
+      if (!tab) return []
+      return tab.recent?.[dimension] || []
+    }
+
+    function getScreenshots(tab) {
+      if (!tab) return []
+      return tab.artifacts?.screenshots || []
+    }
+
+    function getScreenshotKeys(tab) {
+      return getScreenshots(tab).map(item => getScreenshotKey(item))
+    }
+
+    function getScreenshotKey(item) {
+      return `${item.thumbnailUrl || ''}:${item.timestamp}`
+    }
+
+    function getInitial(value = '') {
+      const char = value.trim().replace(/^https?:\/\//, '')[0]
+      return (char || 'T').toUpperCase()
+    }
+
+    function formatElapsed(ms) {
+      const totalSeconds = Math.floor(ms / 1000)
+      const minutes = Math.floor(totalSeconds / 60)
+      const seconds = totalSeconds % 60
+      return String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0')
+    }
+
+    function formatTime(timestamp) {
+      if (!timestamp) return 'Idle'
+      return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    }
+
+    function formatEventTime(timestamp) {
+      if (!timestamp) return '—'
+      if (timestamp > 1000000000000) return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      return String(timestamp).slice(0, 8)
+    }
+
+    function escapeHtml(str = '') {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+    }
+
+    function escapeAttr(str = '') {
+      return escapeHtml(str).replace(/'/g, '&#39;')
+    }
+
+    initSidebarResize()
+    render()
     detectChrome()
   </script>
 </body>

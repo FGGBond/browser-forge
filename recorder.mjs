@@ -14,10 +14,12 @@ import { execSync } from 'child_process'
 import open from 'open'
 import { findChromePath, launchChrome } from './src/main/chrome-launcher.js'
 import { RecordingSession } from './src/main/recorder/index.js'
+import { shouldClearActiveSession } from './src/main/recorder/session-state.js'
+import { resolveStartOptions } from './src/main/recorder/start-options.js'
 import { homedir } from 'os'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const PORT = 3456
+const PORT = Number(process.env.PORT || 3456)
 
 const app = express()
 const server = createServer(app)
@@ -27,6 +29,13 @@ let chromeProcess = null
 let activeSession = null
 let sessionDir = null
 let isStarting = false
+
+async function clearActiveSession() {
+  await activeSession?._cdp?.disconnect?.().catch(() => {})
+  activeSession = null
+  chromeProcess?.kill?.()
+  chromeProcess = null
+}
 
 // Serve the UI
 app.use(express.json())
@@ -39,17 +48,29 @@ app.get('/api/chrome-path', async (req, res) => {
 })
 
 app.post('/api/start-recording', async (req, res) => {
-  const { chromePath, outputDir, port = 9222 } = req.body
+  const { port = 9222 } = req.body
+  if (shouldClearActiveSession({ activeSession, chromeProcess })) {
+    await clearActiveSession()
+  }
   if (isStarting) return res.json({ ok: false, error: 'Recording is already starting' })
   if (activeSession) return res.json({ ok: false, error: 'Recording is already active' })
 
   isStarting = true
   try {
+    const { chromePath, outputDir } = await resolveStartOptions({
+      chromePath: req.body.chromePath,
+      outputDir: req.body.outputDir,
+      port,
+      findChromePath
+    })
     chromeProcess = launchChrome({
       execPath: chromePath,
       port,
       userDataDir: join(homedir(), '.browser-forge', 'chrome-profile'),
       startUrl: `http://localhost:${PORT}/recording-start.html`
+    })
+    chromeProcess.once('exit', () => {
+      if (activeSession) clearActiveSession().catch(() => {})
     })
     await new Promise(r => setTimeout(r, 2000))
     // macOS：把新 Chrome 窗口置前
@@ -61,8 +82,7 @@ app.post('/api/start-recording', async (req, res) => {
     sessionDir = null
     res.json({ ok: true })
   } catch (e) {
-    chromeProcess?.kill()
-    chromeProcess = null
+    await clearActiveSession()
     res.json({ ok: false, error: e.message })
   } finally {
     isStarting = false
@@ -73,11 +93,10 @@ app.post('/api/stop-recording', async (req, res) => {
   if (!activeSession) return res.json({ ok: false, error: 'No active session' })
   try {
     sessionDir = await activeSession.stop()
-    activeSession = null
-    chromeProcess?.kill()
-    chromeProcess = null
+    await clearActiveSession()
     res.json({ ok: true, sessionDir })
   } catch (e) {
+    await clearActiveSession()
     res.json({ ok: false, error: e.message })
   }
 })
@@ -85,6 +104,25 @@ app.post('/api/stop-recording', async (req, res) => {
 app.get('/api/tabs', (req, res) => {
   const tabs = activeSession?._cdp.getTargets() ?? []
   res.json({ tabs })
+})
+
+app.get('/api/summary', async (req, res) => {
+  if (shouldClearActiveSession({ activeSession, chromeProcess })) {
+    await clearActiveSession()
+  }
+  res.json(activeSession?.getLiveSummary() ?? {
+    type: 'summary',
+    startedAt: null,
+    updatedAt: Date.now(),
+    tabs: [],
+    totals: { events: 0, network: 0, console: 0, artifacts: 0 }
+  })
+})
+
+app.get('/api/screenshots/:targetId/:timestamp.png', (req, res) => {
+  const image = activeSession?.getScreenshot(req.params.targetId, req.params.timestamp)
+  if (!image) return res.status(404).end()
+  res.type('png').send(image)
 })
 
 app.post('/api/open-folder', (req, res) => {
@@ -97,10 +135,10 @@ app.post('/api/open-folder', (req, res) => {
 wss.on('connection', (ws) => {
   const interval = setInterval(() => {
     if (activeSession) {
-      const tabs = activeSession._cdp.getTargets()
-      ws.send(JSON.stringify({ type: 'tabs', tabs }))
+      const summary = activeSession.getLiveSummary()
+      ws.send(JSON.stringify(summary))
     }
-  }, 2000)
+  }, 1000)
   ws.on('close', () => clearInterval(interval))
 })
 
@@ -115,6 +153,6 @@ process.on('SIGINT', async () => {
     console.log('\nStopping recording...')
     await activeSession.stop().catch(() => {})
   }
-  chromeProcess?.kill()
+  await clearActiveSession()
   process.exit(0)
 })
