@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
-import { access, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { access, chmod, copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join, relative } from 'node:path'
 import { homedir } from 'node:os'
@@ -75,6 +75,38 @@ async function hashDirectory(rootDir) {
   return `sha256:${hash.digest('hex')}`
 }
 
+
+async function copyDirectoryRecursive(sourceDir, targetDir) {
+  const sourceStats = await stat(sourceDir)
+  if (!sourceStats.isDirectory()) {
+    throw new Error(`${sourceDir} is not a directory`)
+  }
+
+  await mkdir(targetDir, { recursive: true })
+  const entries = await readdir(sourceDir, { withFileTypes: true })
+  for (const entry of entries) {
+    const sourcePath = join(sourceDir, entry.name)
+    const targetPath = join(targetDir, entry.name)
+    if (entry.isDirectory()) {
+      await copyDirectoryRecursive(sourcePath, targetPath)
+    } else if (entry.isFile()) {
+      await mkdir(dirname(targetPath), { recursive: true })
+      try {
+        await copyFile(sourcePath, targetPath)
+      } catch {
+        await writeFile(targetPath, await readFile(sourcePath))
+      }
+      try {
+        const fileStats = await stat(sourcePath)
+        await chmod(targetPath, fileStats.mode)
+      } catch {
+        // Best-effort mode preservation. Some virtual filesystems, including
+        // Electron asar, may not expose chmod-compatible metadata.
+      }
+    }
+  }
+}
+
 async function copyPackageWithDependencies(packageName, targetNodeModules, copied = new Set()) {
   if (copied.has(packageName)) return
   copied.add(packageName)
@@ -83,7 +115,8 @@ async function copyPackageWithDependencies(packageName, targetNodeModules, copie
   const packageRoot = dirname(packageJsonPath)
   const targetRoot = join(targetNodeModules, packageName)
   await mkdir(dirname(targetRoot), { recursive: true })
-  await cp(packageRoot, targetRoot, { recursive: true, force: true, errorOnExist: false })
+  await rm(targetRoot, { recursive: true, force: true })
+  await copyDirectoryRecursive(packageRoot, targetRoot)
 
   const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8'))
   const dependencyNames = [
@@ -111,11 +144,11 @@ async function copyRuntimeDependencies(runtimeTarget) {
 }
 
 async function copySkillToStaging({ sourceSkillDir, runtimeSourceDir, stagingDir }) {
-  await cp(sourceSkillDir, stagingDir, { recursive: true, force: true, errorOnExist: false })
+  await copyDirectoryRecursive(sourceSkillDir, stagingDir)
   const runtimeTarget = join(stagingDir, 'scripts', 'runtime')
   await rm(runtimeTarget, { recursive: true, force: true })
   await mkdir(dirname(runtimeTarget), { recursive: true })
-  await cp(runtimeSourceDir, runtimeTarget, { recursive: true, force: true, errorOnExist: false })
+  await copyDirectoryRecursive(runtimeSourceDir, runtimeTarget)
   await copyRuntimeDependencies(runtimeTarget)
 }
 
