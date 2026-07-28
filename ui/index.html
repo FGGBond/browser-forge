@@ -1131,7 +1131,9 @@
       }
 
       if (!res.ok) {
-        document.getElementById('setup-error').textContent = '启动失败：' + res.error
+        const logHint = res.logFile ? `
+日志：${res.logFile}` : ''
+        document.getElementById('setup-error').textContent = '启动失败：' + res.error + logHint
         return
       }
 

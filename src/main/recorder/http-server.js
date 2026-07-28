@@ -1,10 +1,11 @@
 import express from 'express'
 import { WebSocketServer } from 'ws'
 import { createServer } from 'http'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { homedir } from 'os'
+import { appendFile, mkdir, writeFile } from 'fs/promises'
 import open from 'open'
-import { findChromePath as defaultFindChromePath, launchChrome as defaultLaunchChrome } from '../chrome-launcher.js'
+import { findAvailablePort as defaultFindAvailablePort, findChromePath as defaultFindChromePath, launchChrome as defaultLaunchChrome, waitForChromeDebugEndpoint as defaultWaitForChromeDebugEndpoint } from '../chrome-launcher.js'
 import { RecordingSession as DefaultRecordingSession } from './index.js'
 import { shouldClearActiveSession } from './session-state.js'
 import { resolveStartOptions } from './start-options.js'
@@ -16,8 +17,11 @@ export function createRecorderHttpServer({
   openFolder = open,
   findChromePath = defaultFindChromePath,
   launchChrome = defaultLaunchChrome,
+  findAvailablePort = defaultFindAvailablePort,
+  waitForChromeDebugEndpoint = defaultWaitForChromeDebugEndpoint,
   RecordingSession = DefaultRecordingSession,
-  startupDelayMs = 2000,
+  chromeReadyTimeoutMs = 20000,
+  startupLogFile = join(homedir(), 'Library', 'Application Support', 'browser-forge', 'recorder-startup.log'),
   afterChromeLaunch = async () => {}
 } = {}) {
   const app = express()
@@ -28,6 +32,17 @@ export function createRecorderHttpServer({
   let activeSession = null
   let sessionDir = null
   let isStarting = false
+
+  async function resetStartupLog(lines = []) {
+    if (!startupLogFile) return
+    await mkdir(dirname(startupLogFile), { recursive: true })
+    await writeFile(startupLogFile, `${lines.join('\n')}\n`)
+  }
+
+  async function appendStartupLog(line) {
+    if (!startupLogFile) return
+    await appendFile(startupLogFile, `${line}\n`).catch(() => {})
+  }
 
   async function clearActiveSession() {
     await activeSession?._cdp?.disconnect?.().catch(() => {})
@@ -65,7 +80,6 @@ export function createRecorderHttpServer({
   })
 
   app.post('/api/start-recording', async (req, res) => {
-    const { port: chromePort = 9222 } = req.body
     if (shouldClearActiveSession({ activeSession, chromeProcess })) {
       await clearActiveSession()
     }
@@ -73,7 +87,14 @@ export function createRecorderHttpServer({
     if (activeSession) return res.json({ ok: false, error: 'Recording is already active' })
 
     isStarting = true
+    let chromePort
     try {
+      chromePort = Number(req.body.port) || await findAvailablePort()
+      const checkedAt = new Date().toISOString()
+      await resetStartupLog([
+        `[${checkedAt}] Browser Forge recorder startup`,
+        `chromePort=${chromePort}`
+      ])
       const { chromePath, outputDir } = await resolveStartOptions({
         chromePath: req.body.chromePath,
         outputDir: req.body.outputDir,
@@ -81,24 +102,41 @@ export function createRecorderHttpServer({
         findChromePath
       })
       const baseUrl = startUrlBase || `http://127.0.0.1:${server.address().port}`
+      const userDataDir = join(homedir(), '.browser-forge', 'chrome-profile')
+      await appendStartupLog(`chromePath=${chromePath}`)
+      await appendStartupLog(`userDataDir=${userDataDir}`)
+      await appendStartupLog(`startUrl=${baseUrl}/recording-start.html`)
       chromeProcess = launchChrome({
         execPath: chromePath,
         port: chromePort,
-        userDataDir: join(homedir(), '.browser-forge', 'chrome-profile'),
+        userDataDir,
         startUrl: `${baseUrl}/recording-start.html`
       })
-      chromeProcess.once?.('exit', () => {
+      await appendStartupLog(`chromePid=${chromeProcess.pid ?? 'unknown'}`)
+      await appendStartupLog(`chromeArgs=${JSON.stringify(chromeProcess.browserForge?.args ?? [])}`)
+      chromeProcess.once?.('exit', (code, signal) => {
+        appendStartupLog(`chromeExit code=${code ?? ''} signal=${signal ?? ''}`).catch(() => {})
         if (activeSession) clearActiveSession().catch(() => {})
       })
-      if (startupDelayMs > 0) await new Promise(resolve => setTimeout(resolve, startupDelayMs))
+      chromeProcess.once?.('error', error => {
+        appendStartupLog(`chromeSpawnError=${error.message}`).catch(() => {})
+      })
+      await waitForChromeDebugEndpoint({
+        port: chromePort,
+        chromeProcess,
+        timeoutMs: chromeReadyTimeoutMs
+      })
+      await appendStartupLog('chromeDebugEndpoint=ready')
       await afterChromeLaunch()
       activeSession = new RecordingSession({ port: chromePort, outputDir })
       await activeSession.start()
       sessionDir = null
-      res.json({ ok: true })
+      await appendStartupLog('recordingSession=started')
+      res.json({ ok: true, port: chromePort })
     } catch (error) {
+      await appendStartupLog(`startupError=${error.message}`)
       await clearActiveSession()
-      res.json({ ok: false, error: error.message })
+      res.json({ ok: false, error: error.message, logFile: startupLogFile })
     } finally {
       isStarting = false
     }
