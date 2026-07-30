@@ -11,7 +11,7 @@ const PATTERNS = [
   },
   {
     code: 'JD_SESSION_COOKIE',
-    expression: /\b(?:me_token|sso_token|ssa_token|sso\.jd\.com|ssa\.[A-Za-z0-9_.-]+)\s*=\s*([^\s;'"`{}]+)/gi
+    expression: /\b(?:me_token|sso_token|ssa_token|ssa\.jd\.com|ssa\.[A-Za-z0-9_.-]+)\s*=\s*([^\s;'"`{}]+)/gi
   },
   {
     code: 'AUTHORIZATION_HEADER',
@@ -26,8 +26,11 @@ const PATTERNS = [
     expression: /["']?(?:access_token|api[_-]?key|csrf[_-]?token|secret|token)["']?\s*[:=]\s*["']?([A-Za-z0-9_-]{16,})/gi
   },
   {
+    // Bare high-entropy tokens. Require a digit + length 32 to reduce
+    // false-positives on identifiers we generate ourselves (e.g. the wrapper
+    // path `browser_forge-<skill-name>` frequently sits in the 24-31 range).
     code: 'HIGH_ENTROPY_SECRET',
-    expression: /\b([A-Za-z0-9_-]{24,})\b/g
+    expression: /\b([A-Za-z0-9_-]{32,})\b/g
   }
 ]
 
@@ -41,7 +44,7 @@ function hasHighEntropy(value) {
   const entropy = [...counts.values()]
     .map(count => count / value.length)
     .reduce((sum, probability) => sum - probability * Math.log2(probability), 0)
-  return entropy >= 3.5
+  return entropy >= 3.5 && /\d/.test(value)
 }
 
 function lineAndColumn(text, offset) {
@@ -51,11 +54,36 @@ function lineAndColumn(text, offset) {
   return { line, column: offset - lastNewline }
 }
 
-function finding(code, path, text, offset) {
-  return { code, path, ...lineAndColumn(text, offset), preview: `${code}: [REDACTED]` }
+function shortPreview(value) {
+  if (value.length <= 8) return value
+  return `${value.slice(0, 4)}…${value.slice(-4)}`
 }
 
-export function scanText(text, relativePath) {
+function finding(code, path, text, offset, secret) {
+  return { code, path, ...lineAndColumn(text, offset), preview: `${code}: ${shortPreview(secret)}` }
+}
+
+function buildIdentifierAllowlist(hints = []) {
+  const values = new Set()
+  for (const hint of hints) {
+    if (typeof hint !== 'string' || !hint) continue
+    values.add(hint)
+    values.add(hint.replaceAll('-', '_'))
+    values.add(hint.replaceAll('_', '-'))
+  }
+  return values
+}
+
+function matchesAllowlist(secret, allowlist) {
+  if (allowlist.has(secret)) return true
+  for (const entry of allowlist) {
+    if (!entry) continue
+    if (secret.includes(entry)) return true
+  }
+  return false
+}
+
+export function scanText(text, relativePath, { identifierAllowlist = new Set() } = {}) {
   const findings = []
   const occupied = []
 
@@ -68,17 +96,32 @@ export function scanText(text, relativePath) {
       if (
         isRedacted(secret) ||
         (code === 'HIGH_ENTROPY_SECRET' && !hasHighEntropy(secret)) ||
+        (code === 'HIGH_ENTROPY_SECRET' && matchesAllowlist(secret, identifierAllowlist)) ||
         occupied.some(range => start < range.end && end > range.start)
       ) continue
       occupied.push({ start, end })
-      findings.push(finding(code, relativePath, text, start))
+      findings.push(finding(code, relativePath, text, start, secret))
     }
   }
 
   return findings.sort((left, right) => left.line - right.line || left.column - right.column)
 }
 
+async function manifestHints(root) {
+  try {
+    const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8'))
+    const hints = [manifest?.id, manifest?.name]
+    const entrypoint = manifest?.cli?.entrypoint
+    if (typeof entrypoint === 'string') hints.push(entrypoint.replace(/^scripts\//, ''))
+    if (manifest?.name) hints.push(`browser_forge_${String(manifest.name).replaceAll('-', '_')}`)
+    return hints.filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
 export async function scanTree(root) {
+  const allowlist = buildIdentifierAllowlist(await manifestHints(root))
   const findings = []
 
   async function scanDirectory(directory) {
@@ -90,7 +133,7 @@ export async function scanTree(root) {
       } else if (entry.isFile()) {
         const text = await readFile(path, 'utf8')
         const relativePath = relative(root, path).split(sep).join('/')
-        findings.push(...scanText(text, relativePath))
+        findings.push(...scanText(text, relativePath, { identifierAllowlist: allowlist }))
       }
     }
   }

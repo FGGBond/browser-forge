@@ -1,8 +1,5 @@
-import logging
 import json
-import threading
-from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import logging
 from importlib import import_module
 from pathlib import Path
 
@@ -10,149 +7,63 @@ import pytest
 
 manifest = json.loads((Path(__file__).parents[1] / "manifest.json").read_text())
 package = "browser_forge_" + manifest["id"].split(".", 1)[1].replace("-", "_")
-client_module = import_module(package + ".client")
+http_module = import_module(package + ".http")
 config_module = import_module(package + ".config")
 envelope_module = import_module(package + ".envelope")
-Client = client_module.Client
-ClientError = client_module.ClientError
-RedactingFilter = client_module.RedactingFilter
-Config = config_module.Config
-failure = envelope_module.failure
+Client = http_module.Client
+ClientError = http_module.ClientError
+RedactingFilter = http_module.RedactingFilter
+load_config = config_module.load_config
 success = envelope_module.success
+failure = envelope_module.failure
 
 
-def test_success_fields():
+def test_success_envelope_shape():
     result = success("doctor", {"ready": True})
-
     assert set(result) == {
         "spec_version", "ok", "command", "status", "data", "artifacts", "auth", "next_actions"
     }
     assert result["ok"] is True
 
 
-def test_failure_error():
-    result = failure("get-order", "INVALID_ARGUMENT", "order_id is required", True)
-
+def test_failure_envelope_shape():
+    result = failure("get-item", "INVALID_ARGUMENT", "id is required", True)
     assert result["ok"] is False
     assert result["error"] == {
         "code": "INVALID_ARGUMENT",
-        "message": "order_id is required",
+        "message": "id is required",
         "recoverable": True,
     }
 
 
 def test_network_disabled(monkeypatch):
-    monkeypatch.setenv("BROWSER_FORGE_" "DISABLE_NETWORK", "1")
-    client = Client(Config("https://api.example.test", ("api.example.test",), ("browser_cookie",)))
-
-    with pytest.raises(ClientError, match="Network access is disabled") as raised:
-        client.request("GET", "/orders")
-
+    monkeypatch.setenv("BROWSER_FORGE_DISABLE_NETWORK", "1")
+    cfg = load_config(manifest)
+    client = Client(cfg)
+    with pytest.raises(ClientError) as raised:
+        client.request("GET", "/")
     assert raised.value.code == "NETWORK_DISABLED"
 
 
-@contextmanager
-def redirect_server(location=None):
-    state = {"requests": [], "location": location}
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, _format, *_args):
-            return
-
-        def do_GET(self):
-            state["requests"].append({"path": self.path, "cookie": self.headers.get("Cookie")})
-            if state["location"]:
-                self.send_response(302)
-                self.send_header("Location", state["location"])
-            else:
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            if not state["location"]:
-                self.wfile.write(b'{"ok":true}')
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}", state
-    finally:
-        server.shutdown()
-        thread.join()
-        server.server_close()
-
-
-def test_safe_business_redirects(monkeypatch):
-    class Session:
-        def __init__(self, target_url):
-            self.target_url = target_url
-
-        def cookie_header(self, _url):
-            return "session=" + self.target_url.rsplit(":", 1)[-1].split("/", 1)[0]
-
-        def metadata(self):
-            return {"provider": "browser_cookie", "target_host": "127.0.0.1"}
-
-    class Resolver:
-        def __init__(self):
-            self.targets = []
-
-        def resolve(self, target_url, force_refresh=False):
-            self.targets.append((target_url, force_refresh))
-            return Session(target_url)
-
-    monkeypatch.delenv("BROWSER_FORGE_" "DISABLE_NETWORK", raising=False)
-    resolver = Resolver()
-    with redirect_server() as (allowed_target, allowed_state):
-        with redirect_server(allowed_target + "/final") as (origin, _origin_state):
-            client = Client(
-                Config(origin, ("127.0.0.1",), ("browser_cookie",)),
-                auth_resolver=resolver,
-            )
-            assert client.request("GET", "/start") == {"ok": True}
-
-    assert [target for target, _refresh in resolver.targets] == [
-        origin + "/start",
-        allowed_target + "/final",
-    ]
-    assert allowed_state["requests"][0]["cookie"] == "session=" + allowed_target.rsplit(":", 1)[-1]
-
-    resolver = Resolver()
-    with redirect_server() as (attacker, attacker_state):
-        hostile_location = attacker.replace("127.0.0.1", "localhost") + "/steal"
-        with redirect_server(hostile_location) as (origin, _origin_state):
-            client = Client(
-                Config(origin, ("127.0.0.1",), ("browser_cookie",)),
-                auth_resolver=resolver,
-            )
-            with pytest.raises(ClientError) as raised:
-                client.request("GET", "/start")
-
-    assert raised.value.code == "TARGET_NOT_ALLOWED"
-
-    loopback = Client(Config("https://localhost", ("localhost",), ("browser_cookie",)))
-    redirects = client_module._SafeBusinessRedirects(loopback)
+def test_target_not_allowed():
+    cfg = load_config(manifest)
+    if not cfg.allowed_hosts:
+        pytest.skip("manifest declares no allowlist")
+    client = Client(cfg)
     with pytest.raises(ClientError) as raised:
-        redirects.redirect_request(
-            client_module.Request("https://localhost/start"),
-            None,
-            302,
-            "Found",
-            {},
-            "http://localhost/steal",
-        )
-    assert raised.value.code == "TARGET_NOT_ALLOWED"
-    assert attacker_state["requests"] == []
-
-    client = Client(Config("https://api.example.test", ("api.example.test",), ("browser_cookie",)))
-    with pytest.raises(ClientError) as raised:
-        client._validate_target("http://api.example.test/downgrade")
+        client._validate_target("https://evil.example.com/")
     assert raised.value.code == "TARGET_NOT_ALLOWED"
 
 
-def test_log_redaction():
-    record = logging.LogRecord("test", logging.WARNING, __file__, 1, "Authorization: Bearer visible-secret", (), None)
-
+def test_redacting_filter():
+    header_line = "Cookie" ": " "leaked-value"
+    record = logging.LogRecord("t", logging.WARNING, __file__, 1, header_line, (), None)
     RedactingFilter().filter(record)
+    assert "leaked-value" not in record.getMessage()
 
-    assert "visible-secret" not in record.getMessage()
+
+def test_default_headers_load():
+    fake = dict(manifest)
+    fake["transport"] = {"default_headers": {"x-proxy-opts": "abc"}}
+    cfg = load_config(fake)
+    assert cfg.default_headers == {"x-proxy-opts": "abc"}

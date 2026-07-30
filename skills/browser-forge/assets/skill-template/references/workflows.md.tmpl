@@ -1,8 +1,18 @@
 # Workflows
 
-Document recording-confirmed request sequences here. Do not copy recording
-files, credentials, cookies, tokens, or personal data into this skill.
+Multi-command sequences confirmed from the recording. Do not copy recording
+files, cookies, tokens, or personal data.
 
-Declare each request as `METHOD /path`, give every step a unique ID, and list
-only dependencies that appear earlier in the command. Put optional sanitized
-JSON payload templates in the step's `body` field.
+## Command patterns
+
+- **Steps command** — for straight-through HTTP: list each request as
+  `METHOD /path` with a unique `id`, and reference earlier steps in
+  `depends_on`. `{placeholder}` tokens resolve from `inputs`.
+- **Handler command** — for anything with branching, filtering, verification,
+  or fan-out: set `handler: "<module>:<function>"` and implement
+  `scripts/cli/src/{{PACKAGE_NAME}}/commands/<module>.py` using
+  `from browser_forge_generated.handler import command`.
+
+The handler receives `(inputs, ctx)`. `ctx.http(method, path_or_url, body=None,
+headers=None, params=None)` runs through the client with default_headers and
+the manifest's auth strategy applied.

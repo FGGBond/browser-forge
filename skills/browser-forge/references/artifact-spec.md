@@ -1,41 +1,110 @@
-# Populate the generated artifact
+# Populate the generated skill
 
-## Keep the package standalone
+## Keep the framework thin
 
-Populate only the new directory created by `generate-skill`. Keep the copied Python 3.10+ CLI and authentication runtime independent of the browser-forge repository. Do not copy the source recording into the package.
+The generator writes a self-contained Python package under
+`scripts/cli/src/<pkg>/`. Do not modify these framework files after
+generation (validator will refuse them):
 
-Maintain this contract:
+- `cli.py`, `envelope.py`, `manifest.py`, `config.py`, `http.py`, `auth.py`,
+  `handler.py`, `telemetry.py`, `__init__.py`, `__main__.py`,
+  `commands/__init__.py`.
 
-| Artifact | Required content |
-| --- | --- |
-| `SKILL.md` | YAML `name`/`description` frontmatter, command list, stable entrypoint, standard invocation, and direct links to detailed references. |
-| `manifest.json` | The machine-readable source of truth for identity, runtime, auth, schemas, commands, dependencies, request steps, and required features. |
-| `references/commands/<command>.md` | Purpose, inputs and sources, outputs, dependencies, side effects, idempotency, examples, and next actions. |
-| `references/workflows.md` | Recording-confirmed multi-command and multi-request sequences. |
-| `references/knowledge.md` | Durable target-system knowledge without secrets or personal recording values. |
-| `scripts/browser_forge-<skill>` | The stable executable wrapper. |
-| `tests/` | Offline, fully sanitized contract, command, and authentication coverage. |
+Everything else is yours to edit: `manifest.json`, the entire `commands/`
+directory (except `__init__.py`), `references/**`, `tests/**`,
+`README`-style docs.
 
-## Define every business command
+## The two command execution modes
 
-Add one manifest command entry and matching CLI/help/reference/test implementation. Declare at least:
+### Handler mode (default choice)
 
-- `id`, `summary`, `side_effect`, and `idempotent`;
-- typed inputs with `required` and `sources`; for derived inputs, give both the producing `command` and `json_path`;
-- an output `schema_ref` backed by `$defs`;
-- required auth and command dependencies;
-- ordered internal HTTP `steps` with unique IDs, `METHOD /path` requests, optional JSON `body` templates, and backward-only `depends_on` edges;
-- `next_actions` with output-to-input bindings;
-- `safety.dry_run`, `safety.retry_risk`, and `safety.verification` metadata for side effects.
+1. Declare the command in `manifest.json`:
 
-Keep `manifest.json`, CLI behavior, `--help`, and command references consistent. Never silently retry a non-idempotent request. If safe dry-run is impossible, state that in both the manifest and help.
+   ```json
+   {
+     "id": "swap-rota",
+     "summary": "Swap the alarm rota bound to a DongSchedule job.",
+     "handler": "swap_rota:run",
+     "side_effect": true,
+     "idempotent": true,
+     "safety": {"dry_run": "supported", "retry_risk": "safe", "verification": "GET jobinfo/get after POST."},
+     "inputs": [
+       {"name": "job_id", "type": "integer", "required": true},
+       {"name": "rota", "type": "string", "required": true}
+     ],
+     "outputs": {"schema_ref": "#/$defs/swap-rota-output"},
+     "requires": {"auth": true, "commands": []},
+     "next_actions": []
+   }
+   ```
 
-The generated runtime returns every request response under `data.steps[step-id]`
-and the final command value under `data.output`. Keep response-source JSON Paths
-within the producing command's declared output schema.
+2. Implement `scripts/cli/src/<pkg>/commands/swap_rota.py`:
 
-## Preserve built-ins and output contracts
+   ```python
+   from browser_forge_generated.handler import command
 
-Keep `doctor`, `auth-status`, and `describe [command]`. Make every non-help invocation emit exactly one JSON object on stdout; write redacted logs only to stderr. Preserve the `spec_version`, status, data, artifacts, auth, next-actions, error, and exit-code contracts supplied by the template.
+   @command("swap-rota")
+   def run(inputs, ctx):
+       job = ctx.http("GET", f"/api/jd-schedule/jobinfo/get?id={inputs['job_id']}")
+       ...
+       return {"status": "updated", "before": ..., "after": ...}
+   ```
 
-Run generated tests after population. Then run `validate-skill`; treat any schema, dangling command, illegal cycle, unresolved schema/JSON Path, command/help mismatch, incomplete marker, or secret finding as a release blocker.
+3. Return a plain dict (goes into envelope `data`). Raise
+   `HandlerError(code, msg)` or `ClientError` for typed failures; other
+   exceptions become `INTERNAL_ERROR`.
+
+`ctx.http(method, path_or_url, body=None, headers=None, params=None)` runs
+through the shared client — auth is attached, `default_headers` are merged,
+SSO redirect stubs are turned into `AUTH_REFRESH_REQUIRED`.
+
+### Steps mode (only for straight-through flows)
+
+```json
+{
+  "id": "list-orders",
+  "steps": [
+    {"id": "list", "request": "GET /orders?status={status}", "depends_on": []}
+  ]
+}
+```
+
+Placeholders `{name}` are substituted from `inputs`.
+
+## Every command must declare
+
+- `id` (kebab-case), `summary`, `side_effect`, `idempotent`, `inputs`,
+  `outputs.schema_ref` (must resolve to a `$defs` entry), `requires`,
+  `next_actions`.
+- Side-effect commands must also declare `safety` (dry_run / retry_risk /
+  verification).
+- Its command reference doc at `references/commands/<id>.md` must include the
+  `Inputs / Dependencies / Authentication / Output / Next actions / Side
+  effects / Idempotency / Examples` sections and reference its
+  `outputs.schema_ref`.
+
+## Transport metadata
+
+- `manifest.transport.default_headers` — headers applied to every request.
+- `manifest.transport.per_host` — headers keyed by target host; merged after
+  `default_headers`.
+- Never place `Cookie`, `Authorization`, or any `*token*` / `*ticket*` header
+  here (the validator rejects it).
+
+## Output contract
+
+Every non-help invocation prints exactly **one JSON envelope** on stdout.
+Redacted logs go to stderr. Do not print anywhere else.
+
+## Tests
+
+The template ships pytest coverage for envelope, config, and network gate.
+Add tests under `tests/` for your handlers — mock the HTTP client, do not
+hit the network.
+
+## Ready gate
+
+Flip `manifest.status` from `draft` to `ready` only after `validate-skill`
+returns `{"ok": true}`. Ready mode enforces every gate (command parity,
+help metadata, output schemas, transport policy, handler-reference validity,
+runtime integrity, secret scan).

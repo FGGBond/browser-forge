@@ -9,7 +9,7 @@
     "progressive-help",
     "json-envelope",
     "offline-network-guard",
-    "standalone-auth-runtime"
+    "external-auth-runtime"
   ],
   "cli": {
     "entrypoint": "scripts/{{ENTRYPOINT_NAME}}",
@@ -18,8 +18,11 @@
   },
   "auth": {
     "runtime_version": "{{AUTH_RUNTIME_VERSION}}",
-    "target_domains": {{TARGET_DOMAINS_JSON}},
-    "providers": {{AUTH_PROVIDERS_JSON}}
+    "strategy": {{AUTH_STRATEGY}},
+    "target_urls": {{TARGET_URLS_JSON}}
+  },
+  "transport": {
+    "default_headers": {{DEFAULT_HEADERS_JSON}}
   },
   "commands": [
     {
@@ -30,8 +33,7 @@
       "inputs": [],
       "outputs": { "schema_ref": "#/$defs/doctor-output" },
       "requires": { "auth": false, "commands": [] },
-      "next_actions": [],
-      "steps": []
+      "next_actions": []
     },
     {
       "id": "auth-status",
@@ -41,8 +43,7 @@
       "inputs": [],
       "outputs": { "schema_ref": "#/$defs/auth-status-output" },
       "requires": { "auth": false, "commands": [] },
-      "next_actions": [],
-      "steps": []
+      "next_actions": []
     },
     {
       "id": "describe",
@@ -52,8 +53,7 @@
       "inputs": [],
       "outputs": { "schema_ref": "#/$defs/describe-output" },
       "requires": { "auth": false, "commands": [] },
-      "next_actions": [],
-      "steps": []
+      "next_actions": []
     }
   ],
   "workflows": [],

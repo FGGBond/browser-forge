@@ -1,26 +1,75 @@
-# Preserve runtime authentication
+# Runtime authentication
 
-## Use the provider chain
+Generated skills delegate authentication to two independently-published
+tools. They do not carry SSO/cookie code themselves. All skills produced by
+`browser-forge` share the same auth surface, so a machine only has to be
+configured once.
 
-Keep authentication in the generated runtime. Do not replace it with an environment-variable token, recorded header, or command-specific cookie reader.
+## Strategies
 
-| Target | Provider order |
-| --- | --- |
-| Eligible JD internal SSA/OIDC target | `JdmeSsoProvider → BrowserCookieProvider` on recoverable JDME failure |
-| Non-JD target | `BrowserCookieProvider` only |
+| `manifest.auth.strategy` | Order tried |
+|---|---|
+| `jd-internal` | `erp-sso-login` → `browser-auth-cookie` |
+| `browser-cookie` | `browser-auth-cookie` only |
+| `none` | *no cookie header attached* |
 
-Let business commands request a session bound to the exact target URL. Do not let them read browser or JDME databases directly.
+The generator picks a default by looking at target URLs: `*.jd.com` gets
+`jd-internal`; everything else gets `browser-cookie`. Override at generate
+time with `--auth-strategy`, or edit the manifest.
 
-## Keep provider behavior scoped
+## Tools
 
-For eligible JD internal domains, let `JdmeSsoProvider` obtain the current user's runtime JDME material, exchange it through the SSA/OIDC flow, discover the target `client_id`, complete the target callback, and return URL-scoped cookies. Enable this provider only for configured internal domains.
+### `browser-auth-cookie` — universal fallback
 
-Let `BrowserCookieProvider` load current-user browser cookies in configured browser order and filter them by target domain, path, secure flag, and expiry. For non-JD targets, never attempt JDME SSO.
+`pip install browser-auth-cookie`.
 
-Fall back from JDME only for recoverable authentication failures. Surface programming, manifest, TLS, and allowlist failures instead of silently changing providers. Preserve stable redacted errors such as `AUTH_UNAVAILABLE`, `JDME_NOT_LOGGED_IN`, `SSO_EXCHANGE_FAILED`, `TARGET_SESSION_FAILED`, `BROWSER_COOKIE_UNAVAILABLE`, and `AUTH_REFRESH_REQUIRED`.
+- Reads cookies from Edge, Chrome, Firefox, Safari, Chromium, Brave, Opera,
+  Vivaldi (in that order, tunable via `BROWSER_AUTH_BROWSERS=`).
+- Filters by target URL (domain, path, secure, expiry) using Public Suffix
+  List so parent-domain cookies apply correctly.
+- Disk-cached under `~/.cache/browser-auth-cookie/` (0700 dir, 0600 files),
+  invalidated on required-cookie failures.
 
-## Keep status and cache safe
+### `erp-sso-login` — 京东内网优先
 
-Preserve per-skill, per-host, per-settings runtime cache isolation under `~/.config/browser-forge/<skill-id>/auth/`, expiry checks, targeted refresh, atomic writes, and `0600` permissions where supported. Support `--refresh-auth` without exposing values.
+Set `ERP_SSO_LOGIN_HOME=/path/to/erp-sso-login` (the skill directory,
+containing `assets/scripts/run.sh`). The runtime shells out with
+`--url <target> --cookie-header` and captures stdout.
 
-Make `doctor`, `auth-status`, envelopes, logs, and errors report only provider, fallback, cache, expiry, attempt, and remediation metadata. Never report Cookie, token, authorization, decrypted database values, or a reversible settings fingerprint.
+Preconditions:
+- JDME 桌面客户端 has been signed in on this machine.
+- Machine has JD internal network access (VPN if remote).
+
+Failure to satisfy either → runtime falls back to `browser-auth-cookie`.
+
+## Overrides
+
+- `BROWSER_FORGE_COOKIE_HEADER='<raw cookie>'` — bypass discovery entirely
+  (useful for CI / debugging). Highest precedence.
+- `--refresh-auth` on any authenticated command — discard the in-process
+  cache and force a fresh SSO / browser read.
+
+## Never persist secrets
+
+- Cookie / token values must never appear in `manifest.json`, log files, or
+  repo docs. The validator scans for common patterns and rejects them.
+- Runtime logs pass through `RedactingFilter` which strips `Authorization`,
+  `Cookie`, `Set-Cookie`, and `X-Auth-Token` values. Keep that filter
+  attached.
+- Error envelopes carry `code`, `message`, `recoverable`, and (optionally)
+  `remediation`. Never leak session material into them.
+
+## Fusion
+
+When multiple skills are fused, `auth.strategy` is the strictest of the
+inputs (`jd-internal` > `browser-cookie` > `none`). `auth.target_urls` and
+`auth.required_cookies` are unioned. Per-host default headers move to
+`transport.per_host` so a fused CLI can hit multiple hosts without cross-
+contamination.
+
+## Diagnostic commands
+
+```bash
+scripts/<entrypoint> doctor       # which providers are available on this box
+scripts/<entrypoint> auth-status  # try to resolve, redacted summary
+```

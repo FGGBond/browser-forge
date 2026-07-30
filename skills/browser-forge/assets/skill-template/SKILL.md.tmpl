@@ -5,13 +5,45 @@ description: {{DESCRIPTION}}
 
 # {{SKILL_NAME}}
 
-This generated skill provides a versioned command contract for `{{SKILL_ID}}`.
+Generated skill for `{{SKILL_ID}}`. This is a manifest-driven CLI that:
 
-Use the stable entrypoint:
+* Reads cookies via `browser-auth-cookie` (universal) and — on `jd-internal`
+  strategy — first tries `erp-sso-login` for JDME-based SSA/OIDC.
+* Merges `manifest.transport.default_headers` into every outbound request so
+  BFF-required infrastructure headers (e.g. `x-proxy-opts`) never leak into
+  business code.
+* Emits a single JSON envelope per invocation.
+
+## Commands
+
+- `doctor` — check local prerequisites (Python, auth packages, network gate).
+- `auth-status` — report redacted authentication state for the target URL(s).
+- `describe` — print the manifest or one command entry.
+
+Business commands are declared in `manifest.json` under `commands[]` and
+implemented in one of two ways:
+
+1. **Handler** — set `"handler": "<module>:<function>"` and put a matching
+   `commands/<module>.py` under `scripts/cli/src/{{PACKAGE_NAME}}/`. Use this for
+   anything with branching, filtering, or verification.
+2. **Steps** — set `"steps": [{...}]` for straight-through HTTP sequences.
+
+## Usage
 
 ```bash
+scripts/{{ENTRYPOINT_NAME}} doctor
+scripts/{{ENTRYPOINT_NAME}} auth-status
 scripts/{{ENTRYPOINT_NAME}} describe
 ```
 
-The installed Python package is `{{PACKAGE_NAME}}`. Read `manifest.json` and
-the files under `references/` before adding business commands.
+## Layout
+
+- `manifest.json` — command contract (edit to add commands).
+- `scripts/{{ENTRYPOINT_NAME}}` — stable executable wrapper.
+- `scripts/cli/src/{{PACKAGE_NAME}}/` — Python package (framework only; put
+  business logic in `commands/`).
+- `references/` — commands, workflows, authentication, and knowledge docs.
+- `tests/` — offline pytest coverage.
+
+See `references/authentication.md` for how auth resolves and how to hook up
+`erp-sso-login` for JD internal targets.

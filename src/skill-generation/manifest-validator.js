@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
-import { AUTH_RUNTIME_VERSION, BUILTIN_COMMAND_IDS, SPEC_VERSION } from './constants.js'
+import { AUTH_RUNTIME_VERSION, AUTH_STRATEGIES, BUILTIN_COMMAND_IDS, SPEC_VERSION } from './constants.js'
 import { validateDependencyGraph } from './dependency-graph.js'
 import { readReadyMarker } from './generator.js'
 import { normalizeSkillName } from './names.js'
@@ -26,7 +26,7 @@ const schema = await readFirstAvailableJson([
   new URL('../../schemas/manifest.schema.json', import.meta.url),
   new URL('../../skills/browser-forge/schemas/manifest.schema.json', import.meta.url)
 ])
-const ajv = new Ajv2020({ allErrors: true, strict: true })
+const ajv = new Ajv2020({ allErrors: true, strict: 'log', strictRequired: false })
 addFormats(ajv)
 const validateSchema = ajv.compile(schema)
 
@@ -43,7 +43,7 @@ const REQUIRED_READY_FEATURES = Object.freeze([
   'progressive-help',
   'json-envelope',
   'offline-network-guard',
-  'standalone-auth-runtime'
+  'external-auth-runtime'
 ])
 const REQUIRED_HELP_SECTIONS = Object.freeze([
   'Dependencies',
@@ -58,25 +58,28 @@ const REQUIRED_COMMAND_DOC_SECTIONS = Object.freeze([
   'Inputs',
   ...REQUIRED_HELP_SECTIONS
 ])
+
+// Runtime files that must exactly match the trusted template. Business code
+// (anything under `commands/`) is intentionally excluded — users can add,
+// remove, and edit those freely.
 const IMMUTABLE_RUNTIME_TEMPLATES = Object.freeze([
   ['scripts/install.sh', 'scripts/install.sh'],
   ['scripts/cli/pyproject.toml.tmpl', 'scripts/cli/pyproject.toml'],
   ['scripts/cli/src/browser_forge_generated/__init__.py', '__init__.py'],
   ['scripts/cli/src/browser_forge_generated/__main__.py', '__main__.py'],
   ['scripts/cli/src/browser_forge_generated/cli.py', 'cli.py'],
-  ['scripts/cli/src/browser_forge_generated/client.py', 'client.py'],
+  ['scripts/cli/src/browser_forge_generated/http.py', 'http.py'],
+  ['scripts/cli/src/browser_forge_generated/auth.py', 'auth.py'],
+  ['scripts/cli/src/browser_forge_generated/handler.py', 'handler.py'],
   ['scripts/cli/src/browser_forge_generated/config.py', 'config.py'],
   ['scripts/cli/src/browser_forge_generated/envelope.py', 'envelope.py'],
   ['scripts/cli/src/browser_forge_generated/manifest.py', 'manifest.py'],
   ['scripts/cli/src/browser_forge_generated/telemetry.py', 'telemetry.py'],
-  ['scripts/cli/src/browser_forge_generated/auth/__init__.py', 'auth/__init__.py'],
-  ['scripts/cli/src/browser_forge_generated/auth/browser_cookies.py', 'auth/browser_cookies.py'],
-  ['scripts/cli/src/browser_forge_generated/auth/cookie_jar.py', 'auth/cookie_jar.py'],
-  ['scripts/cli/src/browser_forge_generated/auth/jdme_sso.py', 'auth/jdme_sso.py'],
-  ['scripts/cli/src/browser_forge_generated/auth/provider.py', 'auth/provider.py'],
-  ['scripts/cli/src/browser_forge_generated/auth/session_store.py', 'auth/session_store.py'],
   ['scripts/cli/src/browser_forge_generated/commands/__init__.py', 'commands/__init__.py']
 ])
+
+// Headers that must never be sunk into manifest.transport.default_headers.
+const HEADER_SECRET_RE = /(cookie|authorization|x-jacp-token|me_token|iam_token|.*[-_](?:token|ticket|secret|key|password))/i
 
 function issue(code, path, message) {
   return { code, path, message }
@@ -103,9 +106,9 @@ export function commandIdsFromSkillDocument(text) {
     const listItem = line.match(/^\s*(?:[-*+]\s+|\d+\.\s+)(.*)$/)?.[1]
     const item = headingItem ?? listItem
     if (!item) continue
-    const commandId = item.match(/^`([a-z0-9]+(?:-[a-z0-9]+)*)`/i)?.[1] ??
-      item.match(/^\[`?([a-z0-9]+(?:-[a-z0-9]+)*)`?\]\([^)]+\)/i)?.[1] ??
-      (headingItem ? item.match(/^([a-z0-9]+(?:-[a-z0-9]+)*)\b/i)?.[1] : null)
+    const commandId = item.match(/^`([a-z0-9]+(?:[-:][a-z0-9]+)*)`/i)?.[1] ??
+      item.match(/^\[`?([a-z0-9]+(?:[-:][a-z0-9]+)*)`?\]\([^)]+\)/i)?.[1] ??
+      (headingItem ? item.match(/^([a-z0-9]+(?:[-:][a-z0-9]+)*)\b/i)?.[1] : null)
     if (commandId) ids.push(commandId.toLowerCase())
   }
   return [...new Set(ids)].sort()
@@ -175,54 +178,33 @@ async function entrypointIntegrityIssues(skillDir, manifest, identifiers, values
 }
 
 async function unexpectedRuntimePaths(skillDir, identifiers) {
+  // Only enforce that runtime *directory* structure and immutable files exist
+  // where expected. Business commands under `commands/` are user-owned.
   const sourceRoot = join(skillDir, 'scripts', 'cli', 'src')
   const packageRoot = identifiers.packageName
-  const allowedDirectories = new Set([
-    packageRoot,
-    `${packageRoot}/auth`,
-    `${packageRoot}/commands`
-  ])
-  const allowedFiles = new Set(IMMUTABLE_RUNTIME_TEMPLATES.flatMap(([, runtimeRelativePath]) =>
+  const allowedFrameworkFiles = new Set(IMMUTABLE_RUNTIME_TEMPLATES.flatMap(([, runtimeRelativePath]) =>
     runtimeRelativePath.startsWith('scripts/') ? [] : [`${packageRoot}/${runtimeRelativePath}`]
   ))
-  const unexpected = []
-
-  async function visit(directory, relativeDirectory = '') {
-    if ((await lstat(directory)).isSymbolicLink()) {
-      unexpected.push(relativeDirectory || 'scripts/cli/src')
-      return
-    }
-    const entries = await readdir(directory, { withFileTypes: true })
-    for (const entry of entries) {
-      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
-      if (entry.isSymbolicLink()) {
-        unexpected.push(relativePath)
-        continue
-      }
-      if (entry.isDirectory()) {
-        if (!allowedDirectories.has(relativePath)) {
-          unexpected.push(relativePath)
-          continue
-        }
-        await visit(join(directory, entry.name), relativePath)
-        continue
-      }
-      if (!entry.isFile()) {
-        unexpected.push(relativePath)
-        continue
-      }
-      if (!allowedFiles.has(relativePath)) {
-        unexpected.push(relativePath)
-      }
-    }
-  }
+  const missing = []
 
   try {
-    await visit(sourceRoot)
+    // Every immutable file must exist as a real regular file (not symlink).
+    for (const relativePath of allowedFrameworkFiles) {
+      try {
+        const details = await lstat(join(sourceRoot, relativePath))
+        if (!details.isFile() || details.isSymbolicLink()) missing.push(relativePath)
+      } catch {
+        missing.push(relativePath)
+      }
+    }
+    // The package root must exist.
+    const packageStat = await lstat(join(sourceRoot, packageRoot))
+    if (!packageStat.isDirectory()) missing.push(packageRoot)
   } catch {
     return ['scripts/cli/src']
   }
-  return unexpected.sort()
+
+  return missing.sort()
 }
 
 async function forbiddenExecutionPathIssues(skillDir) {
@@ -297,7 +279,13 @@ async function runtimeIntegrityIssues(skillDir, manifest) {
     return issues
   }
 
-  const values = templateValues(identifiers, manifest?.description, manifest?.auth?.target_domains)
+  const targetUrls = Array.isArray(manifest?.auth?.target_urls) ? manifest.auth.target_urls : []
+  const strategy = manifest?.auth?.strategy ?? 'none'
+  const defaultHeaders = manifest?.transport?.default_headers ?? {}
+  const values = templateValues(identifiers, manifest?.description ?? '', targetUrls, {
+    authStrategy: strategy,
+    defaultHeaders
+  })
   const runtimeRoot = `scripts/cli/src/${identifiers.packageName}`
   for (const [templateRelativePath, runtimeRelativePath] of IMMUTABLE_RUNTIME_TEMPLATES) {
     const artifactRelativePath = runtimeRelativePath.startsWith('scripts/')
@@ -312,12 +300,12 @@ async function runtimeIntegrityIssues(skillDir, manifest) {
       ))
     }
   }
-  const unexpectedPaths = await unexpectedRuntimePaths(skillDir, identifiers)
-  if (unexpectedPaths.length > 0) {
+  const missing = await unexpectedRuntimePaths(skillDir, identifiers)
+  if (missing.length > 0) {
     issues.push(issue(
       'RUNTIME_INTEGRITY_FAILED',
-      unexpectedPaths[0],
-      `Generated runtime contains paths outside the trusted infrastructure and commands extension allowlist: ${unexpectedPaths.join(', ')}`
+      missing[0],
+      `Generated runtime is missing required framework files: ${missing.join(', ')}`
     ))
   }
   issues.push(...await entrypointIntegrityIssues(skillDir, manifest, identifiers, values))
@@ -348,16 +336,9 @@ function helpMetadataIssues(manifest) {
     const invalidInputs = (Array.isArray(command.inputs) ? command.inputs : []).some(input =>
       typeof input?.name !== 'string' || input.name === '' ||
       typeof input?.type !== 'string' || input.type === '' ||
-      typeof input?.required !== 'boolean' ||
-      !Array.isArray(input?.sources)
+      typeof input?.required !== 'boolean'
     )
-    const missingSourcePath = (Array.isArray(command.inputs) ? command.inputs : []).some(input =>
-      (Array.isArray(input?.sources) ? input.sources : []).some(source =>
-        typeof source?.command !== 'string' || source.command === '' ||
-        typeof source?.json_path !== 'string' || source.json_path === ''
-      )
-    )
-    if (missingMetadata || invalidInputs || missingSourcePath) {
+    if (missingMetadata || invalidInputs) {
       issues.push(issue(
         'HELP_CONTRACT_MISSING',
         `manifest.json/commands/${commandIndex}`,
@@ -408,7 +389,7 @@ function outputDefinitionIssues(manifest) {
     }
   }
   try {
-    const definitionAjv = new Ajv2020({ allErrors: true, strict: true })
+    const definitionAjv = new Ajv2020({ allErrors: true, strict: 'log', strictRequired: false })
     addFormats(definitionAjv)
     definitionAjv.compile({
       $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -424,19 +405,77 @@ function outputDefinitionIssues(manifest) {
   }
 }
 
-function authProviderPolicyIssues(manifest) {
-  const domains = Array.isArray(manifest?.auth?.target_domains) ? manifest.auth.target_domains : []
-  const hasJdTarget = domains.some(value => {
-    const domain = String(value).trim().toLowerCase().replace(/\.$/, '')
-    return domain === 'jd.com' || domain.endsWith('.jd.com')
-  })
-  const expected = hasJdTarget ? ['jdme_sso', 'browser_cookie'] : ['browser_cookie']
-  const actual = Array.isArray(manifest?.auth?.providers) ? manifest.auth.providers : []
-  return sameValues(actual, expected) ? [] : [issue(
-    'AUTH_PROVIDER_POLICY_INVALID',
-    'manifest.json/auth/providers',
-    `Provider chain must be ${expected.join(' then ')} for the configured target domains`
-  )]
+function authStrategyPolicyIssues(manifest) {
+  const strategy = manifest?.auth?.strategy
+  if (!AUTH_STRATEGIES.includes(strategy)) {
+    return [issue(
+      'AUTH_STRATEGY_INVALID',
+      'manifest.json/auth/strategy',
+      `Auth strategy must be one of ${AUTH_STRATEGIES.join(', ')}`
+    )]
+  }
+  return []
+}
+
+function transportHeaderPolicyIssues(manifest) {
+  const issues = []
+  const defaultHeaders = manifest?.transport?.default_headers ?? {}
+  for (const name of Object.keys(defaultHeaders)) {
+    if (HEADER_SECRET_RE.test(name)) {
+      issues.push(issue(
+        'TRANSPORT_HEADER_SECRET',
+        `manifest.json/transport/default_headers/${name}`,
+        `Header ${JSON.stringify(name)} looks like a credential and must not be hardcoded in the manifest`
+      ))
+    }
+  }
+  const perHost = manifest?.transport?.per_host ?? {}
+  for (const [host, headers] of Object.entries(perHost)) {
+    for (const name of Object.keys(headers ?? {})) {
+      if (HEADER_SECRET_RE.test(name)) {
+        issues.push(issue(
+          'TRANSPORT_HEADER_SECRET',
+          `manifest.json/transport/per_host/${host}/${name}`,
+          `Header ${JSON.stringify(name)} on ${JSON.stringify(host)} looks like a credential and must not be hardcoded`
+        ))
+      }
+    }
+  }
+  return issues
+}
+
+async function handlerReferenceIssues(skillDir, manifest) {
+  const identifiers = trustedIdentifiers(manifest)
+  if (!identifiers) return []
+  const issues = []
+  const commandsDir = join(skillDir, 'scripts', 'cli', 'src', identifiers.packageName, 'commands')
+  for (const command of manifest?.commands ?? []) {
+    const handler = command?.handler
+    if (typeof handler !== 'string' || !handler) continue
+    const [moduleName, functionName] = handler.split(':')
+    if (!moduleName || !functionName) {
+      issues.push(issue('HANDLER_REFERENCE_INVALID', `manifest.json/commands/${command.id}/handler`,
+        `handler must be "<module>:<function>": ${handler}`))
+      continue
+    }
+    const relativeParts = moduleName.split('.')
+    relativeParts[relativeParts.length - 1] += '.py'
+    const modulePath = join(commandsDir, ...relativeParts)
+    try {
+      const source = await readFile(modulePath, 'utf8')
+      const fnRe = new RegExp(String.raw`^\s*def\s+${functionName}\s*\(`, 'm')
+      if (!fnRe.test(source)) {
+        issues.push(issue('HANDLER_REFERENCE_INVALID',
+          `manifest.json/commands/${command.id}/handler`,
+          `${moduleName}.py does not define ${functionName}(...)`))
+      }
+    } catch {
+      issues.push(issue('HANDLER_REFERENCE_INVALID',
+        `manifest.json/commands/${command.id}/handler`,
+        `handler module not found: commands/${relativeParts.join('/')}`))
+    }
+  }
+  return issues
 }
 
 function skillMetadataIssues(text, manifest, identifiers) {
@@ -457,7 +496,7 @@ function skillMetadataIssues(text, manifest, identifiers) {
     const key = line.slice(0, separator).trim()
     let value = line.slice(separator + 1).trim()
     if (value.startsWith('"')) {
-      try { value = JSON.parse(value) } catch { /* Report the normalized mismatch below. */ }
+      try { value = JSON.parse(value) } catch { /* Report normalized mismatch below. */ }
     }
     fields[key] = value
   }
@@ -525,20 +564,12 @@ function markdownSectionMissing(text, section) {
 
 function commandDocumentIssues(text, command, relativePath) {
   const missingSections = REQUIRED_COMMAND_DOC_SECTIONS.filter(section => markdownSectionMissing(text, section))
-  const missingSources = (Array.isArray(command?.inputs) ? command.inputs : []).flatMap(input =>
-    (Array.isArray(input?.sources) ? input.sources : [])
-  ).filter(source =>
-    typeof source?.command !== 'string' || !text.includes(source.command) ||
-    typeof source?.json_path !== 'string' || !text.includes(source.json_path)
-  )
   const schemaRef = command?.outputs?.schema_ref
-  if (missingSections.length === 0 && missingSources.length === 0 && typeof schemaRef === 'string' && text.includes(schemaRef)) {
-    return []
-  }
+  if (missingSections.length === 0 && typeof schemaRef === 'string' && text.includes(schemaRef)) return []
   return [issue(
     'HELP_CONTRACT_MISSING',
     relativePath,
-    `Command documentation lacks required help metadata or source JSONPath: ${command?.id ?? 'unknown'}`
+    `Command documentation lacks required help metadata or schema_ref reference: ${command?.id ?? 'unknown'}`
   )]
 }
 
@@ -553,7 +584,7 @@ async function readyContractIssues(skillDir, manifest) {
     skillIds = commandIdsFromSkillDocument(skillText)
     issues.push(...skillMetadataIssues(skillText, manifest, identifiers))
   } catch {
-    // The parity issue below is stable for both a missing and unreadable SKILL.md.
+    /* parity issue below */
   }
   if (!sameValues(uniqueManifestIds, skillIds)) {
     issues.push(issue(
@@ -588,7 +619,9 @@ async function readyContractIssues(skillDir, manifest) {
   issues.push(...helpMetadataIssues(manifest))
   issues.push(...outputSchemaIssues(manifest))
   issues.push(...outputDefinitionIssues(manifest))
-  issues.push(...authProviderPolicyIssues(manifest))
+  issues.push(...authStrategyPolicyIssues(manifest))
+  issues.push(...transportHeaderPolicyIssues(manifest))
+  issues.push(...await handlerReferenceIssues(skillDir, manifest))
   issues.push(...await forbiddenExecutionPathIssues(skillDir))
   issues.push(...await runtimeIntegrityIssues(skillDir, manifest))
   return issues

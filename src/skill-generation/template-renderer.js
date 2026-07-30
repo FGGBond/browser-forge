@@ -21,26 +21,52 @@ const TEMPLATE_TOKENS = Object.freeze([
   'PACKAGE_NAME',
   'ENTRYPOINT_NAME',
   'DESCRIPTION',
-  'TARGET_DOMAINS_JSON',
-  'AUTH_PROVIDERS_JSON',
+  'DESCRIPTION_YAML',
+  'TARGET_URLS_JSON',
+  'TARGET_HOSTS_JSON',
+  'AUTH_STRATEGY',
+  'DEFAULT_HEADERS_JSON',
   'SPEC_VERSION',
   'AUTH_RUNTIME_VERSION'
 ])
 const TOKEN_PATTERN = new RegExp(`\\{\\{(${TEMPLATE_TOKENS.join('|')})\\}\\}`, 'g')
 
-export function templateValues(identifiers, description, targetDomains) {
-  const hasJdTarget = targetDomains.some(value => {
-    const domain = String(value).trim().toLowerCase().replace(/\.$/, '')
-    return domain === 'jd.com' || domain.endsWith('.jd.com')
-  })
+function deriveHost(url) {
+  try {
+    return new URL(url).host.toLowerCase()
+  } catch {
+    return String(url).trim().toLowerCase()
+  }
+}
+
+function looksLikeJdHost(host) {
+  const trimmed = host.replace(/\.$/, '')
+  return trimmed === 'jd.com' || trimmed.endsWith('.jd.com')
+}
+
+export function suggestAuthStrategy(targetUrls) {
+  const hosts = targetUrls.map(deriveHost).filter(Boolean)
+  if (hosts.length === 0) return 'none'
+  if (hosts.some(looksLikeJdHost)) return 'jd-internal'
+  return 'browser-cookie'
+}
+
+export function templateValues(identifiers, description, targetUrls, extras = {}) {
+  const hosts = [...new Set(targetUrls.map(deriveHost).filter(Boolean))]
+  const strategy = extras.authStrategy ?? suggestAuthStrategy(targetUrls)
+  const defaultHeaders = extras.defaultHeaders ?? {}
+  const desc = description ?? ''
   return {
     SKILL_NAME: identifiers.skillName,
     SKILL_ID: identifiers.skillId,
     PACKAGE_NAME: identifiers.packageName,
     ENTRYPOINT_NAME: identifiers.entrypointName,
-    DESCRIPTION: JSON.stringify(description),
-    TARGET_DOMAINS_JSON: JSON.stringify(targetDomains),
-    AUTH_PROVIDERS_JSON: JSON.stringify(hasJdTarget ? ['jdme_sso', 'browser_cookie'] : ['browser_cookie']),
+    DESCRIPTION: JSON.stringify(desc),
+    DESCRIPTION_YAML: JSON.stringify(desc), // JSON strings are valid YAML flow scalars
+    TARGET_URLS_JSON: JSON.stringify(targetUrls),
+    TARGET_HOSTS_JSON: JSON.stringify(hosts),
+    AUTH_STRATEGY: JSON.stringify(strategy),
+    DEFAULT_HEADERS_JSON: JSON.stringify(defaultHeaders),
     SPEC_VERSION,
     AUTH_RUNTIME_VERSION
   }

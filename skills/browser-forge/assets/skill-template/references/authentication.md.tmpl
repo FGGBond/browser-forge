@@ -1,5 +1,57 @@
 # Authentication
 
-This skill targets {{TARGET_DOMAINS_JSON}} and records auth runtime version
-`{{AUTH_RUNTIME_VERSION}}` in its manifest. Add only redacted authentication
-instructions; never persist session material.
+Auth strategy: `{{AUTH_STRATEGY}}`. Target URLs: `{{TARGET_URLS_JSON}}`. Runtime version: `{{AUTH_RUNTIME_VERSION}}`.
+
+## Providers
+
+This skill delegates all cookie / SSO handling to two independently-published
+tools rather than reimplementing them in-tree:
+
+| Strategy | Order tried |
+|---|---|
+| `jd-internal` | `erp-sso-login` → `browser-auth-cookie` |
+| `browser-cookie` | `browser-auth-cookie` only |
+| `none` | *no cookie header attached* |
+
+Configure them once per machine, not per skill.
+
+### `browser-auth-cookie` (universal fallback)
+
+```bash
+pip install browser-auth-cookie
+```
+
+Reads cookies from any currently-signed-in browser (Edge, Chrome, Firefox,
+Safari, Chromium, Brave, Opera, Vivaldi). Order can be customised with
+`BROWSER_AUTH_BROWSERS=edge,chrome,firefox`.
+
+### `erp-sso-login` (京东内网优先)
+
+Only needed for JD internal targets (`*.jd.com`). Set:
+
+```bash
+export ERP_SSO_LOGIN_HOME=/path/to/erp-sso-login   # skill directory
+```
+
+The runtime shells out to `${ERP_SSO_LOGIN_HOME}/assets/scripts/run.sh --url <target> --cookie-header`.
+京ME 桌面客户端必须已登录。
+
+## Overrides
+
+- `BROWSER_FORGE_COOKIE_HEADER` — bypass discovery, use the given `Cookie:`
+  header verbatim (for CI / one-off scripts).
+- Command-level `--refresh-auth` — discard the in-process cache and force a
+  fresh SSO / browser read on the next request.
+
+## Never do this
+
+- Never write a real `Cookie:` value into `manifest.json` or any repo file.
+- Never log unredacted cookie values (the runtime's `RedactingFilter` strips
+  them; keep it enabled).
+
+## Diagnostics
+
+```bash
+scripts/{{ENTRYPOINT_NAME}} doctor      # provider availability
+scripts/{{ENTRYPOINT_NAME}} auth-status # try to resolve, redacted summary
+```

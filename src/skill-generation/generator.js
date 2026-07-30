@@ -1,9 +1,10 @@
 import { chmod, link, mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { AUTH_RUNTIME_VERSION, BUILTIN_COMMAND_IDS, SPEC_VERSION } from './constants.js'
+import { AUTH_RUNTIME_VERSION, AUTH_STRATEGIES, BUILTIN_COMMAND_IDS, SPEC_VERSION } from './constants.js'
+import { extractDefaultHeaders } from './har-analyzer.js'
 import { normalizeSkillName } from './names.js'
-import { renderTemplateText, TEMPLATE_ROOT, templateValues } from './template-renderer.js'
+import { renderTemplateText, suggestAuthStrategy, TEMPLATE_ROOT, templateValues } from './template-renderer.js'
 
 const REQUIRED_RECORDING_FILES = ['RECORDING.md', 'recording.har', 'timeline.json', 'metadata.json']
 const OWNER_MARKER = '.browser-forge-owner.json'
@@ -203,15 +204,26 @@ export async function readReadyMarker(skillDir) {
 /**
  * Creates a rendered, standalone skill skeleton without copying recording material.
  */
-export async function generateSkill({ recordingDir, skillName, description, targetDomains = [], outputRoot, testHooks } = {}) {
+export async function generateSkill({ recordingDir, skillName, description, targetDomains = [], targetUrls, authStrategy, outputRoot, testHooks } = {}) {
   if (typeof recordingDir !== 'string' || recordingDir.trim() === '') {
     throw new GenerationError('recordingDir is required', 'INVALID_ARGUMENT')
   }
   if (typeof description !== 'string') {
     throw new GenerationError('description is required', 'INVALID_ARGUMENT')
   }
-  if (!Array.isArray(targetDomains) || !targetDomains.every(domain => typeof domain === 'string')) {
-    throw new GenerationError('targetDomains must be an array of strings', 'INVALID_ARGUMENT')
+  const rawTargets = Array.isArray(targetUrls) && targetUrls.length > 0 ? targetUrls : targetDomains
+  if (!Array.isArray(rawTargets) || !rawTargets.every(item => typeof item === 'string')) {
+    throw new GenerationError('targetDomains/targetUrls must be an array of strings', 'INVALID_ARGUMENT')
+  }
+  const canonicalTargets = rawTargets
+    .map(item => item.trim())
+    .filter(Boolean)
+    .map(item => (item.startsWith('http://') || item.startsWith('https://')) ? item : `https://${item}`)
+  const canonicalHosts = [...new Set(canonicalTargets.map(item => {
+    try { return new URL(item).host.toLowerCase() } catch { return null }
+  }).filter(Boolean))]
+  if (authStrategy !== undefined && !AUTH_STRATEGIES.includes(authStrategy)) {
+    throw new GenerationError(`authStrategy must be one of ${AUTH_STRATEGIES.join(', ')}`, 'INVALID_ARGUMENT')
   }
 
   const resolvedRecordingDir = resolve(recordingDir)
@@ -231,13 +243,18 @@ export async function generateSkill({ recordingDir, skillName, description, targ
   const ownershipToken = randomUUID().replaceAll('-', '/')
   let temporaryDir
   let lockAcquired = false
+  const defaultHeaders = await extractDefaultHeaders(resolvedRecordingDir, canonicalHosts)
+  const resolvedStrategy = authStrategy ?? suggestAuthStrategy(canonicalTargets)
   try {
     await acquirePublicationLock(lockPath, ownershipToken)
     lockAcquired = true
     await reserveSkillDir(skillDir, ownershipToken)
     temporaryDir = await mkdtemp(join(resolvedOutputRoot, `.browser-forge-${identifiers.skillName}-`))
     await testHooks?.beforeRender?.({ skillDir, temporaryDir, lockPath })
-    const values = templateValues(identifiers, description, targetDomains)
+    const values = templateValues(identifiers, description, canonicalTargets, {
+      authStrategy: resolvedStrategy,
+      defaultHeaders
+    })
     await renderTree(TEMPLATE_ROOT, temporaryDir, values, identifiers)
     await publishTree(temporaryDir, skillDir, skillDir, ownershipToken, testHooks)
     await testHooks?.beforeReady?.({ skillDir, temporaryDir, lockPath })
@@ -252,5 +269,12 @@ export async function generateSkill({ recordingDir, skillName, description, targ
     if (lockAcquired) await releasePublicationLock(lockPath, ownershipToken)
   }
 
-  return { skillDir, ready: true, ...identifiers }
+  return {
+    skillDir,
+    ready: true,
+    ...identifiers,
+    authStrategy: resolvedStrategy,
+    defaultHeaders,
+    targetUrls: canonicalTargets
+  }
 }
