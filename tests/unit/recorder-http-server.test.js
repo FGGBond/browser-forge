@@ -9,6 +9,7 @@ let recorderServer
 afterEach(async () => {
   await recorderServer?.close()
   recorderServer = null
+
 })
 
 describe('recorder HTTP server', () => {
@@ -166,4 +167,58 @@ describe('recorder HTTP server', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('tracks recording start and stop events with summary fields', async () => {
+    const events = []
+    class FakeRecordingSession {
+      constructor({ port, outputDir }) {
+        this.port = port
+        this.outputDir = outputDir
+        this._cdp = { getTargets: () => [], disconnect: async () => {} }
+      }
+      async start() {}
+      async stop() { return `${this.outputDir}/session-stopped` }
+      getLiveSummary() {
+        return { type: 'summary', startedAt: 1, updatedAt: 2, tabs: [{ targetId: 't1', url: 'https://example.test/path?secret=1' }], totals: { events: 3, network: 4, console: 1, artifacts: 2 } }
+      }
+      getTelemetrySummary() {
+        return { duration_ms: 1234, tab_count: 1, network_count: 4, click_count: 2, input_count: 1, top_hosts: ['example.test'] }
+      }
+    }
+
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      startupLogFile: null,
+      telemetry: { track: async (name, properties = {}) => events.push([name, properties]) },
+      waitForChromeDebugEndpoint: async () => ({ webSocketDebuggerUrl: 'ws://127.0.0.1:9666/devtools/browser/test' }),
+      findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      launchChrome: () => ({ exitCode: null, killed: false, once: () => {}, kill: () => {} }),
+      RecordingSession: FakeRecordingSession
+    })
+    const url = await recorderServer.listen()
+
+    await fetch(`${url}/api/start-recording`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outputDir: '/tmp/browser-forge-test', port: 9666 })
+    })
+    await fetch(`${url}/api/stop-recording`, { method: 'POST' })
+
+    expect(events.map(([name]) => name)).toEqual(expect.arrayContaining([
+      'recording_start_requested',
+      'chrome_launch_started',
+      'chrome_launch_succeeded',
+      'recording_started',
+      'recording_stopped'
+    ]))
+    expect(events.find(([name]) => name === 'recording_stopped')?.[1]).toMatchObject({
+      duration_ms: 1234,
+      tab_count: 1,
+      network_count: 4,
+      top_hosts: ['example.test']
+    })
+    expect(JSON.stringify(events)).not.toContain('/tmp/browser-forge-test')
+    expect(JSON.stringify(events)).not.toContain('secret=1')
+  })
+
 })

@@ -9,6 +9,7 @@ import { findAvailablePort as defaultFindAvailablePort, findChromePath as defaul
 import { RecordingSession as DefaultRecordingSession } from './index.js'
 import { shouldClearActiveSession } from './session-state.js'
 import { resolveStartOptions } from './start-options.js'
+import { hashForTelemetry } from '../telemetry/config.js'
 
 export function createRecorderHttpServer({
   uiRoot,
@@ -22,7 +23,8 @@ export function createRecorderHttpServer({
   RecordingSession = DefaultRecordingSession,
   chromeReadyTimeoutMs = 20000,
   startupLogFile = join(homedir(), 'Library', 'Application Support', 'browser-forge', 'recorder-startup.log'),
-  afterChromeLaunch = async () => {}
+  afterChromeLaunch = async () => {},
+  telemetry = { track: async () => {} }
 } = {}) {
   const app = express()
   const server = createServer(app)
@@ -53,8 +55,12 @@ export function createRecorderHttpServer({
 
   async function stopActiveRecording() {
     if (!activeSession) return null
+    const summary = typeof activeSession.getTelemetrySummary === 'function'
+      ? activeSession.getTelemetrySummary()
+      : safeTelemetrySummary(activeSession.getLiveSummary?.())
     try {
       sessionDir = await activeSession.stop()
+      await telemetry.track('recording_stopped', summary)
       return sessionDir
     } finally {
       await clearActiveSession()
@@ -80,6 +86,7 @@ export function createRecorderHttpServer({
   })
 
   app.post('/api/start-recording', async (req, res) => {
+    await telemetry.track('recording_start_requested', { requested_port_mode: req.body.port ? 'explicit' : 'dynamic' })
     if (shouldClearActiveSession({ activeSession, chromeProcess })) {
       await clearActiveSession()
     }
@@ -106,6 +113,8 @@ export function createRecorderHttpServer({
       await appendStartupLog(`chromePath=${chromePath}`)
       await appendStartupLog(`userDataDir=${userDataDir}`)
       await appendStartupLog(`startUrl=${baseUrl}/recording-start.html`)
+      await telemetry.track('chrome_launch_started', { port: chromePort })
+      const chromeStartedAt = Date.now()
       chromeProcess = launchChrome({
         execPath: chromePath,
         port: chromePort,
@@ -127,14 +136,17 @@ export function createRecorderHttpServer({
         timeoutMs: chromeReadyTimeoutMs
       })
       await appendStartupLog('chromeDebugEndpoint=ready')
+      await telemetry.track('chrome_launch_succeeded', { duration_ms: Date.now() - chromeStartedAt, chrome_pid_present: Boolean(chromeProcess.pid) })
       await afterChromeLaunch()
       activeSession = new RecordingSession({ port: chromePort, outputDir })
       await activeSession.start()
       sessionDir = null
       await appendStartupLog('recordingSession=started')
+      await telemetry.track('recording_started', { port: chromePort })
       res.json({ ok: true, port: chromePort })
     } catch (error) {
       await appendStartupLog(`startupError=${error.message}`)
+      await telemetry.track('chrome_launch_failed', { error_code: error.code ?? 'CHROME_LAUNCH_FAILED', message_hash: hashForTelemetry(error.message) })
       await clearActiveSession()
       res.json({ ok: false, error: error.message, logFile: startupLogFile })
     } finally {
@@ -201,3 +213,20 @@ export function createRecorderHttpServer({
 
   return { app, server, listen, close, getSummary }
 }
+
+function safeTelemetrySummary(summary = {}) {
+  const totals = summary.totals ?? {}
+  const tabs = Array.isArray(summary.tabs) ? summary.tabs : []
+  const hosts = [...new Set(tabs.map(tab => {
+    try { return new URL(tab.url).hostname } catch { return null }
+  }).filter(Boolean))].slice(0, 5)
+  return {
+    tab_count: tabs.length,
+    event_count: Number(totals.events) || 0,
+    network_count: Number(totals.network) || 0,
+    console_count: Number(totals.console) || 0,
+    artifact_count: Number(totals.artifacts) || 0,
+    top_hosts: hosts
+  }
+}
+

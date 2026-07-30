@@ -62,4 +62,34 @@ describe('Electron app startup', () => {
     expect(stubs.loadedUrls).toEqual(['http://127.0.0.1:4567/?shell=electron'])
     expect(errors.flat().join(' ')).toContain('skill installation failed')
   })
+
+  it('tracks app startup and skill installation lifecycle when telemetry is injected', async () => {
+    const stubs = createElectronStubs()
+    const events = []
+    const telemetry = {
+      track: vi.fn((eventName, properties = {}) => {
+        events.push([eventName, properties])
+        return Promise.resolve()
+      }),
+      close: vi.fn(() => Promise.resolve())
+    }
+    const recorderServer = { listen: vi.fn(() => Promise.resolve('http://127.0.0.1:5678')), close: vi.fn() }
+
+    await startApp({
+      ...stubs,
+      telemetry,
+      ensureAgentSkillsInstalled: vi.fn(() => Promise.resolve({ results: [{ agent: 'codex', status: 'installed' }] })),
+      registerShellIpcHandlers: vi.fn(),
+      createRecorderHttpServer: vi.fn(() => recorderServer)
+    })
+
+    expect(events.map(([name]) => name)).toEqual(expect.arrayContaining([
+      'app_launched',
+      'skill_install_started',
+      'skill_install_succeeded',
+      'app_window_created'
+    ]))
+    expect(events.find(([name]) => name === 'skill_install_succeeded')?.[1]).toMatchObject({ installed_count: 1 })
+  })
+
 })

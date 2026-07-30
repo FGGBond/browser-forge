@@ -68,6 +68,7 @@ const IMMUTABLE_RUNTIME_TEMPLATES = Object.freeze([
   ['scripts/cli/src/browser_forge_generated/config.py', 'config.py'],
   ['scripts/cli/src/browser_forge_generated/envelope.py', 'envelope.py'],
   ['scripts/cli/src/browser_forge_generated/manifest.py', 'manifest.py'],
+  ['scripts/cli/src/browser_forge_generated/telemetry.py', 'telemetry.py'],
   ['scripts/cli/src/browser_forge_generated/auth/__init__.py', 'auth/__init__.py'],
   ['scripts/cli/src/browser_forge_generated/auth/browser_cookies.py', 'auth/browser_cookies.py'],
   ['scripts/cli/src/browser_forge_generated/auth/cookie_jar.py', 'auth/cookie_jar.py'],

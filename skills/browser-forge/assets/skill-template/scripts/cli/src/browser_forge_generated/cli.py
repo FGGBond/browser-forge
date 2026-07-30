@@ -7,6 +7,7 @@ import json
 import platform
 import re
 import sys
+import time
 from typing import Any, NoReturn
 
 from .auth.provider import AuthResolver
@@ -14,6 +15,7 @@ from .client import Client, ClientError
 from .config import load_config
 from .envelope import failure, success
 from .manifest import load_manifest, manifest_path
+from .telemetry import UsageTelemetry
 
 BUILTIN_COMMANDS = {"doctor", "auth-status", "describe"}
 
@@ -255,6 +257,8 @@ def main(argv: list[str] | None = None) -> int:
 
     command_id = args.selected_command
     command = args.command_spec
+    telemetry = UsageTelemetry.from_environment(manifest)
+    started_at = time.monotonic()
     try:
         config = load_config(manifest)
         if command_id == "doctor":
@@ -268,21 +272,26 @@ def main(argv: list[str] | None = None) -> int:
                     "remediation": "Configure an authentication provider in manifest.json.",
                 },
             }))
+            telemetry.track_command(command_id, ok=True, status="success", duration_ms=int((time.monotonic() - started_at) * 1000))
             return 0
         if command_id == "auth-status":
             auth = _auth_status(manifest, config)
             _emit(success(command_id, auth, auth=auth))
+            telemetry.track_command(command_id, ok=True, status="success", duration_ms=int((time.monotonic() - started_at) * 1000))
             return 0
         if command_id == "describe":
             target_id = args.described_command
             if target_id is None:
                 _emit(success(command_id, {"manifest": manifest}))
+                telemetry.track_command(command_id, ok=True, status="success", duration_ms=int((time.monotonic() - started_at) * 1000))
                 return 0
             target = _command_map(manifest).get(target_id)
             if target is None:
                 _emit(failure(command_id, "INVALID_ARGUMENT", f"Unknown command: {target_id}", recoverable=True))
+                telemetry.track_command(command_id, ok=False, status="failure", duration_ms=int((time.monotonic() - started_at) * 1000), error_code="INVALID_ARGUMENT")
                 return 2
             _emit(success(command_id, {"command": target}, next_actions=_next_actions(target)))
+            telemetry.track_command(command_id, ok=True, status="success", duration_ms=int((time.monotonic() - started_at) * 1000))
             return 0
 
         values = {
@@ -303,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ClientError as error:
         _emit(failure(command_id, error.code, str(error), error.recoverable, _next_actions(command)))
+        telemetry.track_command(command_id, ok=False, status="failure", duration_ms=int((time.monotonic() - started_at) * 1000), error_code=error.code)
         return 1
     except Exception:
         _emit(failure(
@@ -312,6 +322,8 @@ def main(argv: list[str] | None = None) -> int:
             recoverable=False,
             next_actions=_next_actions(command),
         ))
+        telemetry.track_command(command_id, ok=False, status="failure", duration_ms=int((time.monotonic() - started_at) * 1000), error_code="INTERNAL_ERROR")
         return 1
     _emit(success(command_id, data, auth=client.auth_metadata, next_actions=_next_actions(command)))
+    telemetry.track_command(command_id, ok=True, status="success", duration_ms=int((time.monotonic() - started_at) * 1000))
     return 0
