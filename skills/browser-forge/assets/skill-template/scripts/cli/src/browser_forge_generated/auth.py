@@ -1,20 +1,23 @@
-"""Cookie/session authentication using external packages.
+"""Cookie/session authentication — self-contained, opinionated defaults.
 
-This module delegates to two independently-published tools instead of
-re-implementing SSO/cookie logic in every generated skill:
+This module is bundled into every generated Browser Forge skill so the
+resulting CLI is **open-the-box runnable**: no private packages, no manual
+environment variables to export. The runtime resolves cookies through two
+independent providers:
 
 * ``erp-sso-login`` — obtains a target site's ``ssa.<app>`` session cookie by
   walking the JD internal SSA/OIDC flow with a ``me_token`` extracted from the
-  JDME desktop client. Preferred for ``.jd.com`` targets.
-* ``browser-auth-cookie`` — reads cookies from the user's currently-logged-in
+  JDME desktop client. Preferred for ``.jd.com`` targets. Auto-discovered from
+  common install locations if ``ERP_SSO_LOGIN_HOME`` / ``ERP_SSO_LOGIN_PATH``
+  are not set.
+* Browser-jar reader — loads cookies from the user's currently-logged-in
   browser (Edge / Chrome / Firefox / Safari / Chromium / Brave / Opera /
-  Vivaldi). Universal fallback.
+  Vivaldi) via the PyPI ``browser-cookie3`` package. Universal fallback.
 
 Provider selection is decided by ``manifest.auth.strategy``:
 
-* ``jd-internal``   — try ``erp-sso-login`` first, fall back to
-  ``browser-auth-cookie`` on recoverable failures.
-* ``browser-cookie`` — ``browser-auth-cookie`` only.
+* ``jd-internal``   — try ``erp-sso-login`` first, fall back to browser jar.
+* ``browser-cookie`` — browser jar only.
 * ``none``          — do not attach cookies.
 
 The generated ``Client`` calls :meth:`AuthResolver.resolve` with the exact
@@ -24,14 +27,18 @@ subprocess/library calls within a single command invocation.
 
 from __future__ import annotations
 
-import json
+import ipaddress
 import os
+import re
 import shlex
-import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from http.cookiejar import Cookie, CookieJar
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
+from urllib.request import Request
 
 
 class AuthError(RuntimeError):
@@ -66,6 +73,110 @@ class AuthSession:
             "warnings": list(self.warnings),
         }
 
+
+# ----------------------------------------------------------------------
+# Well-known locations to auto-discover erp-sso-login without exporting env vars.
+# Users still may set ERP_SSO_LOGIN_HOME to override.
+
+_ERP_SSO_WELL_KNOWN = (
+    "~/.claude/skills/erp-sso-login",
+    "~/CodeSpace/claude-workspace/browser-forge-workspace/erp-sso-login",
+    "~/browser-forge-workspace/erp-sso-login",
+    "~/.oxygen/cli/erp-sso-login",
+    "~/.local/share/erp-sso-login",
+)
+
+
+def _first_existing(paths: tuple[str, ...]) -> str | None:
+    for raw in paths:
+        expanded = os.path.expanduser(raw)
+        for candidate in (
+            os.path.join(expanded, "assets", "scripts", "run.sh"),
+            os.path.join(expanded, "run.sh"),
+        ):
+            if os.path.isfile(candidate):
+                return expanded
+    return None
+
+
+# ----------------------------------------------------------------------
+# Minimal browser-cookie loader. Wraps browser-cookie3 (PyPI, MIT) directly
+# so generated skills need no private dependency.
+
+_BROWSER_LOADERS = ("edge", "chrome", "firefox", "safari", "chromium", "brave", "opera", "vivaldi")
+
+
+class _BrowserCookieError(RuntimeError):
+    pass
+
+
+def _load_jar(browser: str, domain_hint: str) -> CookieJar:
+    try:
+        import browser_cookie3  # type: ignore
+    except ImportError as error:  # pragma: no cover - dependency missing
+        raise _BrowserCookieError("browser-cookie3 is not installed") from error
+    loader = getattr(browser_cookie3, browser, None)
+    if loader is None:
+        raise _BrowserCookieError(f"unsupported browser: {browser}")
+    try:
+        return loader(domain_name=domain_hint)
+    except Exception as error:
+        raise _BrowserCookieError(f"{browser}: {error}") from error
+
+
+_HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", re.IGNORECASE)
+
+
+def _normalize_target(value: str) -> tuple[str, str]:
+    raw = value.strip()
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    parsed = urlsplit(raw)
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"}:
+        raise AuthError("INVALID_TARGET", "only http/https targets are supported.")
+    host = (parsed.hostname or "").lower()
+    try:
+        ipaddress.ip_address(host)
+        is_ip = True
+    except ValueError:
+        is_ip = False
+    if not host or (not is_ip and host != "localhost" and not ("." in host and all(_HOST_LABEL.fullmatch(l) for l in host.split(".")))):
+        raise AuthError("INVALID_TARGET", f"invalid host in {value!r}.")
+    netloc = host if parsed.port is None else f"{host}:{parsed.port}"
+    return (urlunsplit((scheme, netloc, parsed.path or "/", parsed.query, "")), host)
+
+
+def _domain_hint(host: str) -> str:
+    """Return the last two labels (registrable-ish). No public-suffix magic —
+    good enough for JD internal targets and the common corp/personal use cases
+    the skill sees."""
+    labels = host.split(".")
+    return ".".join(labels[-2:]) if len(labels) >= 2 else host
+
+
+def _select_cookies_for_url(jar: CookieJar, target_url: str) -> tuple[str, tuple[Cookie, ...]]:
+    request = Request(target_url)
+    jar.add_cookie_header(request)
+    header = request.get_header("Cookie") or ""
+    if not header:
+        return "", ()
+    remaining: list[Cookie] = list(jar)
+    selected: list[Cookie] = []
+    for pair in header.split("; "):
+        if "=" not in pair:
+            continue
+        name, value = pair.split("=", 1)
+        matches = [c for c in remaining if c.name == name and (c.value or "") == value]
+        if not matches:
+            continue
+        pick = max(matches, key=lambda c: len(c.path or "/"))
+        remaining.remove(pick)
+        selected.append(pick)
+    return header, tuple(selected)
+
+
+# ----------------------------------------------------------------------
 
 class AuthResolver:
     def __init__(
@@ -112,7 +223,7 @@ class AuthResolver:
             self._cache[target_url] = (time.time(), session)
             return session
         except AuthError as error:
-            errors.append({"provider": "browser-auth-cookie", "code": error.code, "message": str(error)})
+            errors.append({"provider": "browser-cookie3", "code": error.code, "message": str(error)})
 
         detail = "; ".join(f"{item['provider']}={item['code']}: {item['message']}" for item in errors)
         raise AuthError(
@@ -120,29 +231,23 @@ class AuthResolver:
             f"No provider produced a session for {target_url}. Attempts: {detail or 'none'}",
             recoverable=True,
             remediation=(
-                "Install browser-auth-cookie (`pip install browser-auth-cookie`) and log into the "
-                "target in a supported browser. For JD internal targets also keep JDME desktop client "
-                "signed in and set ERP_SSO_LOGIN_HOME to the erp-sso-login skill directory."
+                "The skill's install.sh installs browser-cookie3 automatically into the local .venv. "
+                "If that failed, run `bash scripts/install.sh` from the skill directory. "
+                "Make sure you're logged into the target site in Edge/Chrome. "
+                "For JD internal targets, install the erp-sso-login skill under one of the well-known "
+                "locations (or set ERP_SSO_LOGIN_HOME) and keep JDME desktop client signed in."
             ),
         )
 
     def invalidate(self, target_url: str) -> None:
         self._cache.pop(target_url, None)
-        try:
-            from browser_auth_cookie import invalidate as _invalidate  # type: ignore
-            _invalidate(target_url)
-        except Exception:
-            pass
 
     def doctor(self) -> dict[str, Any]:
         if self._doctor_cache is not None:
             return self._doctor_cache
-
         info: dict[str, Any] = {"strategy": self.strategy, "providers": []}
-
         info["providers"].append(self._doctor_erp_sso())
         info["providers"].append(self._doctor_browser_cookie())
-
         self._doctor_cache = info
         return info
 
@@ -152,9 +257,10 @@ class AuthResolver:
     def _erp_sso_home(self) -> str | None:
         for env_var in ("ERP_SSO_LOGIN_HOME", "ERP_SSO_LOGIN_PATH"):
             value = os.environ.get(env_var, "").strip()
-            if value:
+            if value and os.path.isdir(value):
                 return value
-        return None
+        auto = _first_existing(_ERP_SSO_WELL_KNOWN)
+        return auto
 
     def _erp_sso_script(self) -> str | None:
         home = self._erp_sso_home()
@@ -175,8 +281,8 @@ class AuthResolver:
             "available": available,
             "home": home,
             "hint": None if available else (
-                "Set ERP_SSO_LOGIN_HOME to the path of the erp-sso-login skill directory "
-                "and make sure JDME desktop client is signed in."
+                "Install erp-sso-login (e.g. `o2 install erp-sso-login`) or set "
+                "ERP_SSO_LOGIN_HOME to its skill directory. JDME desktop client must be signed in."
             ),
         }
 
@@ -185,9 +291,11 @@ class AuthResolver:
         if not script:
             raise AuthError(
                 "ERP_SSO_UNAVAILABLE",
-                "erp-sso-login is not installed or ERP_SSO_LOGIN_HOME is not set.",
+                "erp-sso-login is not installed at any well-known location and ERP_SSO_LOGIN_HOME is not set.",
                 recoverable=True,
-                remediation="Set ERP_SSO_LOGIN_HOME to the erp-sso-login directory.",
+                remediation=(
+                    "Install erp-sso-login (`o2 install erp-sso-login`) or set ERP_SSO_LOGIN_HOME."
+                ),
             )
         cmd = ["bash", script, "--url", target_url, "--cookie-header"]
         if force_refresh:
@@ -219,20 +327,21 @@ class AuthResolver:
         )
 
     # ------------------------------------------------------------------
-    # browser-auth-cookie (universal fallback)
+    # browser-cookie3 (universal fallback, inlined)
 
     def _doctor_browser_cookie(self) -> dict[str, Any]:
         try:
-            import browser_auth_cookie  # type: ignore  # noqa: F401
+            import browser_cookie3  # type: ignore  # noqa: F401
             available = True
             hint = None
         except ImportError:
             available = False
-            hint = "pip install browser-auth-cookie"
+            hint = "pip install browser-cookie3 (or run scripts/install.sh)"
         return {
-            "name": "browser-auth-cookie",
+            "name": "browser-cookie3",
             "available": available,
             "hint": hint,
+            "browsers_order": _configured_browsers(),
         }
 
     def _resolve_browser_cookie(self, target_url: str, *, force_refresh: bool) -> AuthSession:
@@ -242,42 +351,49 @@ class AuthResolver:
             return AuthSession(override, "env", self.strategy, target_url, time.time())
 
         try:
-            from browser_auth_cookie import get_auth  # type: ignore
-        except ImportError:
-            raise AuthError(
-                "BROWSER_COOKIE_UNAVAILABLE",
-                "browser-auth-cookie is not installed.",
-                recoverable=True,
-                remediation="pip install browser-auth-cookie",
-            ) from None
+            normalized_url, host = _normalize_target(target_url)
+        except AuthError:
+            raise
 
-        try:
-            result = get_auth(
-                target_url,
-                required_cookies=self.required_cookies,
-                force_refresh=force_refresh,
+        hint = _domain_hint(host)
+        errors: list[str] = []
+        for browser in _configured_browsers():
+            try:
+                jar = _load_jar(browser, hint)
+            except _BrowserCookieError as error:
+                errors.append(str(error))
+                if "browser-cookie3 is not installed" in str(error):
+                    raise AuthError(
+                        "BROWSER_COOKIE_UNAVAILABLE",
+                        "browser-cookie3 is not installed in the CLI environment.",
+                        recoverable=True,
+                        remediation="Run `bash scripts/install.sh` from the skill directory.",
+                    ) from None
+                continue
+            header, cookies = _select_cookies_for_url(jar, normalized_url)
+            if not header:
+                errors.append(f"{browser}: no cookies matched {host}")
+                continue
+            _validate_required(header, self.required_cookies)
+            return AuthSession(
+                cookie_header=header,
+                provider=f"browser-cookie3[{browser}]",
+                strategy=self.strategy,
+                target_url=target_url,
+                obtained_at=time.time(),
             )
-        except Exception as error:
-            raise AuthError(
-                "BROWSER_COOKIE_UNAVAILABLE",
-                str(error) or "browser-auth-cookie failed to produce cookies.",
-                recoverable=True,
-                remediation=(
-                    "Log into the target site in a supported browser (Edge / Chrome / Firefox / Safari / "
-                    "Chromium / Brave / Opera / Vivaldi)."
-                ),
-            ) from None
-
-        cookie_header = getattr(result, "cookie_header", "") or ""
-        if not cookie_header:
-            raise AuthError("BROWSER_COOKIE_EMPTY", "No cookies returned from any browser.", recoverable=True)
-        return AuthSession(
-            cookie_header=cookie_header,
-            provider=f"browser-auth-cookie[{getattr(result, 'browser', 'unknown')}]",
-            strategy=self.strategy,
-            target_url=target_url,
-            obtained_at=time.time(),
+        raise AuthError(
+            "BROWSER_COOKIE_EMPTY",
+            f"no browser cookies matched {host} (tried {', '.join(_configured_browsers())}). Details: {'; '.join(errors) or 'none'}",
+            recoverable=True,
+            remediation="Log into the target site in one of Edge/Chrome/Firefox/Safari.",
         )
+
+
+def _configured_browsers() -> tuple[str, ...]:
+    raw = os.getenv("BROWSER_AUTH_BROWSERS", "edge,chrome")
+    ordered = tuple(dict.fromkeys(item.strip().lower() for item in raw.split(",") if item.strip()))
+    return tuple(name for name in ordered if name in _BROWSER_LOADERS) or ("edge", "chrome")
 
 
 def _validate_required(cookie_header: str, required: tuple[str, ...]) -> None:

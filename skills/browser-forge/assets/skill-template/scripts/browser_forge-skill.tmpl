@@ -11,6 +11,15 @@ export BROWSER_FORGE_MANIFEST_\
 PATH="${BROWSER_FORGE_MANIFEST_\
 PATH:-$SCRIPT_DIR/../manifest.json}"
 
+# First run: install into a local .venv so the CLI is open-the-box runnable.
+# Users can disable with BROWSER_FORGE_SKIP_AUTOINSTALL=1 or clean with
+# `rm -rf scripts/.venv`.
+if [ ! -f "$SCRIPT_DIR/.venv/pyvenv.cfg" ] && [ "${BROWSER_FORGE_SKIP_AUTOINSTALL:-0}" != "1" ]; then
+  if [ -x "$SCRIPT_DIR/install.sh" ]; then
+    "$SCRIPT_DIR/install.sh" >&2 2>&1 || true
+  fi
+fi
+
 export PYTHONPATH="$SCRIPT_DIR/cli/src"
 cd "$SCRIPT_DIR/cli/src"
 
