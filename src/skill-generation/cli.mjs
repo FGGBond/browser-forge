@@ -1,9 +1,11 @@
 import { generateSkill, GenerationError } from './generator.js'
 import { validateSkill } from './manifest-validator.js'
+import { resyncRuntime, ResyncError } from './resync-runtime.js'
 
 const USAGE = `Usage:
   browser-forge generate --recording-dir DIR --skill-name NAME --description TEXT [--target-domain HOST]... [--output-root DIR]
-  browser-forge validate --skill-dir DIR`
+  browser-forge validate --skill-dir DIR
+  browser-forge resync-runtime --skill-dir DIR`
 
 function printJson(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`)
@@ -17,7 +19,7 @@ function fail(code, message, exitCode) {
 function parseArguments(args) {
   if (args.length === 0 || args.includes('--help') || args.includes('-h')) return { help: true }
   const [command, ...tokens] = args
-  if (!['generate', 'validate'].includes(command)) throw new GenerationError(`Unknown command: ${command}`, 'INVALID_ARGUMENT')
+  if (!['generate', 'validate', 'resync-runtime'].includes(command)) throw new GenerationError(`Unknown command: ${command}`, 'INVALID_ARGUMENT')
 
   const values = { command, targetDomains: [] }
   const aliases = {
@@ -62,6 +64,19 @@ async function main() {
     if (args.command === 'generate') {
       const result = await generateSkill(args)
       printJson({ ok: true, status: 'generated', skill_dir: result.skillDir, next_action: 'populate_and_validate' })
+      return
+    }
+    if (args.command === 'resync-runtime') {
+      const result = await resyncRuntime(args.skillDir)
+      printJson({
+        ok: true,
+        status: 'resynced',
+        skill_dir: result.skillDir,
+        previous_runtime_version: result.previous_runtime_version,
+        runtime_version: result.runtime_version,
+        rewritten_files: result.rewritten_files,
+        validated: result.validated === true
+      })
       return
     }
     const result = await validateSkill(args.skillDir)

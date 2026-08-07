@@ -58,7 +58,9 @@ const REQUIRED_COMMAND_DOC_SECTIONS = Object.freeze([
   'Inputs',
   ...REQUIRED_HELP_SECTIONS
 ])
-const IMMUTABLE_RUNTIME_TEMPLATES = Object.freeze([
+export const ENTRYPOINT_TEMPLATE = 'scripts/browser_forge-skill.tmpl'
+
+export const IMMUTABLE_RUNTIME_TEMPLATES = Object.freeze([
   ['scripts/install.sh', 'scripts/install.sh'],
   ['scripts/cli/pyproject.toml.tmpl', 'scripts/cli/pyproject.toml'],
   ['scripts/cli/src/browser_forge_generated/__init__.py', '__init__.py'],
@@ -124,6 +126,8 @@ function trustedIdentifiers(manifest) {
     return null
   }
 }
+
+export { trustedIdentifiers }
 
 // Deterministic identifiers the generator stamps into runtime files (package
 // name, entrypoint, skill id). They are long and mixed-case enough to trip the
