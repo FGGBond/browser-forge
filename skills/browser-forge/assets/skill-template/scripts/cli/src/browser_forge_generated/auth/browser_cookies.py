@@ -59,6 +59,23 @@ class BrowserCookieProvider:
     def _records(self, cookies: Iterable[Any]) -> list[CookieRecord]:
         return [_record(item) for item in cookies]
 
+    @staticmethod
+    def _registrable_domain(hostname: str | None) -> str:
+        """Return the broad domain filter to hand to ``browser_cookie3``.
+
+        ``browser_cookie3``'s ``domain_name`` filter is a substring match, so a
+        full hostname such as ``api.example.jd.com`` excludes cookies scoped to
+        the parent domain ``.jd.com`` — exactly the session cookies most sites
+        register. Filtering on the registrable parent domain keeps those in the
+        candidate set; final host/path/secure scoping is enforced by
+        ``cookies_for_host``/``cookies_for_url`` below.
+        """
+
+        labels = [label for label in (hostname or "").rstrip(".").lower().split(".") if label]
+        if len(labels) <= 2:
+            return ".".join(labels)
+        return ".".join(labels[-2:])
+
     def resolve(self, target_url: str, force_refresh: bool = False) -> AuthSession:
         if force_refresh:
             self.store.delete(target_url)
@@ -78,11 +95,12 @@ class BrowserCookieProvider:
             raise BrowserCookieError(attempts) from None
 
         hostname = urlsplit(target_url).hostname
+        domain_filter = self._registrable_domain(hostname)
         for browser in self.browsers:
             try:
                 loader = getattr(browser_cookie3, browser)
                 records = cookies_for_host(
-                    self._records(loader(domain_name=hostname)),
+                    self._records(loader(domain_name=domain_filter)),
                     target_url,
                     now=self.now(),
                 )
