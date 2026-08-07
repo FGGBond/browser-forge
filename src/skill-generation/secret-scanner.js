@@ -55,7 +55,7 @@ function finding(code, path, text, offset) {
   return { code, path, ...lineAndColumn(text, offset), preview: `${code}: [REDACTED]` }
 }
 
-export function scanText(text, relativePath) {
+export function scanText(text, relativePath, allowlist = new Set()) {
   const findings = []
   const occupied = []
 
@@ -67,6 +67,7 @@ export function scanText(text, relativePath) {
       const end = start + match[0].length
       if (
         isRedacted(secret) ||
+        allowlist.has(secret) ||
         (code === 'HIGH_ENTROPY_SECRET' && !hasHighEntropy(secret)) ||
         occupied.some(range => start < range.end && end > range.start)
       ) continue
@@ -78,7 +79,7 @@ export function scanText(text, relativePath) {
   return findings.sort((left, right) => left.line - right.line || left.column - right.column)
 }
 
-export async function scanTree(root) {
+export async function scanTree(root, allowlist = new Set()) {
   const findings = []
 
   async function scanDirectory(directory) {
@@ -90,7 +91,7 @@ export async function scanTree(root) {
       } else if (entry.isFile()) {
         const text = await readFile(path, 'utf8')
         const relativePath = relative(root, path).split(sep).join('/')
-        findings.push(...scanText(text, relativePath))
+        findings.push(...scanText(text, relativePath, allowlist))
       }
     }
   }

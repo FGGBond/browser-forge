@@ -125,6 +125,21 @@ function trustedIdentifiers(manifest) {
   }
 }
 
+// Deterministic identifiers the generator stamps into runtime files (package
+// name, entrypoint, skill id). They are long and mixed-case enough to trip the
+// generic high-entropy secret heuristic, so the scanner is told to treat these
+// exact tokens — and nothing else — as non-secrets.
+function secretScanAllowlist(manifest) {
+  const identifiers = trustedIdentifiers(manifest)
+  const allowlist = new Set()
+  if (identifiers) {
+    for (const value of [identifiers.packageName, identifiers.entrypointName, identifiers.skillId]) {
+      if (typeof value === 'string' && value) allowlist.add(value)
+    }
+  }
+  return allowlist
+}
+
 function sha256(contents) {
   return createHash('sha256').update(contents).digest('hex')
 }
@@ -638,7 +653,7 @@ export async function validateSkill(skillDir) {
 
   let findings = []
   try {
-    findings = await scanTree(skillDir)
+    findings = await scanTree(skillDir, secretScanAllowlist(manifest))
   } catch (error) {
     issues.push({ code: 'SKILL_SCAN_ERROR', path: '.', message: error.message })
   }
