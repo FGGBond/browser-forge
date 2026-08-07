@@ -228,6 +228,18 @@ describe('generated Python CLI', () => {
           expect(commandResult.exitCode, commandResult.stderr).toBe(0)
           expect(commandResult.json).toMatchObject({ spec_version: '1.0', ok: true, status: 'success' })
         }
+
+        const portableDoctor = execute(portableEntrypoint, ['doctor'], portableSkill)
+        expect(portableDoctor.json.data.environment_ready).toBe(true)
+        expect(portableDoctor.json.data.environment).toMatchObject({
+          environment_ready: true,
+          python_supported: true,
+          using_bundled_venv: true
+        })
+        const dependencyNames = portableDoctor.json.data.environment.dependencies.map(entry => entry.name)
+        expect(dependencyNames).toEqual(expect.arrayContaining(['browser_cookie3', 'cryptography']))
+        expect(portableDoctor.json.data.environment.dependencies.every(entry => entry.importable)).toBe(true)
+        expect(portableDoctor.json.data.environment.remediation).toBeUndefined()
       } finally {
         await rm(portableRoot, { recursive: true, force: true })
       }

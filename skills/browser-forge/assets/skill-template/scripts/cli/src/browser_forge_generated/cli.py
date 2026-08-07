@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import platform
 import re
@@ -18,6 +19,60 @@ from .manifest import load_manifest, manifest_path
 from .telemetry import UsageTelemetry
 
 BUILTIN_COMMANDS = {"doctor", "auth-status", "describe"}
+
+# Runtime imports the packaged CLI relies on (declared in pyproject.toml). doctor
+# checks these are importable so a recipient on a machine that never ran
+# install.sh gets a truthful environment_ready verdict instead of a false pass.
+RUNTIME_DEPENDENCIES = ("browser_cookie3", "cryptography")
+
+# Lowest interpreter the runtime supports; the entrypoint enforces the same floor.
+MINIMUM_PYTHON = (3, 10)
+
+
+def _environment_report() -> dict[str, Any]:
+    """Self-check the runtime environment for a shared skill.
+
+    Reports the interpreter, whether it clears the minimum version, whether each
+    runtime dependency is importable, and whether the bundled scripts/.venv is
+    the interpreter in use. environment_ready is the single boolean a recipient
+    (or a calling agent) can gate on; when it is false, remediation carries the
+    exact command to run.
+    """
+
+    version = sys.version_info
+    python_supported = (version.major, version.minor) >= MINIMUM_PYTHON
+    dependencies = [
+        {"name": name, "importable": importlib.util.find_spec(name) is not None}
+        for name in RUNTIME_DEPENDENCIES
+    ]
+    missing = [entry["name"] for entry in dependencies if not entry["importable"]]
+    # The entrypoint prefers scripts/.venv; sys.prefix points there when it is in
+    # use. A bare "python3 cli.py" run outside the venv still works if deps are
+    # present globally, but we surface which interpreter answered so a false pass
+    # from a stray global install is visible rather than silent.
+    using_bundled_venv = sys.prefix != sys.base_prefix and ".venv" in sys.prefix
+    environment_ready = python_supported and not missing
+
+    report: dict[str, Any] = {
+        "environment_ready": environment_ready,
+        "python_version": platform.python_version(),
+        "python_executable": sys.executable,
+        "python_supported": python_supported,
+        "minimum_python": ".".join(str(part) for part in MINIMUM_PYTHON),
+        "using_bundled_venv": using_bundled_venv,
+        "dependencies": dependencies,
+    }
+    if not environment_ready:
+        reasons = []
+        if not python_supported:
+            reasons.append(
+                f"Python {report['minimum_python']}+ is required; found {report['python_version']}."
+            )
+        if missing:
+            reasons.append("Missing runtime dependencies: " + ", ".join(missing) + ".")
+        report["remediation"] = "Run `bash scripts/install.sh` to build scripts/.venv and install dependencies."
+        report["remediation_reasons"] = reasons
+    return report
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -263,7 +318,10 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(manifest)
         if command_id == "doctor":
             resolver = _build_auth_resolver(manifest)
+            environment = _environment_report()
             _emit(success(command_id, {
+                "environment_ready": environment["environment_ready"],
+                "environment": environment,
                 "python_version": platform.python_version(),
                 "manifest_path": str(manifest_path()),
                 "network_disabled": __import__("os").environ.get("BROWSER_FORGE_" "DISABLE_NETWORK") == "1",

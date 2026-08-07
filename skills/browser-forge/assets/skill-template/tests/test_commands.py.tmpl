@@ -98,3 +98,46 @@ def test_describe_string(monkeypatch, capsys):
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["command"] == "describe"
+
+
+def test_env_ready():
+    report = cli_module._environment_report()
+
+    assert report["environment_ready"] is True
+    assert report["python_supported"] is True
+    names = {entry["name"] for entry in report["dependencies"]}
+    assert {"browser_cookie3", "cryptography"}.issubset(names)
+    assert all(entry["importable"] for entry in report["dependencies"])
+    assert "remediation" not in report
+
+
+def test_env_missing_dep(monkeypatch):
+    real_find_spec = cli_module.importlib.util.find_spec
+
+    def fake_find_spec(name, *args, **kwargs):
+        if name == "browser_cookie3":
+            return None
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(cli_module.importlib.util, "find_spec", fake_find_spec)
+
+    report = cli_module._environment_report()
+
+    assert report["environment_ready"] is False
+    assert any(
+        entry["name"] == "browser_cookie3" and entry["importable"] is False
+        for entry in report["dependencies"]
+    )
+    assert "bash scripts/install.sh" in report["remediation"]
+    assert any("browser_cookie3" in reason for reason in report["remediation_reasons"])
+
+
+def test_doctor_env(monkeypatch, capsys):
+    monkeypatch.setattr(cli_module, "load_manifest", lambda: manifest_data)
+
+    assert cli_module.main(["doctor"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "doctor"
+    assert payload["data"]["environment_ready"] is True
+    assert payload["data"]["environment"]["python_supported"] is True
