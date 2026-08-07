@@ -47,6 +47,14 @@ decrypt_cookie = jdme_module.decrypt_cookie
 AuthSession = session_module.AuthSession
 SessionStore = session_module.SessionStore
 
+# Derive expectations from the generated manifest so this test stays
+# self-consistent for any target — a jd.com target resolves the provider chain
+# ["jdme_sso", "browser_cookie"], a non-jd target resolves ["browser_cookie"].
+EXPECTED_PROVIDERS = list(manifest.get("auth", {}).get("providers", []))
+TARGET_DOMAINS = list(manifest.get("auth", {}).get("target_domains", []))
+BASE_HOST = TARGET_DOMAINS[0] if TARGET_DOMAINS else "api.example.test"
+BASE_URL = f"https://{BASE_HOST}"
+
 ME_TOKEN = "<ME-TOKEN-SECRET>"
 AUTH_CODE = "<AUTH-CODE-SECRET>"
 GETCODE_FLOW = "<GETCODE-FLOW-SECRET>"
@@ -344,7 +352,7 @@ def test_raw_creds_ignored(monkeypatch, capsys):
     assert payload["data"] == {
         "configured": True,
         "resolved": False,
-        "providers": ["browser_cookie"],
+        "providers": EXPECTED_PROVIDERS,
     }
     runtime_config = config_module.load_config(manifest)
     assert not hasattr(runtime_config, "auth_value")
@@ -353,11 +361,11 @@ def test_raw_creds_ignored(monkeypatch, capsys):
 
 
 def test_auth_status_metadata(monkeypatch, capsys):
-    session = auth_session("browser_cookie", "https://api.example.test")
+    session = auth_session("browser_cookie", BASE_URL)
 
     class Resolver:
         def resolve(self, target_url, force_refresh=False):
-            assert target_url == "https://api.example.test"
+            assert target_url == BASE_URL
             assert force_refresh is False
             return session
 
@@ -413,7 +421,7 @@ def test_cli_refresh_cookie(tmp_path, monkeypatch, capsys):
     class FakeBrowserCookie:
         name: str = "session"
         value: str = "<FRESH-BROWSER-SECRET>"
-        domain: str = "api.example.test"
+        domain: str = BASE_HOST
         path: str = "/"
         secure: bool = True
         expires: int | None = None
@@ -433,10 +441,10 @@ def test_cli_refresh_cookie(tmp_path, monkeypatch, capsys):
     )
     provider.store.save(AuthSession(
         provider="browser_cookie",
-        target_url="https://api.example.test/orders",
+        target_url=f"{BASE_URL}/orders",
         cookie_jar=(cookie(
             "session",
-            domain="api.example.test",
+            domain=BASE_HOST,
             secure=True,
             host_only=True,
             value="<STALE-CACHED-SECRET>",
@@ -488,9 +496,9 @@ def test_cli_refresh_cookie(tmp_path, monkeypatch, capsys):
     assert payload["ok"] is True
     assert payload["auth"] == {
         "provider": "browser_cookie",
-        "target_host": "api.example.test",
+        "target_host": BASE_HOST,
         "fallback_used": False,
-        "expires_at": provider.store.load("https://api.example.test/orders").expires_at,
+        "expires_at": provider.store.load(f"{BASE_URL}/orders").expires_at,
         "cookie_count": 1,
         "cached": False,
     }
@@ -1295,7 +1303,7 @@ def test_doctor_provider_report(monkeypatch, capsys):
     payload = json.loads(capsys.readouterr().out)
     report = payload["data"]["authentication"]
     assert report == {
-        "attempted_providers": ["browser_cookie"],
+        "attempted_providers": EXPECTED_PROVIDERS,
         "remediation": "Sign in to 京ME or a configured browser before an authenticated command.",
     }
     assert set(report) == {"attempted_providers", "remediation"}
