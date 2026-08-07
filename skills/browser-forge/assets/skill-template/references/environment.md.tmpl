@@ -1,0 +1,71 @@
+# Run environment
+
+This skill is a standalone Python CLI. It carries its own runtime contract and
+does not depend on the machine, checkout, or tooling that produced it.
+
+## Prerequisites
+
+- **Python 3.10 or newer** available as `python3` or `python` on `PATH`.
+- Network access to a Python package index for first-time install — unless you
+  use `--offline` (see below).
+- Runtime dependencies (installed for you by `install.sh`):
+  - `browser-cookie3>=0.19.1`
+  - `cryptography>=42.0.0`
+
+The skill needs nothing else that was present on the machine that generated it.
+
+## Install
+
+`scripts/install.sh` builds a local virtual environment at `scripts/.venv` and
+installs the CLI plus its dependencies into it.
+
+```bash
+bash scripts/install.sh            # normal install from a package index
+bash scripts/install.sh --with-test  # also install test extras (pytest)
+bash scripts/install.sh --offline    # no index; link the bundled source instead
+```
+
+- `--offline` skips `pip` entirely and points the venv at the bundled
+  `scripts/cli/src` via a `.pth` file. Use it on air-gapped machines. It is
+  mutually exclusive with `--with-test` (test extras need an index).
+- `BROWSER_FORGE_INSTALL_OFFLINE=1` in the environment is equivalent to
+  passing `--offline`.
+
+## Run
+
+Always invoke through the stable entrypoint; it resolves the interpreter for
+you:
+
+```bash
+scripts/{{ENTRYPOINT_NAME}} <command> [flags]
+```
+
+Interpreter resolution order:
+
+1. the `scripts/.venv` interpreter created by `install.sh` (POSIX or Windows);
+2. a system `python3`;
+3. a system `python`.
+
+Each candidate must satisfy `python >= 3.10`. If none qualifies, the entrypoint
+prints a JSON envelope with `error.code = "PYTHON_NOT_FOUND"` and exits `127`
+instead of raising a stack trace.
+
+## Verify the environment
+
+```bash
+scripts/{{ENTRYPOINT_NAME}} doctor
+```
+
+`doctor` returns the detected Python version, whether each runtime dependency
+is importable, whether the network guard is engaged, and — when a prerequisite
+is missing — the exact remediation command to run. Treat a `doctor` result with
+`environment_ready = false` as "run `bash scripts/install.sh` first".
+
+## Troubleshooting
+
+- **`PYTHON_NOT_FOUND`**: install Python 3.10+ and re-run `install.sh`.
+- **`ModuleNotFoundError` for `browser_cookie3` / `cryptography`**: the venv was
+  not created or is stale — re-run `bash scripts/install.sh`.
+- **No network during install**: use `bash scripts/install.sh --offline`.
+- **Moved the skill directory**: the `.venv` stores absolute paths; delete
+  `scripts/.venv` and re-run `install.sh`.

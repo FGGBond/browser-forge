@@ -7,11 +7,51 @@ description: {{DESCRIPTION}}
 
 This generated skill provides a versioned command contract for `{{SKILL_ID}}`.
 
-Use the stable entrypoint:
+## Run environment (read this first if the skill was shared to you)
+
+This skill is a self-contained Python CLI. It needs **Python 3.10 or newer**
+on `PATH` plus two packages (`browser-cookie3`, `cryptography`). Nothing else
+from the machine that produced it is required — no global installs, no
+repository checkout.
+
+**First-time setup** (creates a local `.venv` beside the entrypoint and
+installs the dependencies into it):
+
+```bash
+bash scripts/install.sh
+```
+
+Then run any command through the stable entrypoint:
 
 ```bash
 scripts/{{ENTRYPOINT_NAME}} describe
 ```
+
+The entrypoint picks an interpreter on its own: it prefers the `.venv` that
+`install.sh` builds, then falls back to a system `python3`/`python`. If no
+suitable Python is found it emits a JSON error with code `PYTHON_NOT_FOUND`
+rather than a stack trace.
+
+**Not sure the environment is ready?** Ask the skill itself:
+
+```bash
+scripts/{{ENTRYPOINT_NAME}} doctor
+```
+
+`doctor` reports the Python version and whether each runtime dependency is
+importable, and — when something is missing — the exact command to fix it.
+
+**Offline / air-gapped machines** (no `pip` index reachable): wire the venv to
+the bundled source instead of installing from a package index:
+
+```bash
+bash scripts/install.sh --offline
+```
+
+Full prerequisite list, all `install.sh` flags, and troubleshooting live in
+[references/environment.md](references/environment.md).
+
+## Extend this skill
 
 The installed Python package is `{{PACKAGE_NAME}}`. Read `manifest.json` and
 the files under `references/` before adding business commands.

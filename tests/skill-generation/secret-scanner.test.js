@@ -42,6 +42,14 @@ describe('scanText', () => {
   it('finds a standalone high-entropy value', () => {
     expect(scanText('generated: K7mQ2vX9pL4rT8yN1cW6dH3sF5bJ0aZ', 'x.txt')).toHaveLength(1)
   })
+
+  it('allows the fixed BROWSER_FORGE_INSTALL_OFFLINE template constant', () => {
+    expect(scanText('- `BROWSER_FORGE_INSTALL_OFFLINE=1` enables offline install', 'references/environment.md')).toEqual([])
+  })
+
+  it('still flags a high-entropy token that only resembles the allowed constant', () => {
+    expect(scanText('BROWSER_FORGE_INSTALL_OFFLINE_9f3ac2b7d0e1', 'x.txt')).toHaveLength(1)
+  })
 })
 
 describe('scanTree', () => {

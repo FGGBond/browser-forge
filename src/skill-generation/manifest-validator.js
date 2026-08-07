@@ -132,7 +132,9 @@ export { trustedIdentifiers }
 // Deterministic identifiers the generator stamps into runtime files (package
 // name, entrypoint, skill id). They are long and mixed-case enough to trip the
 // generic high-entropy secret heuristic, so the scanner is told to treat these
-// exact tokens — and nothing else — as non-secrets.
+// exact tokens — and nothing else — as non-secrets. (Fixed template constants
+// such as BROWSER_FORGE_INSTALL_OFFLINE are handled by the scanner's own
+// built-in allowlist, so they need no per-skill entry here.)
 function secretScanAllowlist(manifest) {
   const identifiers = trustedIdentifiers(manifest)
   const allowlist = new Set()

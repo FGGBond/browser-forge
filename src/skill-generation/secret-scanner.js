@@ -4,6 +4,16 @@ import { join, relative, sep } from 'node:path'
 const SKIPPED_DIRECTORIES = new Set(['.git', '.venv', '__pycache__', '.pytest_cache', 'node_modules'])
 const REDACTED_VALUE = /^(?:<[^>]+>|\{\{[^}]+\}\}|redacted|removed|placeholder)$/i
 
+// Fixed constants the template authors into every generated skill: long enough
+// to trip the generic high-entropy heuristic, yet identical byte-for-byte in
+// every skill, re-derivable from the template, and definitely not secrets.
+// install.sh dodges the scanner for BROWSER_FORGE_INSTALL_OFFLINE with a shell
+// line-continuation; prose files (references/environment.md) that must print
+// the literal verbatim cannot, so the scanner itself treats these exact tokens
+// as non-secrets by default. Callers get them folded into every scan, so a
+// recipient scanning a shared skill sees a clean tree without extra context.
+export const TEMPLATE_CONSTANT_ALLOWLIST = Object.freeze(['BROWSER_FORGE_INSTALL_OFFLINE'])
+
 const PATTERNS = [
   {
     code: 'BEARER_TOKEN',
@@ -68,6 +78,7 @@ export function scanText(text, relativePath, allowlist = new Set()) {
       if (
         isRedacted(secret) ||
         allowlist.has(secret) ||
+        TEMPLATE_CONSTANT_ALLOWLIST.includes(secret) ||
         (code === 'HIGH_ENTROPY_SECRET' && !hasHighEntropy(secret)) ||
         occupied.some(range => start < range.end && end > range.start)
       ) continue
