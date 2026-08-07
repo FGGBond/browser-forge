@@ -108,45 +108,65 @@ class AuthResolver:
         except Exception:
             raise AuthProviderError() from None
 
+    def _strategies(self) -> dict[str, dict[str, Any]]:
+        """Declarative provider registry keyed by manifest provider name.
+
+        Each entry pairs an applicability predicate (does this provider apply
+        to the target at all) with a factory, the provider's own error type,
+        and a predicate for which of its failures are recoverable (fall
+        through to the next provider) versus fatal (propagate). resolve() walks
+        self.providers in declared order against this table, so the base makes
+        no hard assumption about which providers exist or their sequence:
+        adding a provider means registering a strategy and listing it in the
+        manifest, not editing the resolve control flow.
+        """
+
+        return {
+            "jdme_sso": {
+                "applies": lambda url: is_jd_target(url, self.allowed_domains),
+                "factory": self._jdme,
+                "error_type": JdmeSsoError,
+                "recoverable": lambda error: getattr(error, "code", None) in RECOVERABLE_JDME_CODES,
+            },
+            "browser_cookie": {
+                "applies": lambda url: True,
+                "factory": self._browser,
+                "error_type": BrowserCookieError,
+                # A browser-cookie miss is never fatal on its own: fall through
+                # so a later provider can try, or the chain ends AUTH_UNAVAILABLE.
+                "recoverable": lambda error: True,
+            },
+        }
+
     def resolve(self, target_url: str, force_refresh: bool = False) -> AuthSession:
         if not is_allowed_target(target_url, self.allowed_domains):
             raise AuthTargetError()
+        strategies = self._strategies()
         attempted: list[str] = []
         used_fallback = False
-        if is_jd_target(target_url, self.allowed_domains) and "jdme_sso" in self.providers:
-            attempted.append("jdme_sso")
+        for name in self.providers:
+            strategy = strategies.get(name)
+            if strategy is None or not strategy["applies"](target_url):
+                continue
+            attempted.append(name)
             try:
-                session = self._jdme().resolve(target_url, force_refresh=force_refresh)
+                session = strategy["factory"]().resolve(target_url, force_refresh=force_refresh)
                 return self._session(
                     session,
-                    expected_provider="jdme_sso",
+                    expected_provider=name,
                     target_url=target_url,
-                    fallback_used=False,
+                    fallback_used=used_fallback,
                 )
-            except JdmeSsoError as error:
-                if error.code not in RECOVERABLE_JDME_CODES:
+            except strategy["error_type"] as error:
+                if not strategy["recoverable"](error):
                     raise
                 used_fallback = True
+                continue
+            except AuthProviderError:
+                raise
             except Exception:
                 raise AuthProviderError() from None
-
-        if "browser_cookie" not in self.providers:
-            raise AuthUnavailableError(attempted)
-        attempted.append("browser_cookie")
-        try:
-            session = self._browser().resolve(target_url, force_refresh=force_refresh)
-            return self._session(
-                session,
-                expected_provider="browser_cookie",
-                target_url=target_url,
-                fallback_used=used_fallback,
-            )
-        except BrowserCookieError:
-            raise AuthUnavailableError(attempted) from None
-        except AuthProviderError:
-            raise
-        except Exception:
-            raise AuthProviderError() from None
+        raise AuthUnavailableError(attempted)
 
     def doctor(self) -> dict[str, Any]:
         return {
