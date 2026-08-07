@@ -105,3 +105,25 @@
 **回归验证(2026-08-08)**:用 `session-2026-08-07-2159` 作测试用例,用优化后流程重新产出 `joyspace-subdoc-create`(语义长名一次通过)→ validate ok:true、52 单测通过 → 真机 smoke:auth-status 命中 43 Cookie、fallback_used=True、resolve-parent 只读 GET 返回 ok=True。四个优化点(P2-3/P2-4/P0-2+P1-1/P0-1)逐项在实践中验证通过。
 
 **已证伪的假设**:曾怀疑"生成器丢代码"(joysubdoc 的 jdme_sso 比模板少 28 行)。核实为版本时间差 —— `_tls_context` 是本轮刚加进模板的未提交改动,joysubdoc 生成在前。**生成器忠实,"模板即真相"地基稳固**,问题实为 P0-1。
+
+---
+
+## 四、产出 skill 的能力补齐(目标3/4,与问题清单正交)
+
+前三节是"分析流程本身的问题清单"。以下是给**产出 skill** 补上的两类横向能力 —— 让分享出去的 skill 自带环境与可观测性,不再依赖生成时的隐性上下文。
+
+### 目标3 —— 产出 skill 自带环境安装说明 + 缺失自检(已完成)
+
+- **动机**:skill 分享给他人后,常因缺运行环境(Python 版本、`browser_cookie3`/`cryptography` 依赖、`.venv`)而跑不起来,却无自带说明可依。
+- **3a(环境文档)**:`SKILL.md` + `references/environment.md.tmpl` 随每个 skill 生成,写明最低 Python、依赖清单、`bash scripts/install.sh` 一键建 `.venv`、离线安装开关 `BROWSER_FORGE_INSTALL_OFFLINE`。附带修复:该常量(29 字符、熵 3.667)在 markdown 里触发 P2-3 同类高熵误报 → 在 `secret-scanner.js` 内以 `TEMPLATE_CONSTANT_ALLOWLIST` 冻结白名单化,保留"无上下文洁净树"不变量(`scanTree(skillDir)` 无 allowlist 仍须为空)。
+- **3b(doctor 环境自检)**:`cli.py doctor` 新增 `_environment_report()` —— 如实报告 `environment_ready`、Python 版本是否达标、每个依赖是否可导入、是否在自带 `.venv`;不 ready 时给出 `remediation`(跑 `install.sh`)与具体原因清单。ready/unready 两路均如实,不谎报。SHA 锁定文件,随模板演进(存量 skill 经 resync 获得)。
+- **验证**:目标5 的 producer+validator 双子 agent 循环 —— iter-3a validator 反而**发现**了 doctor 文档与实现不一致(驱动 3b 的紧迫性),iter-3b validator **确认** 3b 闭合了该缺口。
+
+### 目标4 —— 全链路遥测:谁产出了什么 skill、谁使用了哪个 skill(已完成)
+
+- **动机**:需要监控遥测——产出侧"谁用 browser-forge 生成了什么 skill",调用侧"谁调用了哪一个 skill";含遥测的构建是**可选项**,统一由构建参数控制。
+- **产出侧(本轮新增)**:headless 化 skill-generation CLI —— `src/main/telemetry/headless.js` 用一个 Electron-app shim(userData 路径 + 版本)让无 Electron 的 CLI 复用同一 `createTelemetry`/config 门禁/SLS 上报。`cli.mjs` 发 `skill_generation_started/succeeded/failed`(带稳定 `skill_id`,镜像生成器 slug 规则)与 `skill_generation_validation_failed`(带 issue/finding 计数),`finally` 里 close。`client.js` 的周期 flush 定时器 `unref` + close 时 `clearInterval`,不拖住短命 CLI 进程。
+- **调用侧(既有)**:`telemetry.py` 的 `UsageTelemetry.track_command` 在 `cli.py` 各命令分支发 `generated_skill_used`(带 erp/skill_id/skill_name/command_id/ok/status/duration),SHA 锁定、有专属模板测试。
+- **可携带性修复**:agent-skill-installer 把 `src/main/telemetry` 一并 vendor 到复制运行时旁(`scripts/main/telemetry`),使 `cli.mjs` 的 `../main/telemetry` 相对导入在"安装后的 skill"里与源码树一致地解析——否则复制运行时会 `ERR_MODULE_NOT_FOUND`。
+- **构建参数统一控制**:默认(private build)全程静默、不触盘、不发网络。构建期 `__BROWSER_FORGE_TELEMETRY_BUILD__` 编译 define 或 `BROWSER_FORGE_TELEMETRY_BUILD` 环境变量开启;`BROWSER_FORGE_TELEMETRY_DISABLED` 运行时可退出;`enabled = buildEnabled && !runtimeDisabled && hasSlsTarget`。
+- **测试基础设施修复**:vitest 无配置文件,默认 glob 会连带发现 `.claude/worktrees/` 下遗留 worktree 里的整套测试副本(指向修复前代码)一起跑,产生与工作树无关的幽灵失败 → 新增 `vitest.config.js` 排除 `**/.claude/**`。
