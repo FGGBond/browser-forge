@@ -7,10 +7,11 @@ import json
 import logging
 import os
 import re
+import ssl
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 from .auth.provider import is_allowed_target
 from .config import Config
@@ -31,6 +32,31 @@ class ClientError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.recoverable = recoverable
+
+
+def _tls_context() -> ssl.SSLContext:
+    """Verifying TLS context that survives an empty system CA store.
+
+    A bare Python install (python.org builds before ``Install
+    Certificates.command`` runs) points at a CA file that does not exist, so
+    valid certificates still fail with ``CERTIFICATE_VERIFY_FAILED``.
+    Verification stays ON; when the default store loads no certificates we fall
+    back to ``certifi``. ``SSL_CERT_FILE``/``SSL_CERT_DIR`` keep precedence.
+    """
+
+    context = ssl.create_default_context()
+    try:
+        loaded = context.cert_store_stats().get("x509_ca", 0)
+    except Exception:
+        loaded = 0
+    if loaded == 0 and not (os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR")):
+        try:
+            import certifi
+
+            context.load_verify_locations(cafile=certifi.where())
+        except Exception:
+            pass
+    return context
 
 
 class RedactingFilter(logging.Filter):
@@ -162,7 +188,7 @@ class Client:
         request = Request(target_url, data=encoded_body, headers=headers, method=method)
         self.logger.debug("Requesting %s %s", method, request.full_url)
         try:
-            with build_opener(_SafeBusinessRedirects(self)).open(request, timeout=30) as response:
+            with build_opener(HTTPSHandler(context=_tls_context()), _SafeBusinessRedirects(self)).open(request, timeout=30) as response:
                 payload = response.read().decode("utf-8")
         except HTTPError as error:
             raise ClientError("HTTP_ERROR", f"Remote service returned HTTP {error.code}.") from error

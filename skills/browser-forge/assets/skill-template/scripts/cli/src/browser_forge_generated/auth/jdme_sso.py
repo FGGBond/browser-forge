@@ -578,6 +578,33 @@ def _read_local(
     return found
 
 
+def _tls_context() -> ssl.SSLContext:
+    """Build a verifying TLS context that survives an empty system CA store.
+
+    A bare Python install (e.g. python.org builds before running
+    ``Install Certificates.command``) points at a CA file that does not exist,
+    so every HTTPS handshake fails with ``CERTIFICATE_VERIFY_FAILED`` even
+    though the certificates are valid. We keep verification ON — never disable
+    it — but when the default trust store loads no certificates we fall back to
+    ``certifi``'s bundle. ``SSL_CERT_FILE``/``SSL_CERT_DIR`` still take
+    precedence because ``create_default_context`` honours them first.
+    """
+
+    context = ssl.create_default_context()
+    try:
+        loaded = context.cert_store_stats().get("x509_ca", 0)
+    except Exception:
+        loaded = 0
+    if loaded == 0 and not (os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR")):
+        try:
+            import certifi
+
+            context.load_verify_locations(cafile=certifi.where())
+        except Exception:
+            pass
+    return context
+
+
 def _response(
     opener,
     request: urllib.request.Request,
@@ -791,7 +818,8 @@ class JdmeSsoProvider:
             allow_insecure_loopback=allow_loopback,
         )
         cookie_processor = _ScopedCookieProcessor(jar)
-        opener = urllib.request.build_opener(cookie_processor, redirects)
+        https_handler = urllib.request.HTTPSHandler(context=_tls_context())
+        opener = urllib.request.build_opener(cookie_processor, redirects, https_handler)
 
         device = _device(Path(db_path))
         client, brand = _os_info()
