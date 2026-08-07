@@ -36,6 +36,7 @@
 - **根因**:通用运行时层内置了对某一类站点(ssa/OIDC)的强假设,且只移植了 erp-sso-login 双通道里的"系统会话兑换",丢了"全局 sso.jd.com"通道 —— 而 JoySpace 只需后者。
 - **对目标的影响**:鉴权是所有 skill 共享的基座。基座对站点做硬假设 = 每遇到一类新登录体系就要改基座 = 违背"可复用、可整合"。
 - **方案**:把鉴权改为**可插拔策略**(全局 ticket / 系统会话兑换 / 浏览器 Cookie 三种 provider 可声明式组合),manifest 里按目标声明用哪条链,而非在运行时层写死单一流程。参考 [[erp-sso-login-working-sso]] 的双通道设计。
+- **本轮进度(部分完成)**:`provider.py` 的 `AuthResolver.resolve()` 已重构为**声明式策略注册表** —— 按 manifest `providers` 声明顺序遍历,每个 provider 声明"适用谓词/工厂/错误类型/可恢复判定",新增或重排 provider 不再改 resolve 控制流(基座不再假设固定链)。行为对既有 jd/非 jd 两种形态保持一致(各 36 用例通过,全套 158/158)。**尚未完成**:`jdme_sso.py`(962 行、SHA 锁定的最敏感文件)内部仍焊死 `ssa.jd.com` 单流程、仍缺"全局 sso.jd.com"通道。该"内层拆焊"需真实 SSO 回归(本会话无法完整跑通),列为后续:应把 jdme_sso 拆成两个独立策略(`jdme_global_ticket` 走全局 sso.jd.com、`jdme_system_exchange` 走系统会话兑换),让 JoySpace 这类只需全局通道的站点走前者,彻底移除对 ssa 体系的硬假设。
 
 ### P1-1 【主线A】TLS_ERROR 被判不可恢复,阻断 provider 回退
 
@@ -76,20 +77,31 @@
 - **根因**:测试模板固定,未按 target-domain 是否落在 jd.com 内动态选断言。
 - **方案(本轮已改模板)**:测试模板按 `EXPECTED_PROVIDERS/BASE_HOST/BASE_URL` 变量渲染,jd 与非 jd 目标各自自洽(已验证 45 用例双双通过)。
 
+### P2-5 【流程·安全】pytest 缓存签名触发密钥扫描器误报(回归验证中新发现)
+
+- **现象**:工作流要求"populate 后先跑 generated tests,再 validate"。但 pytest 会在 skill 目录写入 `.pytest_cache/CACHEDIR.TAG`,其标准签名行是 32 位 hex,恰好命中 `HIGH_ENTROPY_SECRET` → validate 报误导性"疑似泄漏凭证" finding + `READY_GATE_FAILED`。是流程自身产物触发的自伤,与 P2-3 同源。
+- **根因**:`secret-scanner.js` 的 `SKIPPED_DIRECTORIES` 只含 `.git/.venv/__pycache__/node_modules`,未含 `.pytest_cache`。
+- **方案(本轮已修)**:把 `.pytest_cache` 与 `__pycache__` 同等对待 —— 扫描器跳过它(不再给出误导性泄漏信号);ready 门禁仍以 `FORBIDDEN_EXECUTION_PATH` 标记它(清晰可执行的"清缓存"信号);`resync-runtime` 顺带清除。已验证:存在缓存时 validate 只报 1 条 FORBIDDEN_EXECUTION_PATH、0 条 secret;resync 清除后 ok:true;全套 158/158。
+
 ---
 
 ## 三、优先级总览与本轮进度
 
 | 优先级 | 问题 | 主线 | 本轮状态 |
 | --- | --- | --- | --- |
-| P0-1 | 模板演进无下发通道 | A | 方案已定(resync-runtime),待实现 |
-| P0-2 | 跨子域 Cookie 过滤 bug | B | 模板已修,待 resync 惠及存量 |
-| P0-3 | 鉴权焊死单一登录流程 | B | 方案已定(策略化),待实现 |
-| P1-1 | TLS_ERROR 阻断回退 | A | 模板已修 |
-| P1-2 | 缺端到端联调闸门 | 流程 | 方案已定 |
+| P0-1 | 模板演进无下发通道 | A | **已实现**(resync-runtime),存量 skill 已 resync 验证 ok:true |
+| P0-2 | 跨子域 Cookie 过滤 bug | B | 模板已修,resync 已惠及存量;真机 smoke 命中 43 Cookie |
+| P0-3 | 鉴权焊死单一登录流程 | B | **部分完成**:resolve 已策略注册表化;jdme_sso 内层拆焊待真机回归 |
+| P1-1 | TLS_ERROR 阻断回退 | A | 模板已修;真机 smoke 佐证 fallback_used=True |
+| P1-2 | 缺端到端联调闸门 | 流程 | 方案已定;回归中用一次真实只读请求手工联调作样例 |
 | P2-1 | 录制事件语义太薄 | B | 方案已定 |
-| P2-2 | 步骤引擎无数据流 | 流程 | 方案已定 |
-| P2-3 | 扫描器误报长标识符 | 安全 | 方案已定 |
+| P2-2 | 步骤引擎无数据流 | 流程 | 方案已定(回归复现:仍被迫拆 3 条命令) |
+| P2-3 | 扫描器误报长标识符 | 安全 | **已修**;回归中语义长名一次通过 |
 | P2-4 | auth 测试不自洽 | 流程 | 模板已修(45 用例通过) |
+| P2-5 | pytest 缓存触发扫描器误报 | 安全 | **已修**(回归中新发现并修复) |
+
+**范式结论**:这类 skill 产出的最佳范式是**"统一可演进契约"**。SHA 锁定让所有 skill 运行时层字节一致(可整合、可相互吸收的基座),这是方向;但只"冻结"会让契约一改就集体破坏存量 → 范式碎裂。P0-1 的 `resync-runtime` 补上"演进"通道:改模板 → 一键把存量拉回当前基座(本轮已用 P0-2/P1-1/P0-3 的模板改动实证:存量 skill 从 ok:false 一键恢复 ok:true)。P0-3 把鉴权基座从"焊死单流程"推向"声明式可插拔",使不同登录体系的 skill 共享同一基座而非各自分叉——这正是"相互吸收变成更强 skill"的前提。范式落地的剩余关键项:P0-3 内层拆焊、P1-2 联调闸门、P2-1/P2-2 上游信息保真。
+
+**回归验证(2026-08-08)**:用 `session-2026-08-07-2159` 作测试用例,用优化后流程重新产出 `joyspace-subdoc-create`(语义长名一次通过)→ validate ok:true、52 单测通过 → 真机 smoke:auth-status 命中 43 Cookie、fallback_used=True、resolve-parent 只读 GET 返回 ok=True。四个优化点(P2-3/P2-4/P0-2+P1-1/P0-1)逐项在实践中验证通过。
 
 **已证伪的假设**:曾怀疑"生成器丢代码"(joysubdoc 的 jdme_sso 比模板少 28 行)。核实为版本时间差 —— `_tls_context` 是本轮刚加进模板的未提交改动,joysubdoc 生成在前。**生成器忠实,"模板即真相"地基稳固**,问题实为 P0-1。
