@@ -258,6 +258,7 @@ async function forbiddenExecutionPathIssues(skillDir) {
       if (
         entry.name === '.venv' ||
         entry.name === '__pycache__' ||
+        entry.name === '.pytest_cache' ||
         /\.(?:pyc|pyo)$/i.test(entry.name)
       ) {
         forbidden.push(relativePath)

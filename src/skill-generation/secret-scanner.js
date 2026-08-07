@@ -1,7 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 
-const SKIPPED_DIRECTORIES = new Set(['.git', '.venv', '__pycache__', 'node_modules'])
+const SKIPPED_DIRECTORIES = new Set(['.git', '.venv', '__pycache__', '.pytest_cache', 'node_modules'])
 const REDACTED_VALUE = /^(?:<[^>]+>|\{\{[^}]+\}\}|redacted|removed|placeholder)$/i
 
 const PATTERNS = [

@@ -43,6 +43,7 @@ async function purgeExecutionArtifacts(skillDir, packageName) {
     await rm(join(sourceRoot, relative), { recursive: true, force: true })
   }
   await rm(join(skillDir, 'tests', '__pycache__'), { recursive: true, force: true })
+  await rm(join(skillDir, '.pytest_cache'), { recursive: true, force: true })
 }
 
 async function syncReadyMarker(skillDir) {
