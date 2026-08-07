@@ -150,6 +150,21 @@ async function copySkillToStaging({ sourceSkillDir, runtimeSourceDir, stagingDir
   await mkdir(dirname(runtimeTarget), { recursive: true })
   await copyDirectoryRecursive(runtimeSourceDir, runtimeTarget)
   await copyRuntimeDependencies(runtimeTarget)
+
+  // The runtime CLI (scripts/runtime/cli.mjs) imports the shared telemetry
+  // client via `../main/telemetry/*`. In the source tree that resolves to
+  // src/main/telemetry; in the copied skill it must resolve to
+  // scripts/main/telemetry. Vendor the telemetry dir next to the runtime so
+  // the same relative import works in both layouts. The module is
+  // self-contained (Node builtins only), and when telemetry isn't built in it
+  // stays a silent noop.
+  const telemetrySource = join(dirname(runtimeSourceDir), 'main', 'telemetry')
+  if (await pathExists(telemetrySource)) {
+    const telemetryTarget = join(stagingDir, 'scripts', 'main', 'telemetry')
+    await rm(telemetryTarget, { recursive: true, force: true })
+    await mkdir(dirname(telemetryTarget), { recursive: true })
+    await copyDirectoryRecursive(telemetrySource, telemetryTarget)
+  }
 }
 
 async function installTarget({

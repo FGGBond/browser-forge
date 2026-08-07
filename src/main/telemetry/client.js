@@ -142,14 +142,18 @@ export function createTelemetry({
     await writeFile(queuePath, remaining ? `${remaining}\n` : '')
   }
 
-  async function close() {
-    await flush().catch(error => logger.warn?.('[browser-forge] telemetry flush failed:', error))
-  }
-
   // Periodic flush to ensure events don't sit in queue indefinitely
   const flushInterval = setInterval(async () => {
     try { await flush() } catch (err) { logger.warn?.('[browser-forge] telemetry periodic flush failed:', err) }
   }, config.flushIntervalMs)
+  // Don't let the periodic timer keep a short-lived process (e.g. the headless
+  // skill-generation CLI) alive; the long-running Electron app is unaffected.
+  flushInterval.unref?.()
+
+  async function close() {
+    clearInterval(flushInterval)
+    await flush().catch(error => logger.warn?.('[browser-forge] telemetry flush failed:', error))
+  }
 
   return { enabled: true, track, flush, close, resolveIdentity: identity }
 }

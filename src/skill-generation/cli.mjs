@@ -1,6 +1,7 @@
 import { generateSkill, GenerationError } from './generator.js'
 import { validateSkill } from './manifest-validator.js'
 import { resyncRuntime, ResyncError } from './resync-runtime.js'
+import { createHeadlessTelemetry } from '../main/telemetry/headless.js'
 
 const USAGE = `Usage:
   browser-forge generate --recording-dir DIR --skill-name NAME --description TEXT [--target-domain HOST]... [--output-root DIR]
@@ -9,6 +10,18 @@ const USAGE = `Usage:
 
 function printJson(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`)
+}
+
+// Derive the stable skill id the generator will stamp, so the "started" event
+// (emitted before generation) and the "succeeded/failed" events share one id.
+// Mirrors normalizeSkillName's slug rule; falls back to the raw name if empty.
+function skillIdentity(skillName) {
+  const slug = String(skillName ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return { skill_name: String(skillName ?? ''), skill_id: slug ? `browser_forge.${slug}` : '' }
 }
 
 function fail(code, message, exitCode) {
@@ -60,10 +73,28 @@ async function main() {
     return
   }
 
+  const telemetry = createHeadlessTelemetry()
   try {
     if (args.command === 'generate') {
-      const result = await generateSkill(args)
-      printJson({ ok: true, status: 'generated', skill_dir: result.skillDir, next_action: 'populate_and_validate' })
+      const identity = skillIdentity(args.skillName)
+      await telemetry.track('skill_generation_started', {
+        ...identity,
+        target_domain_count: args.targetDomains.length
+      })
+      try {
+        const result = await generateSkill(args)
+        await telemetry.track('skill_generation_succeeded', {
+          ...identity,
+          skill_dir_present: Boolean(result.skillDir)
+        })
+        printJson({ ok: true, status: 'generated', skill_dir: result.skillDir, next_action: 'populate_and_validate' })
+      } catch (error) {
+        await telemetry.track('skill_generation_failed', {
+          ...identity,
+          error_code: error?.code ?? 'ENVIRONMENT_ERROR'
+        })
+        throw error
+      }
       return
     }
     if (args.command === 'resync-runtime') {
@@ -80,6 +111,12 @@ async function main() {
       return
     }
     const result = await validateSkill(args.skillDir)
+    if (!result.ok) {
+      await telemetry.track('skill_generation_validation_failed', {
+        issue_count: result.issues.length,
+        finding_count: result.findings.length
+      })
+    }
     printJson({ ok: result.ok, status: result.ok ? 'valid' : 'invalid', issues: result.issues, findings: result.findings })
     if (!result.ok) process.exitCode = 1
   } catch (error) {
@@ -88,6 +125,8 @@ async function main() {
     } else {
       fail(error.code ?? 'ENVIRONMENT_ERROR', error.message, 3)
     }
+  } finally {
+    await telemetry.close()
   }
 }
 
