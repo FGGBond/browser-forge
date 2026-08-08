@@ -32,15 +32,22 @@ root.innerHTML = `
   </div>`
 const main = root.querySelector('[data-main]')
 let cleanupView
+let beforeNavigate
+let navigating = false
 
 root.querySelectorAll('[data-new-recording]').forEach(button => button.addEventListener('click', () => navigate('new-recording')))
 root.querySelector('[data-nav="library"]').addEventListener('click', () => navigate('library'))
 root.querySelector('[data-nav="trash"]').addEventListener('click', () => navigate('trash'))
 
-export async function navigate(route, patch = {}) {
-  cleanupView?.()
-  cleanupView = null
-  state.update({ route, ...patch })
+export async function navigate(route, patch = {}, { force = false } = {}) {
+  if (navigating) return false
+  navigating = true
+  try {
+    if (!force && beforeNavigate && !await beforeNavigate()) return false
+    cleanupView?.()
+    cleanupView = null
+    beforeNavigate = null
+    state.update({ route, ...patch })
   root.querySelectorAll('[data-nav]').forEach(button => button.classList.toggle('active', button.dataset.nav === route || (['new-recording', 'recording', 'detail'].includes(route) && button.dataset.nav === 'library')))
   if (route === 'library') {
     await renderLibrary({
@@ -77,23 +84,31 @@ export async function navigate(route, patch = {}) {
     return
   }
   if (route === 'detail') {
-    await renderDetail({
+    const controller = await renderDetail({
       container: main,
       api,
       recordingId: state.value.selectedId,
       onBack: () => navigate('library'),
-      onTrashed: async recording => { showUndoToast(recording); await navigate('library') }
+      onTrashed: async recording => { showUndoToast(recording); await navigate('library', {}, { force: true }) }
     })
-    return
+    if (controller) {
+      beforeNavigate = controller.beforeNavigate
+      cleanupView = controller.cleanup
+    }
+    return true
   }
-  if (route === 'trash') {
-    await renderTrash({
-      container: main,
-      api,
-      onBack: () => navigate('library'),
-      onRestored: recording => navigate('detail', { selectedId: recording.id })
-    })
-    return
+    if (route === 'trash') {
+      await renderTrash({
+        container: main,
+        api,
+        onBack: () => navigate('library'),
+        onRestored: recording => navigate('detail', { selectedId: recording.id })
+      })
+      return true
+    }
+    return true
+  } finally {
+    navigating = false
   }
 }
 

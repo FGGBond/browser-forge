@@ -18,6 +18,9 @@ beforeAll(async () => {
     const url = new URL(req.url, 'http://localhost')
     if (url.pathname === '/api/recordings' && req.method === 'GET') return json(res, { recordings: [recording] })
     if (url.pathname === `/api/recordings/${id}` && req.method === 'GET') return json(res, recording)
+    if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'GET') return json(res, { text: '', status: 'empty', updatedAt: null })
+    if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'PUT') { const body = await readBody(req); requests.push({ method: req.method, path: url.pathname, body }); return json(res, { text: body.text, status: body.text ? 'draft' : 'empty', updatedAt: '2026-08-08T12:20:00.000Z' }) }
+    if (url.pathname === `/api/recordings/${id}/external-agent-prompt`) return json(res, { recordingId: id, text: 'complete prompt' })
     if (url.pathname === `/api/recordings/${id}/timeline`) return json(res, { events: [
       { type: 'click', label: '提交', videoOffsetMs: 12_345, timestamp: Date.parse(recording.createdAt) + 12_345 },
       { type: 'click', label: '超出视频', videoOffsetMs: 50_000 },

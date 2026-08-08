@@ -1,6 +1,7 @@
+import { renderPromptEditor } from './prompt-editor.js'
 import { formatDuration } from './library.js'
 
-export async function renderDetail({ container, api, recordingId, onBack, onTrashed, renderPrompt }) {
+export async function renderDetail({ container, api, recordingId, onBack, onTrashed }) {
   container.innerHTML = `<section class="detail-loading"><div class="loading-ring"></div><span>正在读取录制…</span></section>`
   try {
     const [recording, timeline] = await Promise.all([api.getRecording(recordingId), api.getTimeline(recordingId)])
@@ -53,11 +54,14 @@ export async function renderDetail({ container, api, recordingId, onBack, onTras
       updateEventAvailability()
     }
 
+    const promptController = await renderPromptEditor({ container: container.querySelector('[data-prompt-slot]'), recordingId: recording.id, api })
+
     container.querySelector('[data-export]').addEventListener('click', async event => {
       const button = event.currentTarget
       button.disabled = true
       button.classList.add('is-busy')
       try {
+        if (!await promptController.flush()) return
         const result = await api.exportRecording(recording.id)
         showNotice(container, `已导出到 ${result.path}`, 'success')
       } catch (error) {
@@ -71,6 +75,7 @@ export async function renderDetail({ container, api, recordingId, onBack, onTras
       const button = event.currentTarget
       button.disabled = true
       try {
+        if (!await promptController.flush()) { button.disabled = false; return }
         const trashed = await api.trashRecording(recording.id)
         onTrashed(trashed)
       } catch (error) {
@@ -78,8 +83,7 @@ export async function renderDetail({ container, api, recordingId, onBack, onTras
         showNotice(container, error.message, 'error')
       }
     })
-    if (renderPrompt) await renderPrompt({ container: container.querySelector('[data-prompt-slot]'), recording })
-    return recording
+    return { recording, beforeNavigate: promptController.beforeNavigate, cleanup: () => promptController.destroy() }
   } catch (error) {
     container.innerHTML = `<section class="narrow-view"><button class="back-button" data-back>返回录制库</button><div class="inline-error"><strong>无法打开录制</strong><span>${escapeHtml(error.message)}</span></div></section>`
     container.querySelector('[data-back]').addEventListener('click', onBack)
