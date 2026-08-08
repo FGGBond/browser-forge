@@ -40,6 +40,10 @@ async function seedRecording({ parent, id, createdAt, title, state = 'active', h
   return metadata
 }
 
+async function libraryIndex(libraryRoot) {
+  return JSON.parse(await readFile(join(libraryRoot, 'library.json'), 'utf8')).recordings
+}
+
 describe('RecordingLibrary initialization and reconciliation', () => {
   it('creates the managed layout and a rebuildable empty index', async () => {
     const library = new RecordingLibrary({ root, now })
@@ -80,6 +84,18 @@ describe('RecordingLibrary initialization and reconciliation', () => {
     ]))
     expect((await lstat(join(paths.staging, stagedId))).isSymbolicLink()).toBe(true)
     expect((await lstat(join(paths.staging, firstId))).isDirectory()).toBe(true)
+  })
+
+  it('does not follow a symlinked recording.json during reconciliation', async () => {
+    await mkdir(join(paths.active, firstId), { recursive: true })
+    const outsideMetadata = join(outside, 'recording.json')
+    await atomicWriteJson(outsideMetadata, createRecordingMetadata({ id: firstId, createdAt: '2026-08-08T12:15:00.000Z' }))
+    await symlink(outsideMetadata, join(paths.active, firstId, 'recording.json'))
+
+    const report = await new RecordingLibrary({ root, now }).initialize()
+
+    expect(report.errors).toEqual([expect.objectContaining({ id: firstId, code: 'CORRUPT_MATERIAL' })])
+    expect(await libraryIndex(root)).toEqual([])
   })
 
   it('adopts a complete staging recording that already has recording.json', async () => {

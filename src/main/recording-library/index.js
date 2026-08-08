@@ -1,7 +1,8 @@
 import { randomUUID as defaultRandomUUID } from 'crypto'
 import * as defaultFs from 'fs/promises'
+import { constants as fsConstants } from 'fs'
 import { join, resolve } from 'path'
-import { atomicWriteJson, readJson } from './atomic-file.js'
+import { atomicWriteJson } from './atomic-file.js'
 import {
   MAX_RECORDING_TITLE_LENGTH,
   createRecordingMetadata,
@@ -84,7 +85,7 @@ export class RecordingLibrary {
       const capture = await this.#readRequiredJson(join(expectedPath, 'metadata.json'), 'Capture metadata is missing')
       const timeline = await this.#readRequiredJson(join(expectedPath, 'timeline.json'), 'Timeline is missing')
       if (!Array.isArray(timeline)) throw libraryError('CORRUPT_MATERIAL', 'Timeline must be an array')
-      const videoManifest = await readJson(join(expectedPath, 'video', 'manifest.json'), { fallback: null })
+      const videoManifest = await this.#readSafeJson(join(expectedPath, 'video', 'manifest.json'), { required: false, message: 'Video manifest is invalid' })
       const createdAt = capture.startedAt || capture.createdAt || this.now()
       const titleTimeline = timeline.length > 0 ? timeline : [{ type: 'navigation', url: capture.startUrl }]
       const metadata = createRecordingMetadata({
@@ -143,7 +144,7 @@ export class RecordingLibrary {
 
   async #readIndexRevision() {
     try {
-      const index = await readJson(this.paths.index)
+      const index = await this.#readSafeJson(this.paths.index, { required: false, message: 'Library index is invalid' })
       if (index?.schemaVersion !== 1 || !Number.isSafeInteger(index.revision) || index.revision < 0 || !Array.isArray(index.recordings)) return 0
       return index.revision
     } catch {
@@ -223,11 +224,31 @@ export class RecordingLibrary {
   }
 
   async #readRequiredJson(path, message) {
+    return this.#readSafeJson(path, { required: true, message })
+  }
+
+  async #readSafeJson(path, { required, message }) {
+    let info
     try {
-      return await readJson(path)
+      info = await this.fs.lstat(path)
     } catch (error) {
-      if (error?.code === 'ENOENT' || error instanceof SyntaxError) throw libraryError('CORRUPT_MATERIAL', message, { cause: error })
+      if (error?.code === 'ENOENT' && !required) return null
+      if (error?.code === 'ENOENT') throw libraryError('CORRUPT_MATERIAL', message, { cause: error })
       throw error
+    }
+    if (info.isSymbolicLink() || !info.isFile()) throw libraryError('CORRUPT_MATERIAL', message)
+
+    let handle
+    try {
+      handle = await this.fs.open(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0))
+      const openedInfo = await handle.stat()
+      if (!openedInfo.isFile()) throw libraryError('CORRUPT_MATERIAL', message)
+      return JSON.parse(await handle.readFile('utf8'))
+    } catch (error) {
+      if (error?.code === 'ELOOP' || error instanceof SyntaxError) throw libraryError('CORRUPT_MATERIAL', message, { cause: error })
+      throw error
+    } finally {
+      await handle?.close().catch(() => {})
     }
   }
 
