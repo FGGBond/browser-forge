@@ -1219,10 +1219,10 @@ Expected: Electron Forge creates the arm64 macOS package with `bf-window-recorde
 - [ ] **Step 6: Run packaged-ASAR and managed frame extraction smoke checks**
 
 ```bash
-APP_PATH="$(find out -path '*Browser Forge.app' -print -quit)"
+APP_PATH="$(find dist -path '*Browser Forge.app' -print -quit)"
 test -n "$APP_PATH"
-test -x "$APP_PATH/Contents/Resources/native-tools/darwin-arm64/bf-window-recorder"
-test -x "$APP_PATH/Contents/Resources/native-tools/darwin-arm64/bf-video-frame"
+test -x "$APP_PATH/Contents/Resources/native-tools/bf-window-recorder"
+test -x "$APP_PATH/Contents/Resources/native-tools/bf-video-frame"
 node skills/browser-forge/scripts/extract-video-frame.mjs --recording-dir "$BROWSER_FORGE_SMOKE_RECORDING" --offset-ms 1000 --output /tmp/browser-forge-managed-smoke.png
 test -s /tmp/browser-forge-managed-smoke.png
 ```

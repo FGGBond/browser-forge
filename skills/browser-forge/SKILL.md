@@ -16,6 +16,24 @@ Follow this order:
 1. **Get user operation context.** Before reading or analyzing recording artifacts, ask for the business goal, key observed or returned data, selected, entered, or modified data, and final result. Confirm the path, target, skill name, and domains. If given only a path, ask and wait.
 2. **Ask ambiguity questions.** Ask the user to resolve multiple plausible request candidates or interpretations after surfacing sanitized evidence. Even if told not to ask questions, ask the user and wait. Do not guess a side effect. Do not generate until ambiguities are resolved. If the user cannot resolve one, only then mark it unsupported/experimental.
 3. **Perform artifact correlation.** Read [the analysis workflow](references/analysis-workflow.md). Align intent with timeline, HAR, navigation, DOM, screenshots, events, and (when present) the native window video. Read [video analysis](references/video-analysis.md) before extracting a frame; use `timeline[].videoOffsetMs`, not epoch-time subtraction. Record response-to-request sources and runtime-only values.
+
+### Read video context from managed or exported recordings
+
+The recording path may point to an **App 管理的录制** under Browser Forge's private workspace or to a **导出的录制副本**. Both use the same portable material layout and the same frame tool:
+
+1. Read `timeline.json` and select the relevant event's `videoOffsetMs`.
+2. Extract only the needed browser-window frame:
+
+   ```bash
+   node skills/browser-forge/scripts/extract-video-frame.mjs \
+     --recording-dir "/absolute/path/to/recording" \
+     --offset-ms 12345 \
+     --output "/tmp/browser-forge-frame.png"
+   ```
+
+3. Inspect the PNG. Read adjacent offsets only when the visual state transition remains ambiguous.
+4. The extractor is bundled: **不需要 FFmpeg**、Homebrew、Python 或 pip，也不要下载替代工具。使用 `video/manifest.json` coverage rules and never request an offset outside a partial video's covered range.
+
 4. **Generate a fresh skeleton.** Read [the artifact specification](references/artifact-spec.md), then run:
 
    ```bash
