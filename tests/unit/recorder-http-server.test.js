@@ -464,6 +464,54 @@ describe('window video lifecycle', () => {
     expect(order).toEqual(['debug:ready', 'video:start', 'session:start', 'video:stop', 'session:stop', 'chrome:kill'])
     expect(sessionStops).toEqual([expect.objectContaining({ state: 'complete', sourcePath: '/tmp/browser-forge-video.mp4' })])
   })
+
+  it('starts without outputDir and promotes managed material before returning recording detail', async () => {
+    const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
+    const stagingPath = '/tmp/browser-forge-managed/staging/' + id
+    const recording = { id, title: 'Orders', state: 'active' }
+    const recordingLibrary = {
+      createStagingRecording: vi.fn(async () => ({ id, path: stagingPath })),
+      promote: vi.fn(async () => recording)
+    }
+    const sessionOptions = []
+    class FakeRecordingSession {
+      constructor(options) {
+        sessionOptions.push(options)
+        this._cdp = { getTargets: () => [], disconnect: async () => {} }
+      }
+      async start() {}
+      async stop() { return stagingPath }
+      getLiveSummary() { return { type: 'summary', startedAt: 1, tabs: [], totals: {} } }
+    }
+    const generatePoster = vi.fn(async () => { throw new Error('poster failed') })
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      startupLogFile: null,
+      recordingLibrary,
+      generatePoster,
+      findAvailablePort: async () => 9333,
+      findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      waitForChromeDebugEndpoint: async () => {},
+      launchChrome: () => ({ pid: 4242, exitCode: null, once: () => {}, kill: () => {} }),
+      createVideoRecorder: createFakeVideoRecorder,
+      RecordingSession: FakeRecordingSession
+    })
+    const url = await recorderServer.listen()
+
+    const started = await fetch(`${url}/api/start-recording`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outputDir: '/tmp/attacker-ignored' })
+    }).then(response => response.json())
+    expect(started).toEqual({ ok: true, port: 9333, recordingId: id })
+    expect(sessionOptions[0]).toEqual(expect.objectContaining({ port: 9333, sessionDir: stagingPath }))
+    expect(sessionOptions[0]).not.toHaveProperty('outputDir')
+
+    const stopped = await fetch(`${url}/api/stop-recording`, { method: 'POST' }).then(response => response.json())
+    expect(generatePoster).toHaveBeenCalledWith(expect.objectContaining({ recordingDir: stagingPath }))
+    expect(recordingLibrary.promote).toHaveBeenCalledWith({ id, sessionDir: stagingPath })
+    expect(stopped).toEqual({ ok: true, recordingId: id, recording })
+  })
+
 })
 
 function createFakeVideoRecorder() {

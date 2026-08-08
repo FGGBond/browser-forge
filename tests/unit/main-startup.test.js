@@ -20,7 +20,16 @@ function createElectronStubs() {
       loadedUrls.push(url)
     }
   }
-  return { app, BrowserWindow, loadedUrls, ipcMain: {}, dialog: {} }
+  const recordingLibrary = { initialize: vi.fn(async () => {}) }
+  return {
+    app,
+    BrowserWindow,
+    loadedUrls,
+    ipcMain: {},
+    dialog: { showOpenDialog: vi.fn() },
+    shell: { showItemInFolder: vi.fn() },
+    createRecordingLibrary: vi.fn(() => recordingLibrary)
+  }
 }
 
 describe('Electron app startup', () => {
@@ -95,6 +104,42 @@ describe('Electron app startup', () => {
       'app_window_created'
     ]))
     expect(events.find(([name]) => name === 'skill_install_succeeded')?.[1]).toMatchObject({ installed_count: 1 })
+  })
+
+  it('initializes the managed library under userData before creating the server', async () => {
+    const stubs = createElectronStubs()
+    const calls = []
+    const recordingLibrary = { initialize: vi.fn(async () => { calls.push('library:initialize') }) }
+    const createRecordingLibrary = vi.fn(options => {
+      calls.push('library:create')
+      return recordingLibrary
+    })
+    const recorderServer = { listen: vi.fn(async () => 'http://127.0.0.1:6789'), close: vi.fn() }
+    const createRecorderHttpServer = vi.fn(options => {
+      calls.push('server:create')
+      return recorderServer
+    })
+
+    await startApp({
+      ...stubs,
+      createRecordingLibrary,
+      createRecorderHttpServer,
+      ensureAgentSkillsInstalled: vi.fn(async () => ({ results: [] })),
+      registerShellIpcHandlers: vi.fn()
+    })
+
+    expect(createRecordingLibrary).toHaveBeenCalledWith({ root: '/user/data/recordings' })
+    expect(calls.indexOf('library:initialize')).toBeLessThan(calls.indexOf('server:create'))
+    const options = createRecorderHttpServer.mock.calls[0][0]
+    expect(options).toEqual(expect.objectContaining({
+      recordingLibrary,
+      chooseExportDirectory: expect.any(Function),
+      revealPath: expect.any(Function)
+    }))
+    stubs.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: ['/Users/example/Desktop'] })
+    await expect(options.chooseExportDirectory()).resolves.toBe('/Users/example/Desktop')
+    await options.revealPath('/Users/example/Desktop/export')
+    expect(stubs.shell.showItemInFolder).toHaveBeenCalledWith('/Users/example/Desktop/export')
   })
 
 })

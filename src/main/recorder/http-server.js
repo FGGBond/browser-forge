@@ -14,6 +14,7 @@ import { hashForTelemetry } from '../telemetry/config.js'
 import { randomUUID } from 'crypto'
 import { VideoRecorder as DefaultVideoRecorder } from './video-recorder.js'
 import { createMediaRange } from './media-response.js'
+import { generatePoster as defaultGeneratePoster } from './poster-generator.js'
 
 export function createRecorderHttpServer({
   uiRoot,
@@ -33,6 +34,7 @@ export function createRecorderHttpServer({
   recordingLibrary = null,
   chooseExportDirectory = null,
   revealPath = null,
+  generatePoster = defaultGeneratePoster,
   telemetry = { track: async () => {} }
 } = {}) {
   const app = express()
@@ -48,6 +50,7 @@ export function createRecorderHttpServer({
   let hasStartedActiveSession = false
   let stoppingPromise = null
   let unexpectedTerminalVideo
+  let activeRecordingId = null
 
   async function resetStartupLog(lines = []) {
     if (!startupLogFile) return
@@ -72,6 +75,7 @@ export function createRecorderHttpServer({
     if (activeSession === session) {
       activeSession = null
       hasStartedActiveSession = false
+      activeRecordingId = null
     }
     if (chromeProcess === chrome) chromeProcess = null
     if (stopVideo) await videoRecorder?.stop?.().catch(() => {})
@@ -98,14 +102,26 @@ export function createRecorderHttpServer({
     const summary = typeof session.getTelemetrySummary === 'function'
       ? session.getTelemetrySummary()
       : safeTelemetrySummary(session.getLiveSummary?.())
+    const recordingId = activeRecordingId
 
     activeVideoRecorder = null
     const stopPromise = (async () => {
       try {
         const video = hasTerminalVideo ? options.video : await videoRecorder?.stop?.()
         sessionDir = await session.stop({ video })
+        let recording = null
+        if (recordingLibrary && recordingId) {
+          if (['complete', 'partial'].includes(video?.state)) {
+            await generatePoster({
+              recordingDir: sessionDir,
+              durationMs: video.durationMs ?? summary.duration_ms ?? 0,
+              nativeToolPathOptions
+            }).catch(error => appendStartupLog(`posterGeneration=failed message=${error.message}`))
+          }
+          recording = await recordingLibrary.promote({ id: recordingId, sessionDir })
+        }
         await telemetry.track('recording_stopped', summary)
-        return sessionDir
+        return recording ? { sessionDir, recordingId, recording } : sessionDir
       } finally {
         await releaseActiveResources({ session, videoRecorder, chrome, videoOutputPath, stopVideo: false })
       }
@@ -156,12 +172,15 @@ export function createRecorderHttpServer({
         `[${checkedAt}] Browser Forge recorder startup`,
         `chromePort=${chromePort}`
       ])
-      const { chromePath, outputDir } = await resolveStartOptions({
+      const staging = recordingLibrary ? await recordingLibrary.createStagingRecording() : null
+      activeRecordingId = staging?.id ?? null
+      const startOptions = await resolveStartOptions({
         chromePath: req.body.chromePath,
-        outputDir: req.body.outputDir,
+        ...(recordingLibrary ? {} : { outputDir: req.body.outputDir }),
         port: chromePort,
         findChromePath
       })
+      const { chromePath, outputDir } = startOptions
       const baseUrl = startUrlBase || `http://127.0.0.1:${server.address().port}`
       const userDataDir = join(homedir(), '.browser-forge', 'chrome-profile')
       const recordingToken = randomUUID()
@@ -213,14 +232,18 @@ export function createRecorderHttpServer({
         outputPath: videoOutputPath
       })
       await appendStartupLog(`videoRecorder=started startEpochMs=${video.startEpochMs}`)
-      activeSession = new RecordingSession({ port: chromePort, outputDir, video })
+      activeSession = new RecordingSession({
+        port: chromePort,
+        ...(recordingLibrary ? { sessionDir: staging.path } : { outputDir }),
+        video
+      })
       await activeSession.start()
       sessionDir = null
       hasStartedActiveSession = true
       if (unexpectedTerminalVideo !== undefined) stopActiveRecording({ video: unexpectedTerminalVideo }).catch(() => {})
       await appendStartupLog('recordingSession=started')
       await telemetry.track('recording_started', { port: chromePort })
-      res.json({ ok: true, port: chromePort })
+      res.json({ ok: true, port: chromePort, ...(activeRecordingId ? { recordingId: activeRecordingId } : {}) })
     } catch (error) {
       await appendStartupLog(`startupError=${error.message}`)
       await telemetry.track('chrome_launch_failed', { error_code: error.code ?? 'CHROME_LAUNCH_FAILED', message_hash: hashForTelemetry(error.message) })
@@ -235,8 +258,12 @@ export function createRecorderHttpServer({
   app.post('/api/stop-recording', async (req, res) => {
     if (!activeSession && !stoppingPromise) return res.json({ ok: false, error: 'No active session' })
     try {
-      const stoppedDir = await stopActiveRecording()
-      res.json({ ok: true, sessionDir: stoppedDir })
+      const stopped = await stopActiveRecording()
+      if (recordingLibrary && stopped?.recording) {
+        res.json({ ok: true, recordingId: stopped.recordingId, recording: stopped.recording })
+      } else {
+        res.json({ ok: true, sessionDir: stopped })
+      }
     } catch (error) {
       res.json({ ok: false, error: error.message })
     }

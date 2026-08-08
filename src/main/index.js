@@ -5,6 +5,7 @@ import { registerShellIpcHandlers as defaultRegisterShellIpcHandlers } from './s
 import { ensureAgentSkillsInstalled as defaultEnsureAgentSkillsInstalled } from './agent-skill-installer.js'
 import { createTelemetry as defaultCreateTelemetry } from './telemetry/index.js'
 import { hashForTelemetry } from './telemetry/config.js'
+import { RecordingLibrary } from './recording-library/index.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -13,7 +14,10 @@ export async function createWindow({
   BrowserWindow,
   createRecorderHttpServer = defaultCreateRecorderHttpServer,
   state,
-  telemetry
+  telemetry,
+  recordingLibrary,
+  chooseExportDirectory,
+  revealPath
 }) {
   state.recorderServer = createRecorderHttpServer({
     uiRoot: join(app.getAppPath(), 'ui'),
@@ -22,7 +26,10 @@ export async function createWindow({
       resourcesPath: process.resourcesPath,
       projectRoot: app.getAppPath()
     },
-    telemetry
+    telemetry,
+    recordingLibrary,
+    chooseExportDirectory,
+    revealPath
   })
   const url = await state.recorderServer.listen()
   const win = new BrowserWindow({
@@ -45,17 +52,19 @@ export function startApp({
   BrowserWindow,
   ipcMain,
   dialog,
+  shell,
   createRecorderHttpServer = defaultCreateRecorderHttpServer,
   registerShellIpcHandlers = defaultRegisterShellIpcHandlers,
   ensureAgentSkillsInstalled = defaultEnsureAgentSkillsInstalled,
+  createRecordingLibrary = options => new RecordingLibrary(options),
   createTelemetry = defaultCreateTelemetry,
   telemetry,
   logger = console,
   env = process.env,
   state = { recorderServer: null, isQuitting: false }
 } = {}) {
-  if (!app || !BrowserWindow || !ipcMain || !dialog) {
-    throw new Error('startApp requires Electron app, BrowserWindow, ipcMain, and dialog')
+  if (!app || !BrowserWindow || !ipcMain || !dialog || !shell) {
+    throw new Error('startApp requires Electron app, BrowserWindow, ipcMain, dialog, and shell')
   }
 
   const activeTelemetry = telemetry ?? createTelemetry({ app, env, logger })
@@ -86,8 +95,26 @@ export function startApp({
       logger.error('[browser-forge] skill installation failed:', error)
     })
 
+    const recordingLibrary = createRecordingLibrary({ root: join(app.getPath('userData'), 'recordings') })
+    await recordingLibrary.initialize()
+    state.recordingLibrary = recordingLibrary
+    const chooseExportDirectory = async () => {
+      const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
+      return result.canceled ? null : result.filePaths[0]
+    }
+    const revealPath = path => shell.showItemInFolder(path)
+
     registerShellIpcHandlers({ ipcMain, dialog })
-    await createWindow({ app, BrowserWindow, createRecorderHttpServer, state, telemetry: activeTelemetry })
+    await createWindow({
+      app,
+      BrowserWindow,
+      createRecorderHttpServer,
+      state,
+      telemetry: activeTelemetry,
+      recordingLibrary,
+      chooseExportDirectory,
+      revealPath
+    })
     await activeTelemetry.track('app_launched', { startup_ms: Date.now() - startupStartedAt, phase: 'ready_complete' })
     await installPromise
   })
@@ -114,8 +141,8 @@ export function startApp({
 async function bootstrapElectronApp() {
   const electronModule = await import('electron')
   const electronExports = electronModule['module.exports'] || electronModule.default || electronModule
-  const { app, BrowserWindow, ipcMain, dialog } = electronExports
-  startApp({ app, BrowserWindow, ipcMain, dialog })
+  const { app, BrowserWindow, ipcMain, dialog, shell } = electronExports
+  startApp({ app, BrowserWindow, ipcMain, dialog, shell })
 }
 
 if (process.versions.electron && !process.env.VITEST_POOL_ID && !process.env.VITEST && process.env.NODE_ENV !== 'test') {
