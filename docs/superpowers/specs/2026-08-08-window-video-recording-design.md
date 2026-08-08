@@ -9,6 +9,12 @@
 
 本阶段只实现 **macOS 14.2 及以上**，并为 Windows 11 保留同一 JavaScript 接口和产物契约；不实现物料库 UI、录制物料迁移或内置 Agent。
 
+当前交付矩阵：
+
+- `darwin-arm64`：已实现窗口录制与 Agent 抽帧工具；
+- `darwin-x64`：本阶段未交付，Intel Mac 会得到显式 unsupported-platform 错误；
+- `win32-*`：仅保留接口、manifest 命名空间和后端设计，本阶段不包含可执行文件。
+
 ## 不可违反的录制边界
 
 录制对象必须是 Browser Forge 本次启动的完整 Chrome 原生窗口（浏览器工具栏、标签页、地址栏和网页内容）。下列方案均不合格：
@@ -109,13 +115,19 @@ sequenceDiagram
 }
 ```
 
-合法 `state` 仅为 `complete`、`partial`、`failed`。`failed` 不应带可播放文件；`partial` 的上下文只能使用 `0..coveredUntilOffsetMs`。
+合法 `state` 仅为 `complete`、`partial`、`failed`，并强制以下终态不变量：
+
+- `complete`：`coveredUntilOffsetMs === durationMs`，且必须带 `recording.mp4`；
+- `partial`：`0 <= coveredUntilOffsetMs <= durationMs`，且必须带可播放的已完成前缀；
+- `failed`：`durationMs === 0`、`coveredUntilOffsetMs === 0`，且不得声明视频文件。
+
+Agent 抽帧工具会再次验证这些不变量；矛盾 manifest 必须返回 `VIDEO_MANIFEST_INVALID`，不能把不完整视频误当作完整上下文。
 
 ## macOS 实现
 
 ### 分发的原生工具
 
-应用内原生实现采用两个由 `swiftc` 构建、随 macOS App 打包的可执行文件，均只使用 macOS 自带系统框架：
+应用内原生实现采用两个由 `swiftc` 构建、随 macOS App 打包的可执行文件，均只使用 macOS 自带系统框架。构建固定使用 `-target arm64-apple-macos14.2`，产物必须同时通过 arm64 Mach-O 架构与 `minos 14.2` 检查，避免在较新构建机上意外把部署目标抬高：
 
 - `bf-window-recorder`：ScreenCaptureKit + AVFoundation；严格绑定窗口，写 H.264 MP4；行式 JSON stdout 协议。
 - `bf-video-frame`：AVFoundation + ImageIO；按 MP4 时间偏移写 PNG；行式 JSON stdout 协议。
@@ -126,7 +138,9 @@ ScreenCaptureKit 捕获过滤器为 `SCContentFilter(desktopIndependentWindow: t
 
 ### JavaScript 外观层
 
-`VideoRecorder` 负责寻找适当平台的 `bf-window-recorder`、启动子进程、解析 JSON、提供 `start()` 和 `stop()`，且可依赖注入 `spawn`/路径解析器以便单元测试。非 Darwin 平台提供显式 `UNSUPPORTED_PLATFORM` 的 placeholder；这为 Windows backend 保留接口。
+`VideoRecorder` 负责寻找适当平台的 `bf-window-recorder`、启动子进程、解析 JSON、提供 `start()` 和 `stop()`，且可依赖注入 `spawn`/路径解析器以便单元测试。当前 native tool registry 只接受 `darwin-arm64`；`darwin-x64` 和尚未交付的 Windows target 必须在 spawn 前返回显式 `UNSUPPORTED_PLATFORM`。
+
+stdout 是行式 JSON 协议。ChildProcess 的 `exit` 只记录退出状态，不能立即判定录制失败；必须等 `close`（stdio 已排空）并处理 stdout 最后一条可能没有换行的消息，防止合法 `completed` 被退出竞态吞掉。首帧后出现协议错误、子进程错误或非法终态时，JavaScript 层必须终止仍存活的 native child，并 fail closed 为 `failed`。
 
 ## Agent 帧提取工具
 
@@ -147,11 +161,15 @@ scripts/extract-video-frame \
 
 规定错误码：`VIDEO_MANIFEST_NOT_FOUND`、`VIDEO_FILE_NOT_FOUND`、`VIDEO_STATE_FAILED`、`VIDEO_OFFSET_OUT_OF_RANGE`、`VIDEO_OFFSET_NOT_COVERED`、`OUTPUT_ALREADY_EXISTS`、`UNSUPPORTED_PLATFORM`、`EXTRACTION_FAILED`。
 
-安装器必须随 skill 一起复制原生工具、保持可执行位，并通过 `assets/video-tools/manifest.json` 的 SHA-256 验证它们。工具不可用时，skill 安装应报告失败，而不是把错误推迟到 Agent 分析时。
+安装器必须随 skill 一起复制原生工具、保持可执行位，并通过 `assets/video-tools/manifest.json` 的 SHA-256 验证它们。manifest 采用 `<platform>-<arch>` namespace，安装器通用遍历所有已声明 target，不永久要求 Darwin 资源；空工具清单、缺失文件或 hash 不一致都会拒绝安装。工具不可用时，skill 安装应报告失败，而不是把错误推迟到 Agent 分析时。
+
+Electron ASAR 虚拟文件系统不会可靠保留打包前的 POSIX executable bit。因此安装器不能依赖 `stat(source).mode`：复制到 staging 后，它必须把三个 shell wrapper 与 manifest 中声明的所有非 Windows 原生工具显式恢复为 `0755`，再进行 SHA-256 和 executable 校验。managed skill 的内容哈希包含文件权限，且“current”判断同时校验实际安装目录，避免权限被外部修改后仍错误地跳过修复。Windows 工具不依赖 POSIX executable bit，但继续使用同一 manifest 完整性校验流程。
+
+视频物料写入与 CDP 物料写入相互隔离：临时 MP4 复制/重命名失败时，`recording.har`、`timeline.json`、`metadata.json`、tabs、DOM、console、scripts 与 `RECORDING.md` 仍必须完成落盘；`video/manifest.json` 降级为安全的 `failed`，且不得留下半写入的 `.recording.mp4.tmp` 或宣称存在 `recording.mp4`。
 
 ## Windows 11 兼容设计
 
-Windows 后端不属于本次交付，但将实现同一个 `VideoRecorder` 和 `extract-video-frame` 命令契约。它应使用：
+Windows 后端不属于本次交付，但将实现同一个 `VideoRecorder` 和 `extract-video-frame` 命令契约。公共稳定入口是 `node scripts/extract-video-frame.mjs`，Windows 同时提供 `scripts/extract-video-frame.cmd` 适配器；当前没有 Windows 原生二进制时会明确返回 `UNSUPPORTED_PLATFORM`。捕获后端应使用：
 
 ```text
 Chrome PID + title token
@@ -162,4 +180,4 @@ Chrome PID + title token
 → Media Foundation H.264 MP4 writer
 ```
 
-禁止 `CreateForMonitor`、Desktop Duplication、monitor capture、区域裁剪和 `GetForegroundWindow`。Windows 帧工具将使用 Media Foundation，并保持相同 CLI 参数与 JSON 输出。
+禁止 `CreateForMonitor`、Desktop Duplication、monitor capture、区域裁剪和 `GetForegroundWindow`。Windows 帧工具将使用 Media Foundation，并保持相同 CLI 参数与 JSON 输出。资源注册为 `win32-x64/bf-video-frame.exe`，由同一 `assets/video-tools/manifest.json` 做 SHA-256 校验；Windows launcher 可使用 `.cmd` 或直接调用 Node `.mjs` 入口，但用户与 Agent 看到的参数、错误码和单行 JSON 契约不变。

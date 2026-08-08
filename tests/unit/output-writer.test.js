@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'fs'
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { writeSession } from '../../src/main/recorder/output-writer.js'
@@ -45,6 +45,24 @@ describe('writeSession', () => {
     })
     const content = readFileSync(join(tmpDir, 'session-test', 'RECORDING.md'), 'utf-8')
     expect(content).toContain('https://example.com')
+  })
+
+  it('refuses to merge into an existing session directory', async () => {
+    const sessionDir = join(tmpDir, 'session-existing')
+    mkdirSync(join(sessionDir, 'video'), { recursive: true })
+    writeFileSync(join(sessionDir, 'video', 'recording.mp4'), 'previous-recording')
+
+    await expect(writeSession({
+      outputDir: tmpDir,
+      sessionName: 'session-existing',
+      metadata: { startUrl: 'https://new.example', durationMs: 5000, chromeVersion: '120', tabs: [] },
+      har: { log: { version: '1.2', creator: { name: 'browser-forge', version: '0.1.0' }, pages: [], entries: [] } },
+      timeline: [],
+      tabs: {}
+    })).rejects.toMatchObject({ code: 'EEXIST' })
+
+    expect(readFileSync(join(sessionDir, 'video', 'recording.mp4'), 'utf8')).toBe('previous-recording')
+    expect(existsSync(join(sessionDir, 'metadata.json'))).toBe(false)
   })
 })
 
@@ -104,4 +122,64 @@ describe('video material output', () => {
       state: 'failed', coveredUntilOffsetMs: 0
     }))
   })
+  it('keeps all non-video materials when copying the captured MP4 fails', async () => {
+    const unreadableSource = join(tmpDir, 'source-is-a-directory')
+    // copyFile() rejects directories on every supported platform.
+    mkdirSync(unreadableSource)
+
+    await expect(writeSession({
+      outputDir: tmpDir,
+      sessionName: 'session-video-copy-failed',
+      metadata: {
+        startedAt: '2026-08-08T12:00:00.000Z',
+        startUrl: 'https://example.com',
+        durationMs: 1_000,
+        chromeVersion: '120',
+        tabs: [{ targetId: 'tab-1' }]
+      },
+      har: { log: { version: '1.2', creator: { name: 'browser-forge', version: '0.1.0' }, pages: [], entries: [] } },
+      timeline: [{ timestamp: 1_786_170_001_000, videoOffsetMs: 1_000, type: 'click' }],
+      tabs: {
+        'tab-1': {
+          title: 'Example',
+          events: [{ type: 'click' }],
+          console: [{ level: 'log', text: 'kept' }],
+          domSnapshots: [{ timestamp: 1, html: '<main>kept</main>' }]
+        }
+      },
+      video: {
+        state: 'complete',
+        sourcePath: unreadableSource,
+        startEpochMs: 1_786_170_000_000,
+        durationMs: 1_000,
+        coveredUntilOffsetMs: 1_000,
+        window: videoWindow
+      }
+    })).resolves.toBe(join(tmpDir, 'session-video-copy-failed'))
+
+    const sessionDir = join(tmpDir, 'session-video-copy-failed')
+    expect(existsSync(join(sessionDir, 'recording.har'))).toBe(true)
+    expect(existsSync(join(sessionDir, 'timeline.json'))).toBe(true)
+    expect(existsSync(join(sessionDir, 'metadata.json'))).toBe(true)
+    expect(existsSync(join(sessionDir, 'RECORDING.md'))).toBe(true)
+    expect(existsSync(join(sessionDir, 'tabs', 'tab-1-Example', 'events.json'))).toBe(true)
+    expect(existsSync(join(sessionDir, 'tabs', 'tab-1-Example', 'dom-1.html'))).toBe(true)
+    expect(existsSync(join(sessionDir, 'video', 'recording.mp4'))).toBe(false)
+    expect(JSON.parse(readFileSync(join(sessionDir, 'video', 'manifest.json'), 'utf8'))).toEqual({
+      version: 1,
+      state: 'failed',
+      startEpochMs: null,
+      durationMs: 0,
+      coveredUntilOffsetMs: 0,
+      window: videoWindow
+    })
+    expect(JSON.parse(readFileSync(join(sessionDir, 'metadata.json'), 'utf8')).video).toEqual({
+      state: 'failed',
+      startEpochMs: null,
+      durationMs: 0,
+      coveredUntilOffsetMs: 0
+    })
+    expect(readFileSync(join(sessionDir, 'RECORDING.md'), 'utf8')).not.toContain('video/recording.mp4')
+  })
+
 })

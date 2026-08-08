@@ -17,6 +17,11 @@ export async function createWindow({
 }) {
   state.recorderServer = createRecorderHttpServer({
     uiRoot: join(app.getAppPath(), 'ui'),
+    nativeToolPathOptions: {
+      packaged: Boolean(app.isPackaged),
+      resourcesPath: process.resourcesPath,
+      projectRoot: app.getAppPath()
+    },
     telemetry
   })
   const url = await state.recorderServer.listen()

@@ -5,12 +5,17 @@ import { createVideoManifest } from './video-manifest.js'
 
 export async function writeSession({ outputDir, sessionName, metadata, har, timeline, tabs, video = null }) {
   const sessionDir = join(outputDir, sessionName)
-  await mkdir(sessionDir, { recursive: true })
+  await mkdir(outputDir, { recursive: true })
+  // A recording directory is immutable and must never be merged with a
+  // previous session. In particular, an old recording.mp4 must not survive a
+  // failed capture and become associated with a new manifest.
+  await mkdir(sessionDir)
 
   await writeFile(join(sessionDir, 'recording.har'), JSON.stringify(har, null, 2))
   await writeFile(join(sessionDir, 'timeline.json'), JSON.stringify(timeline, null, 2))
-  await writeFile(join(sessionDir, 'metadata.json'), JSON.stringify(metadata, null, 2))
   const videoMaterial = video ? await writeVideoMaterial({ sessionDir, video }) : null
+  const persistedMetadata = applyFinalVideoMetadata(metadata, videoMaterial)
+  await writeFile(join(sessionDir, 'metadata.json'), JSON.stringify(persistedMetadata, null, 2))
 
   const tabDirs = []
   for (const [targetId, tabData] of Object.entries(tabs)) {
@@ -40,16 +45,16 @@ export async function writeSession({ outputDir, sessionName, metadata, har, time
     tabDirs.push(safeName)
   }
 
-  const durationSec = Math.round((metadata.durationMs ?? 0) / 1000)
+  const durationSec = Math.round((persistedMetadata.durationMs ?? 0) / 1000)
   const durationStr = `${Math.floor(durationSec / 60)}分${durationSec % 60}秒`
   const harEntryCount = har.log.entries.length
 
   const recording = [
     '# browser-forge 录制物料',
     '',
-    `录制时间：${metadata.startedAt ?? ''}`,
-    `起始 URL：${metadata.startUrl}`,
-    `时长：${durationStr} | Tab 数量：${metadata.tabs.length} | 网络请求：${harEntryCount}个`,
+    `录制时间：${persistedMetadata.startedAt ?? ''}`,
+    `起始 URL：${persistedMetadata.startUrl}`,
+    `时长：${durationStr} | Tab 数量：${persistedMetadata.tabs.length} | 网络请求：${harEntryCount}个`,
     '',
     '## 目录结构',
     `${sessionName}/`,
@@ -78,6 +83,20 @@ export async function writeSession({ outputDir, sessionName, metadata, har, time
   return sessionDir
 }
 
+function applyFinalVideoMetadata(metadata, videoMaterial) {
+  if (!videoMaterial) return metadata
+  const { manifest } = videoMaterial
+  return {
+    ...metadata,
+    video: {
+      state: manifest.state,
+      startEpochMs: manifest.startEpochMs,
+      durationMs: manifest.durationMs,
+      coveredUntilOffsetMs: manifest.coveredUntilOffsetMs
+    }
+  }
+}
+
 function sanitizeName(name) {
   return name.replace(/[^a-zA-Z0-9一-龥_-]/g, '_').slice(0, 40)
 }
@@ -94,7 +113,7 @@ function urlToFilePath(url) {
 
 async function writeVideoMaterial({ sessionDir, video }) {
   const state = video.state ?? 'complete'
-  const manifest = createVideoManifest({
+  let manifest = createVideoManifest({
     state,
     startEpochMs: video.startEpochMs,
     durationMs: video.durationMs ?? 0,
@@ -107,13 +126,18 @@ async function writeVideoMaterial({ sessionDir, video }) {
 
   let hasVideoFile = false
   if (state === 'complete' || state === 'partial') {
-    if (!video.sourcePath) throw new Error('Captured video requires sourcePath')
     const temporaryTarget = join(videoDir, '.recording.mp4.tmp')
     const target = join(videoDir, manifest.file)
-    await copyFile(video.sourcePath, temporaryTarget)
-    await rename(temporaryTarget, target)
-    await unlink(video.sourcePath).catch(() => {})
-    hasVideoFile = true
+    try {
+      if (!video.sourcePath) throw new Error('Captured video requires sourcePath')
+      await copyFile(video.sourcePath, temporaryTarget)
+      await rename(temporaryTarget, target)
+      await unlink(video.sourcePath).catch(() => {})
+      hasVideoFile = true
+    } catch {
+      await unlink(temporaryTarget).catch(() => {})
+      manifest = createVideoManifest({ state: 'failed', window: video.window })
+    }
   }
 
   await writeFile(join(videoDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}

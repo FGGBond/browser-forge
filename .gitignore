@@ -9,6 +9,7 @@ dist/
 
 # Generated macOS native video tools
 native/macos/bin/
+native-tools/
 # Generated analysis-skill native tools (recreated by scripts/build-native-tools.mjs)
 skills/browser-forge/assets/video-tools/darwin-arm64/
 skills/browser-forge/assets/video-tools/manifest.json

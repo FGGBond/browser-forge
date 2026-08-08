@@ -22,6 +22,12 @@ export function createVideoManifest({
   if (normalizedCoverageMs > normalizedDurationMs) {
     throw new Error('coveredUntilOffsetMs cannot exceed durationMs')
   }
+  if (state === 'complete' && normalizedCoverageMs !== normalizedDurationMs) {
+    throw new Error('Complete video manifest must cover the full duration')
+  }
+  if (state === 'failed' && (normalizedDurationMs !== 0 || normalizedCoverageMs !== 0)) {
+    throw new Error('Failed video manifest must have zero duration and coverage')
+  }
 
   if (state === 'failed') {
     return {

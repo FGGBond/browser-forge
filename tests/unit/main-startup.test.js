@@ -4,6 +4,7 @@ import { startApp } from '../../src/main/index.js'
 function createElectronStubs() {
   const loadedUrls = []
   const app = {
+    isPackaged: false,
     getAppPath: () => '/app/path',
     getPath: (name) => name === 'userData' ? '/user/data' : '/tmp',
     getVersion: () => '1.2.3',
@@ -28,12 +29,13 @@ describe('Electron app startup', () => {
     const ensureAgentSkillsInstalled = vi.fn(() => Promise.resolve({ results: [] }))
     const registerShellIpcHandlers = vi.fn()
     const recorderServer = { listen: vi.fn(() => Promise.resolve('http://127.0.0.1:3456')), close: vi.fn() }
+    const createRecorderHttpServer = vi.fn(() => recorderServer)
 
     await startApp({
       ...stubs,
       ensureAgentSkillsInstalled,
       registerShellIpcHandlers,
-      createRecorderHttpServer: vi.fn(() => recorderServer)
+      createRecorderHttpServer
     })
 
     expect(ensureAgentSkillsInstalled).toHaveBeenCalledWith(expect.objectContaining({
@@ -43,6 +45,9 @@ describe('Electron app startup', () => {
       logFile: '/user/data/skill-installation.json'
     }))
     expect(registerShellIpcHandlers).toHaveBeenCalledWith({ ipcMain: stubs.ipcMain, dialog: stubs.dialog })
+    expect(createRecorderHttpServer).toHaveBeenCalledWith(expect.objectContaining({
+      nativeToolPathOptions: expect.objectContaining({ packaged: false, projectRoot: '/app/path' })
+    }))
     expect(stubs.loadedUrls).toEqual(['http://127.0.0.1:3456/?shell=electron'])
   })
 

@@ -8,6 +8,11 @@ import { homedir } from 'node:os'
 const SKILL_NAME = 'browser-forge'
 const MARKER_FILE = '.browser-forge-install.json'
 const RUNTIME_DEPENDENCIES = ['ajv', 'ajv-formats']
+const SKILL_EXECUTABLE_PATHS = [
+  join('scripts', 'extract-video-frame'),
+  join('scripts', 'generate-skill'),
+  join('scripts', 'validate-skill')
+]
 const require = createRequire(import.meta.url)
 
 export function getDefaultAgentSkillTargets({ homeDir = homedir(), env = process.env } = {}) {
@@ -67,9 +72,12 @@ async function listFiles(rootDir) {
 async function hashDirectory(rootDir) {
   const hash = createHash('sha256')
   for (const rel of await listFiles(rootDir)) {
+    const filePath = join(rootDir, rel)
     hash.update(rel)
     hash.update('\0')
-    hash.update(await readFile(join(rootDir, rel)))
+    hash.update(((await stat(filePath)).mode & 0o777).toString(8))
+    hash.update('\0')
+    hash.update(await readFile(filePath))
     hash.update('\0')
   }
   return `sha256:${hash.digest('hex')}`
@@ -134,7 +142,11 @@ async function copyPackageWithDependencies(packageName, targetNodeModules, copie
   }
 }
 
-async function verifyBundledVideoTools(skillDir) {
+function isSafeManifestPathSegment(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9._-]+$/.test(value) && value !== '.' && value !== '..'
+}
+
+async function readBundledVideoTools(skillDir) {
   const manifestPath = join(skillDir, 'assets', 'video-tools', 'manifest.json')
   if (!await pathExists(manifestPath)) {
     throw new Error('Browser Forge bundled video-tools manifest is missing')
@@ -145,18 +157,63 @@ async function verifyBundledVideoTools(skillDir) {
   } catch {
     throw new Error('Browser Forge bundled video-tools manifest is invalid JSON')
   }
-  const tool = manifest?.tools?.['darwin-arm64']?.['bf-video-frame']
-  const binaryPath = join(skillDir, 'assets', 'video-tools', 'darwin-arm64', 'bf-video-frame')
-  if (!tool?.sha256 || !await pathExists(binaryPath)) {
-    throw new Error('Browser Forge bundled macOS frame extractor is missing')
+
+  const tools = []
+  if (manifest?.version !== 1 || !manifest.tools || typeof manifest.tools !== 'object' || Array.isArray(manifest.tools)) {
+    throw new Error('Browser Forge bundled video-tools manifest is invalid')
   }
-  const actualHash = createHash('sha256').update(await readFile(binaryPath)).digest('hex')
-  if (actualHash !== tool.sha256) {
-    throw new Error('Browser Forge bundled macOS frame extractor failed integrity validation')
+  for (const [platform, platformTools] of Object.entries(manifest.tools)) {
+    if (!isSafeManifestPathSegment(platform) || !platformTools || typeof platformTools !== 'object' || Array.isArray(platformTools)) {
+      throw new Error('Browser Forge bundled video-tools manifest is invalid')
+    }
+    for (const [name, tool] of Object.entries(platformTools)) {
+      if (!isSafeManifestPathSegment(name) || !/^[a-f0-9]{64}$/.test(tool?.sha256 ?? '')) {
+        throw new Error('Browser Forge bundled video-tools manifest is invalid')
+      }
+      tools.push({
+        platform,
+        name,
+        sha256: tool.sha256,
+        path: join(skillDir, 'assets', 'video-tools', platform, name)
+      })
+    }
   }
-  const mode = (await stat(binaryPath)).mode
-  if ((mode & 0o111) === 0) {
-    throw new Error('Browser Forge bundled macOS frame extractor is not executable')
+
+  if (tools.length === 0) {
+    throw new Error('Browser Forge bundled video-tools manifest must declare at least one tool')
+  }
+
+  return tools
+}
+
+async function restoreSkillExecutableModes(skillDir, videoTools) {
+  if (process.platform === 'win32') return
+  for (const relativePath of SKILL_EXECUTABLE_PATHS) {
+    const path = join(skillDir, relativePath)
+    if (await pathExists(path)) await chmod(path, 0o755)
+  }
+  for (const tool of videoTools) {
+    if (!tool.platform.startsWith('win32-') && await pathExists(tool.path)) {
+      await chmod(tool.path, 0o755)
+    }
+  }
+}
+
+async function verifyBundledVideoTools(videoTools) {
+  for (const tool of videoTools) {
+    if (!await pathExists(tool.path)) {
+      throw new Error(`Browser Forge bundled video tool is missing: ${tool.platform}/${tool.name}`)
+    }
+    const actualHash = createHash('sha256').update(await readFile(tool.path)).digest('hex')
+    if (actualHash !== tool.sha256) {
+      throw new Error(`Browser Forge bundled video tool failed integrity validation: ${tool.platform}/${tool.name}`)
+    }
+    if (process.platform !== 'win32' && !tool.platform.startsWith('win32-')) {
+      const mode = (await stat(tool.path)).mode
+      if ((mode & 0o111) === 0) {
+        throw new Error(`Browser Forge bundled video tool is not executable: ${tool.platform}/${tool.name}`)
+      }
+    }
   }
 }
 
@@ -171,7 +228,9 @@ async function copyRuntimeDependencies(runtimeTarget) {
 
 async function copySkillToStaging({ sourceSkillDir, runtimeSourceDir, stagingDir }) {
   await copyDirectoryRecursive(sourceSkillDir, stagingDir)
-  await verifyBundledVideoTools(stagingDir)
+  const videoTools = await readBundledVideoTools(stagingDir)
+  await restoreSkillExecutableModes(stagingDir, videoTools)
+  await verifyBundledVideoTools(videoTools)
   const runtimeTarget = join(stagingDir, 'scripts', 'runtime')
   await rm(runtimeTarget, { recursive: true, force: true })
   await mkdir(dirname(runtimeTarget), { recursive: true })
@@ -215,50 +274,57 @@ async function installTarget({
 
   await mkdir(target.rootDir, { recursive: true })
   const stagingDir = join(target.rootDir, `.${SKILL_NAME}.installing-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`)
-  await rm(stagingDir, { recursive: true, force: true })
-  await copySkillToStaging({ sourceSkillDir, runtimeSourceDir, stagingDir })
-  const contentHash = await hashDirectory(stagingDir)
-
-  if (marker?.contentHash === contentHash && marker?.version === packageVersion) {
-    await rm(stagingDir, { recursive: true, force: true })
-    return {
-      agent: target.agent,
-      target: target.skillDir,
-      status: 'current',
-      contentHash
-    }
-  }
-
-  const markerContent = {
-    managedBy: 'browser-forge',
-    skillName: SKILL_NAME,
-    version: packageVersion,
-    sourceCommit,
-    installedAt: now().toISOString(),
-    contentHash,
-    targetAgent: target.agent
-  }
-  await writeFile(join(stagingDir, MARKER_FILE), `${JSON.stringify(markerContent, null, 2)}\n`)
-
   const previousDir = join(target.rootDir, `.${SKILL_NAME}.previous-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+  await rm(stagingDir, { recursive: true, force: true })
   try {
+    await copySkillToStaging({ sourceSkillDir, runtimeSourceDir, stagingDir })
+    const contentHash = await hashDirectory(stagingDir)
+    const installedContentHash = exists && marker
+      ? await hashDirectory(target.skillDir).catch(() => null)
+      : null
+
+    if (
+      marker?.contentHash === contentHash &&
+      marker?.version === packageVersion &&
+      installedContentHash === contentHash
+    ) {
+      return {
+        agent: target.agent,
+        target: target.skillDir,
+        status: 'current',
+        contentHash
+      }
+    }
+
+    const markerContent = {
+      managedBy: 'browser-forge',
+      skillName: SKILL_NAME,
+      version: packageVersion,
+      sourceCommit,
+      installedAt: now().toISOString(),
+      contentHash,
+      targetAgent: target.agent
+    }
+    await writeFile(join(stagingDir, MARKER_FILE), `${JSON.stringify(markerContent, null, 2)}\n`)
+
     if (exists) await rename(target.skillDir, previousDir)
     await rename(stagingDir, target.skillDir)
     await rm(previousDir, { recursive: true, force: true })
+
+    await stat(join(target.skillDir, 'SKILL.md'))
+    return {
+      agent: target.agent,
+      target: target.skillDir,
+      status: exists ? 'updated' : 'installed',
+      contentHash
+    }
   } catch (error) {
-    await rm(stagingDir, { recursive: true, force: true })
     if (await pathExists(previousDir) && !await pathExists(target.skillDir)) {
       await rename(previousDir, target.skillDir).catch(() => {})
     }
     throw error
-  }
-
-  await stat(join(target.skillDir, 'SKILL.md'))
-  return {
-    agent: target.agent,
-    target: target.skillDir,
-    status: exists ? 'updated' : 'installed',
-    contentHash
+  } finally {
+    await rm(stagingDir, { recursive: true, force: true })
   }
 }
 

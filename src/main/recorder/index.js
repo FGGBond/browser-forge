@@ -10,6 +10,7 @@ import { buildHar } from './har-builder.js'
 import { buildTimeline } from './timeline-builder.js'
 import { writeSession } from './output-writer.js'
 import { addVideoOffset } from './video-manifest.js'
+import { randomUUID } from 'node:crypto'
 
 export class RecordingSession {
   constructor({ port = 9222, outputDir, video = null }) {
@@ -203,7 +204,7 @@ export class RecordingSession {
   }
 
   async stop({ video = this.video } = {}) {
-    const durationMs = video?.durationMs ?? Math.max(0, Date.now() - this._startedAt)
+    const durationMs = Math.max(0, Date.now() - this._startedAt)
     await this._captureActiveTabScreenshot()
     const targets = this._cdp.getTargets()
 
@@ -230,7 +231,7 @@ export class RecordingSession {
 
     const timeline = buildTimeline(this._timelineEvents)
 
-    const sessionName = `session-${formatDate(this._startedAt)}`
+    const sessionName = `session-${formatDate(this._startedAt)}-${randomUUID()}`
     const sessionDir = await this._writeSession({
       outputDir: this.outputDir,
       sessionName,
@@ -305,7 +306,8 @@ export class RecordingSession {
 function formatDate(ts) {
   const d = new Date(ts)
   const pad = n => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`
+  const milliseconds = String(d.getMilliseconds()).padStart(3, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}-${milliseconds}`
 }
 
 function summarizeEvent(event) {

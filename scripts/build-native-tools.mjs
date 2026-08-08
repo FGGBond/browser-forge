@@ -3,9 +3,13 @@ import { spawnSync } from 'child_process'
 import { createHash } from 'crypto'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
+import { mergeVideoToolsManifest } from './video-tools-manifest.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const outputDir = join(root, 'native', 'macos', 'bin')
+const macOSTarget = 'arm64-apple-macos14.2'
+// Electron Packager copies extraResource values by basename only. Build into the
+// root directory that is copied unchanged into Contents/Resources/native-tools.
+const outputDir = join(root, 'native-tools')
 const skillVideoToolsDir = join(root, 'skills', 'browser-forge', 'assets', 'video-tools')
 const tools = [
   {
@@ -28,7 +32,7 @@ if (process.platform !== 'darwin') {
 await mkdir(outputDir, { recursive: true })
 for (const tool of tools) {
   const output = join(outputDir, tool.name)
-  const result = spawnSync('swiftc', ['-parse-as-library', tool.source, ...tool.frameworks.flatMap(framework => ['-framework', framework]), '-O', '-o', output], {
+  const result = spawnSync('swiftc', ['-target', macOSTarget, '-parse-as-library', tool.source, ...tool.frameworks.flatMap(framework => ['-framework', framework]), '-O', '-o', output], {
     cwd: root,
     encoding: 'utf8'
   })
@@ -48,5 +52,15 @@ const frameTarget = join(frameTargetDir, 'bf-video-frame')
 await copyFile(frameSource, frameTarget)
 await chmod(frameTarget, 0o755)
 const frameHash = createHash('sha256').update(await readFile(frameTarget)).digest('hex')
-await writeFile(join(skillVideoToolsDir, 'manifest.json'), `${JSON.stringify({ version: 1, tools: { 'darwin-arm64': { 'bf-video-frame': { sha256: frameHash } } } }, null, 2)}\n`)
+const videoToolsManifestPath = join(skillVideoToolsDir, 'manifest.json')
+let existingVideoToolsManifest = null
+try {
+  existingVideoToolsManifest = JSON.parse(await readFile(videoToolsManifestPath, 'utf8'))
+} catch (error) {
+  if (error.code !== 'ENOENT') throw new Error(`Unable to read existing video-tools manifest: ${error.message}`)
+}
+const videoToolsManifest = mergeVideoToolsManifest(existingVideoToolsManifest, 'darwin-arm64', {
+  'bf-video-frame': { sha256: frameHash }
+})
+await writeFile(videoToolsManifestPath, `${JSON.stringify(videoToolsManifest, null, 2)}\n`)
 console.log(`Prepared skill video extractor ${frameTarget}`)

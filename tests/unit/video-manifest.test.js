@@ -44,6 +44,23 @@ describe('video recording manifest', () => {
     })
   })
 
+  it('enforces terminal-state duration and coverage invariants', () => {
+    expect(() => createVideoManifest({
+      state: 'complete',
+      startEpochMs: 1_786_170_000_000,
+      durationMs: 1_000,
+      coveredUntilOffsetMs: 999,
+      window
+    })).toThrow(/full duration/i)
+
+    expect(() => createVideoManifest({
+      state: 'failed',
+      durationMs: 1,
+      coveredUntilOffsetMs: 0,
+      window
+    })).toThrow(/zero duration/i)
+  })
+
   it('derives event offsets from the persisted first-frame epoch and clamps pre-video events', () => {
     expect(addVideoOffset({ timestamp: 1_000, type: 'click' }, 750)).toEqual({
       timestamp: 1_000,

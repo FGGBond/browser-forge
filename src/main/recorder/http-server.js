@@ -23,7 +23,8 @@ export function createRecorderHttpServer({
   findAvailablePort = defaultFindAvailablePort,
   waitForChromeDebugEndpoint = defaultWaitForChromeDebugEndpoint,
   RecordingSession = DefaultRecordingSession,
-  createVideoRecorder = () => new DefaultVideoRecorder(),
+  nativeToolPathOptions = {},
+  createVideoRecorder = (options = {}) => new DefaultVideoRecorder({ ...options, nativeToolPathOptions }),
   chromeReadyTimeoutMs = 20000,
   startupLogFile = join(homedir(), 'Library', 'Application Support', 'browser-forge', 'recorder-startup.log'),
   afterChromeLaunch = async () => {},
@@ -37,7 +38,11 @@ export function createRecorderHttpServer({
   let activeSession = null
   let sessionDir = null
   let activeVideoRecorder = null
+  let activeVideoOutputPath = null
   let isStarting = false
+  let hasStartedActiveSession = false
+  let stoppingPromise = null
+  let unexpectedTerminalVideo
 
   async function resetStartupLog(lines = []) {
     if (!startupLogFile) return
@@ -50,31 +55,61 @@ export function createRecorderHttpServer({
     await appendFile(startupLogFile, `${line}\n`).catch(() => {})
   }
 
-  async function clearActiveSession() {
-    const videoRecorder = activeVideoRecorder
-    activeVideoRecorder = null
-    await videoRecorder?.stop?.().catch(() => {})
-    await activeSession?._cdp?.disconnect?.().catch(() => {})
-    activeSession = null
-    chromeProcess?.kill?.()
-    chromeProcess = null
+  async function releaseActiveResources({
+    session = activeSession,
+    videoRecorder = activeVideoRecorder,
+    chrome = chromeProcess,
+    videoOutputPath = activeVideoOutputPath,
+    stopVideo = true
+  } = {}) {
+    if (activeVideoRecorder === videoRecorder) activeVideoRecorder = null
+    if (activeVideoOutputPath === videoOutputPath) activeVideoOutputPath = null
+    if (activeSession === session) {
+      activeSession = null
+      hasStartedActiveSession = false
+    }
+    if (chromeProcess === chrome) chromeProcess = null
+    if (stopVideo) await videoRecorder?.stop?.().catch(() => {})
+    await session?._cdp?.disconnect?.().catch(() => {})
+    chrome?.kill?.()
+    if (videoOutputPath) await rm(videoOutputPath, { force: true }).catch(() => {})
   }
 
-  async function stopActiveRecording() {
-    if (!activeSession) return null
-    const summary = typeof activeSession.getTelemetrySummary === 'function'
-      ? activeSession.getTelemetrySummary()
-      : safeTelemetrySummary(activeSession.getLiveSummary?.())
+  async function clearActiveSession() {
+    if (stoppingPromise) return stoppingPromise
+    if (activeSession && hasStartedActiveSession) return stopActiveRecording()
+    await releaseActiveResources()
+  }
+
+  function stopActiveRecording(options = {}) {
+    if (stoppingPromise) return stoppingPromise
+    if (!activeSession) return Promise.resolve(null)
+
+    const session = activeSession
     const videoRecorder = activeVideoRecorder
+    const chrome = chromeProcess
+    const videoOutputPath = activeVideoOutputPath
+    const hasTerminalVideo = Object.prototype.hasOwnProperty.call(options, 'video')
+    const summary = typeof session.getTelemetrySummary === 'function'
+      ? session.getTelemetrySummary()
+      : safeTelemetrySummary(session.getLiveSummary?.())
+
     activeVideoRecorder = null
-    try {
-      const video = await videoRecorder?.stop?.()
-      sessionDir = await activeSession.stop({ video })
-      await telemetry.track('recording_stopped', summary)
-      return sessionDir
-    } finally {
-      await clearActiveSession()
-    }
+    const stopPromise = (async () => {
+      try {
+        const video = hasTerminalVideo ? options.video : await videoRecorder?.stop?.()
+        sessionDir = await session.stop({ video })
+        await telemetry.track('recording_stopped', summary)
+        return sessionDir
+      } finally {
+        await releaseActiveResources({ session, videoRecorder, chrome, videoOutputPath, stopVideo: false })
+      }
+    })()
+    stoppingPromise = stopPromise
+    stopPromise.finally(() => {
+      if (stoppingPromise === stopPromise) stoppingPromise = null
+    }).catch(() => {})
+    return stopPromise
   }
 
   function getSummary() {
@@ -98,7 +133,7 @@ export function createRecorderHttpServer({
   app.post('/api/start-recording', async (req, res) => {
     await telemetry.track('recording_start_requested', { requested_port_mode: req.body.port ? 'explicit' : 'dynamic' })
     if (shouldClearActiveSession({ activeSession, chromeProcess })) {
-      await clearActiveSession()
+      await stopActiveRecording().catch(() => {})
     }
     if (isStarting) return res.json({ ok: false, error: 'Recording is already starting' })
     if (activeSession) return res.json({ ok: false, error: 'Recording is already active' })
@@ -125,6 +160,7 @@ export function createRecorderHttpServer({
       const recordingTitle = `Browser Forge Recording · ${recordingToken}`
       const startUrl = `${baseUrl}/recording-start.html?bfRecordingTitle=${encodeURIComponent(recordingTitle)}`
       videoOutputPath = join(tmpdir(), `browser-forge-window-${recordingToken}.mp4`)
+      activeVideoOutputPath = videoOutputPath
       await appendStartupLog(`chromePath=${chromePath}`)
       await appendStartupLog(`userDataDir=${userDataDir}`)
       await appendStartupLog(`startUrl=${startUrl}`)
@@ -140,7 +176,7 @@ export function createRecorderHttpServer({
       await appendStartupLog(`chromeArgs=${JSON.stringify(chromeProcess.browserForge?.args ?? [])}`)
       chromeProcess.once?.('exit', (code, signal) => {
         appendStartupLog(`chromeExit code=${code ?? ''} signal=${signal ?? ''}`).catch(() => {})
-        if (activeSession) clearActiveSession().catch(() => {})
+        if (activeSession || stoppingPromise) stopActiveRecording().catch(() => {})
       })
       chromeProcess.once?.('error', error => {
         appendStartupLog(`chromeSpawnError=${error.message}`).catch(() => {})
@@ -153,7 +189,16 @@ export function createRecorderHttpServer({
       await appendStartupLog('chromeDebugEndpoint=ready')
       await telemetry.track('chrome_launch_succeeded', { duration_ms: Date.now() - chromeStartedAt, chrome_pid_present: Boolean(chromeProcess.pid) })
       await afterChromeLaunch()
-      activeVideoRecorder = createVideoRecorder()
+      unexpectedTerminalVideo = undefined
+      let videoRecorder
+      videoRecorder = createVideoRecorder({
+        onUnexpectedTerminal: video => {
+          if (activeVideoRecorder !== videoRecorder) return
+          unexpectedTerminalVideo = video
+          if (hasStartedActiveSession) stopActiveRecording({ video }).catch(() => {})
+        }
+      })
+      activeVideoRecorder = videoRecorder
       const video = await activeVideoRecorder.start({
         chromePid: chromeProcess.pid,
         expectedWindowTitle: recordingTitle,
@@ -163,13 +208,15 @@ export function createRecorderHttpServer({
       activeSession = new RecordingSession({ port: chromePort, outputDir, video })
       await activeSession.start()
       sessionDir = null
+      hasStartedActiveSession = true
+      if (unexpectedTerminalVideo !== undefined) stopActiveRecording({ video: unexpectedTerminalVideo }).catch(() => {})
       await appendStartupLog('recordingSession=started')
       await telemetry.track('recording_started', { port: chromePort })
       res.json({ ok: true, port: chromePort })
     } catch (error) {
       await appendStartupLog(`startupError=${error.message}`)
       await telemetry.track('chrome_launch_failed', { error_code: error.code ?? 'CHROME_LAUNCH_FAILED', message_hash: hashForTelemetry(error.message) })
-      await clearActiveSession()
+      await clearActiveSession().catch(() => {})
       await rm(videoOutputPath ?? '', { force: true }).catch(() => {})
       res.json({ ok: false, error: error.message, logFile: startupLogFile })
     } finally {
@@ -178,12 +225,11 @@ export function createRecorderHttpServer({
   })
 
   app.post('/api/stop-recording', async (req, res) => {
-    if (!activeSession) return res.json({ ok: false, error: 'No active session' })
+    if (!activeSession && !stoppingPromise) return res.json({ ok: false, error: 'No active session' })
     try {
       const stoppedDir = await stopActiveRecording()
       res.json({ ok: true, sessionDir: stoppedDir })
     } catch (error) {
-      await clearActiveSession()
       res.json({ ok: false, error: error.message })
     }
   })
@@ -195,7 +241,7 @@ export function createRecorderHttpServer({
 
   app.get('/api/summary', async (req, res) => {
     if (shouldClearActiveSession({ activeSession, chromeProcess })) {
-      await clearActiveSession()
+      await stopActiveRecording().catch(() => {})
     }
     res.json(getSummary())
   })
@@ -225,7 +271,7 @@ export function createRecorderHttpServer({
   }
 
   async function close() {
-    if (activeSession) await stopActiveRecording()
+    if (activeSession || stoppingPromise) await stopActiveRecording()
     else await clearActiveSession()
     wss.close()
     await new Promise((resolve, reject) => {
@@ -252,4 +298,3 @@ function safeTelemetrySummary(summary = {}) {
     top_hosts: hosts
   }
 }
-

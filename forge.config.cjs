@@ -37,7 +37,9 @@ module.exports = {
     executableName: 'Browser Forge',
     appBundleId: 'com.browserforge.app',
     asar: true,
-    extraResource: [{ from: 'native/macos/bin', to: 'native-tools' }],
+    // @electron/packager accepts resource paths (not { from, to } mappings).
+    // The build script emits this folder with the required final basename.
+    extraResource: ['native-tools'],
     ...(electronZipDir ? { electronZipDir } : {}),
     ignore: [
       /^\/\.git($|\/)/,

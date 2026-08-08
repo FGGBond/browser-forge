@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises'
+import { chmod, cp, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
+import { createHash } from 'crypto'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { spawnSync } from 'child_process'
@@ -83,6 +84,162 @@ describe('agent skill installer', () => {
         installedAt: '2026-07-27T06:30:00.000Z'
       })
       expect(marker.contentHash).toMatch(/^sha256:/)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('restores executable modes when the packaged skill filesystem drops them', async () => {
+    const root = await tempRoot('browser-forge-agent-executable-modes')
+    try {
+      const sourceSkillDir = join(root, 'packaged-skill')
+      await cp(join(process.cwd(), 'skills/browser-forge'), sourceSkillDir, { recursive: true })
+
+      const executablePaths = [
+        'scripts/extract-video-frame',
+        'scripts/generate-skill',
+        'scripts/validate-skill',
+        'assets/video-tools/darwin-arm64/bf-video-frame'
+      ]
+      for (const relativePath of executablePaths) {
+        await chmod(join(sourceSkillDir, relativePath), 0o644)
+      }
+
+      const homeDir = join(root, 'home')
+      const skillDir = join(homeDir, '.codex/skills/browser-forge')
+      const report = await ensureAgentSkillsInstalled({
+        homeDir,
+        env: {},
+        sourceSkillDir,
+        runtimeSourceDir: join(process.cwd(), 'src/skill-generation'),
+        packageVersion: '9.8.7',
+        targets: [{ agent: 'codex', rootDir: join(homeDir, '.codex/skills'), skillDir }]
+      })
+
+      expect(report.results).toMatchObject([{ agent: 'codex', status: 'installed' }])
+      for (const relativePath of executablePaths) {
+        expect((await stat(join(skillDir, relativePath))).mode & 0o111, relativePath).not.toBe(0)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('installs Windows video tools without requiring POSIX executable bits', async () => {
+    const root = await tempRoot('browser-forge-agent-windows-video-tool')
+    try {
+      const sourceSkillDir = join(root, 'packaged-skill')
+      await cp(join(process.cwd(), 'skills/browser-forge'), sourceSkillDir, { recursive: true })
+
+      const videoToolsDir = join(sourceSkillDir, 'assets/video-tools')
+      await rm(videoToolsDir, { recursive: true, force: true })
+      const windowsToolDir = join(videoToolsDir, 'win32-x64')
+      await mkdir(windowsToolDir, { recursive: true })
+      const toolContents = Buffer.from('windows-frame-tool')
+      const toolSha256 = createHash('sha256').update(toolContents).digest('hex')
+      await writeFile(join(windowsToolDir, 'bf-video-frame.exe'), toolContents, { mode: 0o644 })
+      await writeFile(join(videoToolsDir, 'manifest.json'), JSON.stringify({
+        version: 1,
+        tools: {
+          'win32-x64': {
+            'bf-video-frame.exe': { sha256: toolSha256 }
+          }
+        }
+      }))
+
+      const homeDir = join(root, 'home')
+      const skillDir = join(homeDir, '.codex/skills/browser-forge')
+      const report = await ensureAgentSkillsInstalled({
+        homeDir,
+        env: {},
+        sourceSkillDir,
+        runtimeSourceDir: join(process.cwd(), 'src/skill-generation'),
+        packageVersion: '9.8.7',
+        targets: [{ agent: 'codex', rootDir: join(homeDir, '.codex/skills'), skillDir }]
+      })
+
+      expect(report.results, JSON.stringify(report.results)).toMatchObject([
+        { agent: 'codex', status: 'installed' }
+      ])
+      const installedTool = join(skillDir, 'assets/video-tools/win32-x64/bf-video-frame.exe')
+      expect(await readFile(installedTool)).toEqual(toolContents)
+      expect((await stat(installedTool)).mode & 0o111).toBe(0)
+
+      await writeFile(join(windowsToolDir, 'bf-video-frame.exe'), 'tampered-windows-frame-tool')
+      expect((await ensureAgentSkillsInstalled({
+        homeDir,
+        env: {},
+        sourceSkillDir,
+        runtimeSourceDir: join(process.cwd(), 'src/skill-generation'),
+        packageVersion: '9.8.7',
+        targets: [{ agent: 'codex', rootDir: join(homeDir, '.codex/skills'), skillDir }]
+      })).results).toMatchObject([{
+        agent: 'codex',
+        status: 'failed',
+        error: 'Browser Forge bundled video tool failed integrity validation: win32-x64/bf-video-frame.exe'
+      }])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a video-tools manifest that declares no tools', async () => {
+    const root = await tempRoot('browser-forge-agent-empty-video-tools')
+    try {
+      const sourceSkillDir = join(root, 'packaged-skill')
+      await cp(join(process.cwd(), 'skills/browser-forge'), sourceSkillDir, { recursive: true })
+      await writeFile(
+        join(sourceSkillDir, 'assets/video-tools/manifest.json'),
+        JSON.stringify({ version: 1, tools: {} })
+      )
+
+      const homeDir = join(root, 'home')
+      const skillDir = join(homeDir, '.codex/skills/browser-forge')
+      const report = await ensureAgentSkillsInstalled({
+        homeDir,
+        env: {},
+        sourceSkillDir,
+        runtimeSourceDir: join(process.cwd(), 'src/skill-generation'),
+        packageVersion: '9.8.7',
+        targets: [{ agent: 'codex', rootDir: join(homeDir, '.codex/skills'), skillDir }]
+      })
+
+      expect(report.results).toMatchObject([{
+        agent: 'codex',
+        status: 'failed',
+        error: 'Browser Forge bundled video-tools manifest must declare at least one tool'
+      }])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('repairs executable modes changed after a managed skill was installed', async () => {
+    const root = await tempRoot('browser-forge-agent-repair-modes')
+    try {
+      const homeDir = join(root, 'home')
+      const skillDir = join(homeDir, '.codex/skills/browser-forge')
+      const target = { agent: 'codex', rootDir: join(homeDir, '.codex/skills'), skillDir }
+      const installOptions = {
+        homeDir,
+        env: {},
+        sourceSkillDir: join(process.cwd(), 'skills/browser-forge'),
+        runtimeSourceDir: join(process.cwd(), 'src/skill-generation'),
+        packageVersion: '9.8.7',
+        targets: [target]
+      }
+
+      expect((await ensureAgentSkillsInstalled(installOptions)).results).toMatchObject([
+        { agent: 'codex', status: 'installed' }
+      ])
+
+      const binaryPath = join(skillDir, 'assets/video-tools/darwin-arm64/bf-video-frame')
+      await chmod(binaryPath, 0o644)
+
+      expect((await ensureAgentSkillsInstalled(installOptions)).results).toMatchObject([
+        { agent: 'codex', status: 'updated' }
+      ])
+      expect((await stat(binaryPath)).mode & 0o111).not.toBe(0)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -196,6 +353,32 @@ describe('agent skill installer', () => {
 
       expect(report.results[0].status).toBe('failed')
       expect(report.results[0].error).toContain('missing-skill-source')
+      const targetRoot = join(homeDir, '.codex/skills')
+      expect((await readdir(targetRoot)).filter(name => name.includes('.browser-forge.installing-'))).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('removes a populated staging directory when validation fails before installation', async () => {
+    const root = await tempRoot('browser-forge-agent-staging-cleanup')
+    try {
+      const homeDir = join(root, 'home')
+      const sourceSkillDir = join(root, 'invalid-skill')
+      await mkdir(sourceSkillDir, { recursive: true })
+      await writeFile(join(sourceSkillDir, 'SKILL.md'), 'missing bundled video tools')
+      const targetRoot = join(homeDir, '.codex/skills')
+
+      const report = await ensureAgentSkillsInstalled({
+        homeDir,
+        env: {},
+        sourceSkillDir,
+        runtimeSourceDir: join(process.cwd(), 'src/skill-generation'),
+        targets: [{ agent: 'codex', rootDir: targetRoot, skillDir: join(targetRoot, 'browser-forge') }]
+      })
+
+      expect(report.results).toMatchObject([{ agent: 'codex', status: 'failed' }])
+      expect((await readdir(targetRoot)).filter(name => name.includes('.browser-forge.installing-'))).toEqual([])
     } finally {
       await rm(root, { recursive: true, force: true })
     }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { join } from 'path'
-import { mkdtemp, readFile, rm } from 'fs/promises'
+import { access, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { createRecorderHttpServer } from '../../src/main/recorder/http-server.js'
 
@@ -228,6 +228,173 @@ describe('recorder HTTP server', () => {
 })
 
 describe('window video lifecycle', () => {
+  it('serializes concurrent stop requests so video finalization and material writing run exactly once', async () => {
+    let releaseVideoStop
+    let enteredVideoStop
+    const videoStopStarted = new Promise(resolve => { enteredVideoStop = resolve })
+    let videoStopCount = 0
+    let sessionStopCount = 0
+    let killCount = 0
+    const video = {
+      start: async options => ({
+        startEpochMs: 1_786_170_000_000,
+        window: { pid: 4242, windowId: '99', title: options.expectedWindowTitle }
+      }),
+      stop: async () => {
+        videoStopCount += 1
+        enteredVideoStop()
+        return new Promise(resolve => { releaseVideoStop = resolve })
+      }
+    }
+    class FakeRecordingSession {
+      constructor() { this._cdp = { getTargets: () => [], disconnect: async () => {} } }
+      async start() {}
+      async stop() { sessionStopCount += 1; return '/tmp/session-once' }
+      getLiveSummary() { return { type: 'summary', startedAt: 1, tabs: [], totals: {} } }
+    }
+
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      startupLogFile: null,
+      findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      waitForChromeDebugEndpoint: async () => {},
+      launchChrome: () => ({ pid: 4242, exitCode: null, once: () => {}, kill: () => { killCount += 1 } }),
+      createVideoRecorder: () => video,
+      RecordingSession: FakeRecordingSession
+    })
+    const url = await recorderServer.listen()
+    await fetch(`${url}/api/start-recording`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outputDir: '/tmp/browser-forge-test', port: 9333 })
+    }).then(response => response.json())
+
+    const first = fetch(`${url}/api/stop-recording`, { method: 'POST' }).then(response => response.json())
+    await videoStopStarted
+    const second = fetch(`${url}/api/stop-recording`, { method: 'POST' }).then(response => response.json())
+    // Allow the second HTTP handler to observe the first stop while the native
+    // recorder is still deliberately blocked.
+    await new Promise(resolve => setTimeout(resolve, 25))
+    releaseVideoStop({
+      state: 'complete', durationMs: 100, coveredUntilOffsetMs: 100,
+      sourcePath: '/tmp/browser-forge-video.mp4',
+      window: { pid: 4242, windowId: '99', title: 'Browser Forge Recording · token' }
+    })
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { ok: true, sessionDir: '/tmp/session-once' },
+      { ok: true, sessionDir: '/tmp/session-once' }
+    ])
+    expect(videoStopCount).toBe(1)
+    expect(sessionStopCount).toBe(1)
+    expect(killCount).toBe(1)
+  })
+
+
+  it('automatically saves CDP material with a failed video manifest when native capture terminates unexpectedly', async () => {
+    let notifyUnexpectedTerminal
+    let videoStopCount = 0
+    let killCount = 0
+    let resolveSessionStopped
+    const sessionStopped = new Promise(resolve => { resolveSessionStopped = resolve })
+    const failedVideo = {
+      state: 'failed', durationMs: 0, coveredUntilOffsetMs: 0,
+      window: { pid: 4242, windowId: '99', title: 'Browser Forge Recording · token' }
+    }
+    const video = {
+      start: async options => ({
+        startEpochMs: 1_786_170_000_000,
+        window: { pid: 4242, windowId: '99', title: options.expectedWindowTitle }
+      }),
+      stop: async () => { videoStopCount += 1; return failedVideo }
+    }
+    const finalVideos = []
+    class FakeRecordingSession {
+      constructor() { this._cdp = { getTargets: () => [], disconnect: async () => {} } }
+      async start() {}
+      async stop({ video: finalVideo }) {
+        finalVideos.push(finalVideo)
+        resolveSessionStopped()
+        return '/tmp/session-unexpected-video-stop'
+      }
+      getLiveSummary() { return { type: 'summary', startedAt: 1, tabs: [], totals: {} } }
+    }
+
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      startupLogFile: null,
+      findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      waitForChromeDebugEndpoint: async () => {},
+      launchChrome: () => ({ pid: 4242, exitCode: null, once: () => {}, kill: () => { killCount += 1 } }),
+      createVideoRecorder: options => {
+        notifyUnexpectedTerminal = options.onUnexpectedTerminal
+        return video
+      },
+      RecordingSession: FakeRecordingSession
+    })
+    const url = await recorderServer.listen()
+    await fetch(`${url}/api/start-recording`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outputDir: '/tmp/browser-forge-test', port: 9333 })
+    }).then(response => response.json())
+
+    notifyUnexpectedTerminal(failedVideo)
+    await sessionStopped
+    await new Promise(resolve => setImmediate(resolve))
+
+    expect(finalVideos).toEqual([failedVideo])
+    expect(videoStopCount).toBe(0)
+    expect(killCount).toBe(1)
+  })
+
+
+  it('removes the temporary MP4 after persisting a failed video material', async () => {
+    let temporaryVideoPath
+    const root = await mkdtemp(join(tmpdir(), 'browser-forge-video-cleanup-'))
+    const failedVideo = {
+      state: 'failed', durationMs: 0, coveredUntilOffsetMs: 0,
+      window: { pid: 4242, windowId: '99', title: 'Browser Forge Recording · token' }
+    }
+    const video = {
+      start: async options => {
+        temporaryVideoPath = options.outputPath
+        await writeFile(temporaryVideoPath, 'incomplete-video')
+        return {
+          startEpochMs: 1_786_170_000_000,
+          window: { pid: 4242, windowId: '99', title: options.expectedWindowTitle }
+        }
+      },
+      stop: async () => failedVideo
+    }
+    class FakeRecordingSession {
+      constructor() { this._cdp = { getTargets: () => [], disconnect: async () => {} } }
+      async start() {}
+      async stop() { return join(root, 'session') }
+      getLiveSummary() { return { type: 'summary', startedAt: 1, tabs: [], totals: {} } }
+    }
+
+    try {
+      recorderServer = createRecorderHttpServer({
+        uiRoot: join(process.cwd(), 'ui'),
+        startupLogFile: null,
+        findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        waitForChromeDebugEndpoint: async () => {},
+        launchChrome: () => ({ pid: 4242, exitCode: null, once: () => {}, kill: () => {} }),
+        createVideoRecorder: () => video,
+        RecordingSession: FakeRecordingSession
+      })
+      const url = await recorderServer.listen()
+      await fetch(`${url}/api/start-recording`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ outputDir: root, port: 9333 })
+      })
+      await fetch(`${url}/api/stop-recording`, { method: 'POST' })
+
+      await expect(access(temporaryVideoPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('binds video capture to the Browser Forge Chrome PID/title before CDP collection and finalizes it before material writing', async () => {
     const order = []
     const launched = []

@@ -138,6 +138,40 @@ describe('RecordingSession screenshot triggers', () => {
     expect(recording._tabCollectors.get('hidden-tab').screenshots.getScreenshots()).toEqual([])
   })
 
+  it('uses wall-clock time for the recording duration when video capture failed', async () => {
+    const recording = createStoppedRecording({ startedAt: 1_000 })
+    const writeSession = vi.spyOn(recording, '_writeSession').mockResolvedValue('/tmp/browser-forge-test/session-test')
+    vi.spyOn(Date, 'now').mockReturnValue(6_500)
+
+    await recording.stop({
+      video: { state: 'failed', durationMs: 0, coveredUntilOffsetMs: 0 }
+    })
+
+    expect(writeSession).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({
+        durationMs: 5_500,
+        video: expect.objectContaining({ state: 'failed', durationMs: 0 })
+      })
+    }))
+  })
+
+  it('generates distinct session directories for recordings started in the same millisecond', async () => {
+    const first = createStoppedRecording({ startedAt: 1_786_170_000_123 })
+    const second = createStoppedRecording({ startedAt: 1_786_170_000_123 })
+    const firstWrite = vi.spyOn(first, '_writeSession').mockResolvedValue('/tmp/browser-forge-test/first')
+    const secondWrite = vi.spyOn(second, '_writeSession').mockResolvedValue('/tmp/browser-forge-test/second')
+    vi.spyOn(Date, 'now').mockReturnValue(1_786_170_001_123)
+
+    await first.stop()
+    await second.stop()
+
+    const firstName = firstWrite.mock.calls[0][0].sessionName
+    const secondName = secondWrite.mock.calls[0][0].sessionName
+    expect(firstName).not.toBe(secondName)
+    expect(firstName).toMatch(/^session-2026-08-08-\d{6}-123-[a-f0-9-]{36}$/)
+    expect(secondName).toMatch(/^session-2026-08-08-\d{6}-123-[a-f0-9-]{36}$/)
+  })
+
   it('exposes screenshot thumbnail URLs without embedding image data in the live summary', async () => {
     const recording = new RecordingSession({ outputDir: '/tmp/browser-forge-test' })
     await recording._setupTabCollectors('tab-1', createFakeSession())
@@ -174,6 +208,17 @@ describe('RecordingSession screenshot triggers', () => {
     expect(recording.getScreenshot('tab-1', 67890)).toBeNull()
   })
 })
+
+function createStoppedRecording({ startedAt }) {
+  const recording = new RecordingSession({ outputDir: '/tmp/browser-forge-test' })
+  recording._startedAt = startedAt
+  recording._cdp = {
+    getTargets: () => [],
+    _targets: new Map(),
+    disconnect: vi.fn()
+  }
+  return recording
+}
 
 function createFakeSession({
   pageScripts = [],
