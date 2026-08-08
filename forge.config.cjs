@@ -37,6 +37,7 @@ module.exports = {
     executableName: 'Browser Forge',
     appBundleId: 'com.browserforge.app',
     asar: true,
+    extraResource: [{ from: 'native/macos/bin', to: 'native-tools' }],
     ...(electronZipDir ? { electronZipDir } : {}),
     ignore: [
       /^\/\.git($|\/)/,

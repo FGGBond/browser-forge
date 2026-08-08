@@ -134,6 +134,32 @@ async function copyPackageWithDependencies(packageName, targetNodeModules, copie
   }
 }
 
+async function verifyBundledVideoTools(skillDir) {
+  const manifestPath = join(skillDir, 'assets', 'video-tools', 'manifest.json')
+  if (!await pathExists(manifestPath)) {
+    throw new Error('Browser Forge bundled video-tools manifest is missing')
+  }
+  let manifest
+  try {
+    manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  } catch {
+    throw new Error('Browser Forge bundled video-tools manifest is invalid JSON')
+  }
+  const tool = manifest?.tools?.['darwin-arm64']?.['bf-video-frame']
+  const binaryPath = join(skillDir, 'assets', 'video-tools', 'darwin-arm64', 'bf-video-frame')
+  if (!tool?.sha256 || !await pathExists(binaryPath)) {
+    throw new Error('Browser Forge bundled macOS frame extractor is missing')
+  }
+  const actualHash = createHash('sha256').update(await readFile(binaryPath)).digest('hex')
+  if (actualHash !== tool.sha256) {
+    throw new Error('Browser Forge bundled macOS frame extractor failed integrity validation')
+  }
+  const mode = (await stat(binaryPath)).mode
+  if ((mode & 0o111) === 0) {
+    throw new Error('Browser Forge bundled macOS frame extractor is not executable')
+  }
+}
+
 async function copyRuntimeDependencies(runtimeTarget) {
   const targetNodeModules = join(runtimeTarget, 'node_modules')
   await mkdir(targetNodeModules, { recursive: true })
@@ -145,6 +171,7 @@ async function copyRuntimeDependencies(runtimeTarget) {
 
 async function copySkillToStaging({ sourceSkillDir, runtimeSourceDir, stagingDir }) {
   await copyDirectoryRecursive(sourceSkillDir, stagingDir)
+  await verifyBundledVideoTools(stagingDir)
   const runtimeTarget = join(stagingDir, 'scripts', 'runtime')
   await rm(runtimeTarget, { recursive: true, force: true })
   await mkdir(dirname(runtimeTarget), { recursive: true })

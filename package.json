@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "main": "out/main/index.js",
   "scripts": {
-    "build": "electron-vite build",
+    "build-native-tools": "node scripts/build-native-tools.mjs",
+    "build": "npm run build-native-tools && electron-vite build",
     "build:private": "BROWSER_FORGE_TELEMETRY_BUILD=false npm run build",
     "build:telemetry": "BROWSER_FORGE_TELEMETRY_BUILD=true BROWSER_FORGE_SLS_HOST=cn-hangzhou.log.aliyuncs.com BROWSER_FORGE_SLS_PROJECT=browser-forge BROWSER_FORGE_SLS_LOGSTORE=main-trace npm run build",
     "dev": "node recorder.mjs",
@@ -13,7 +14,7 @@
     "make:mac": "npm run build && electron-forge make --platform=darwin",
     "make:mac:private": "npm run build:private && electron-forge make --platform=darwin",
     "make:mac:telemetry": "npm run build:telemetry && electron-forge make --platform=darwin",
-    "test": "vitest run",
+    "test": "npm run build-native-tools && vitest run",
     "test:skill-generation": "vitest run tests/skill-generation",
     "test:watch": "vitest"
   },

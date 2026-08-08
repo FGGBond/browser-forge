@@ -10,7 +10,8 @@ const EXPECTED_REFERENCES = [
   'references/analysis-workflow.md',
   'references/artifact-spec.md',
   'references/authentication.md',
-  'references/security.md'
+  'references/security.md',
+  'references/video-analysis.md'
 ]
 
 const PRESSURE_CASE_MATRIX = [
@@ -220,7 +221,7 @@ describe('browser-forge skill documentation contract', () => {
     expect(body).toMatch(/never[^\n]*(?:copy|persist|store)[^\n]*(?:cookie|authorization|token|secret)/i)
   })
 
-  it('lists the generator, validator, built-ins, and four direct references', async () => {
+  it('lists the generator, validator, built-ins, and direct references', async () => {
     const { body } = parseSkill(await readFile(SKILL_PATH, 'utf8'))
 
     for (const command of ['doctor', 'auth-status', 'describe', 'generate-skill', 'validate-skill']) {
@@ -265,5 +266,16 @@ describe('browser-forge skill documentation contract', () => {
     expect(security).toMatch(/recording[^\n]*(?:analysis|source)/i)
     expect(security).toMatch(/generated output/i)
     expect(security).toMatch(/secret scanner/i)
+  })
+})
+
+
+describe('video analysis documentation', () => {
+  it('requires use of timeline videoOffsetMs and ships a dependency-free extraction command', async () => {
+    const reference = await readFile(join(SKILL_DIR, 'references/video-analysis.md'), 'utf8')
+    expect(reference).toContain('videoOffsetMs')
+    expect(reference).toContain('extract-video-frame')
+    expect(reference).toMatch(/no ffmpeg/i)
+    await expect(access(join(SKILL_DIR, 'scripts', 'extract-video-frame'))).resolves.toBeUndefined()
   })
 })

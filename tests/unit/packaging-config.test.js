@@ -12,7 +12,8 @@ describe('macOS packaging configuration', () => {
   })
 
   it('exposes repeatable build and macOS packaging scripts', () => {
-    expect(packageJson.scripts.build).toBe('electron-vite build')
+    expect(packageJson.scripts.build).toBe('npm run build-native-tools && electron-vite build')
+    expect(packageJson.scripts['build-native-tools']).toBe('node scripts/build-native-tools.mjs')
     expect(packageJson.scripts['package:mac']).toBe('npm run build && electron-forge package --platform=darwin')
     expect(packageJson.scripts['make:mac']).toBe('npm run build && electron-forge make --platform=darwin')
   })
@@ -24,6 +25,7 @@ describe('macOS packaging configuration', () => {
     expect(forgeConfig.packagerConfig.name).toBe('Browser Forge')
     expect(forgeConfig.packagerConfig.executableName).toBe('Browser Forge')
     expect(forgeConfig.packagerConfig.appBundleId).toBe('com.browserforge.app')
+    expect(forgeConfig.packagerConfig.extraResource).toEqual([{ from: 'native/macos/bin', to: 'native-tools' }])
     expect(forgeConfig.makers.map((maker) => maker.name)).toEqual([
       '@electron-forge/maker-dmg',
       '@electron-forge/maker-zip'
