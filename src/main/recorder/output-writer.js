@@ -1,14 +1,16 @@
 // src/main/recorder/output-writer.js
-import { mkdir, writeFile } from 'fs/promises'
+import { copyFile, mkdir, rename, unlink, writeFile } from 'fs/promises'
 import { join } from 'path'
+import { createVideoManifest } from './video-manifest.js'
 
-export async function writeSession({ outputDir, sessionName, metadata, har, timeline, tabs }) {
+export async function writeSession({ outputDir, sessionName, metadata, har, timeline, tabs, video = null }) {
   const sessionDir = join(outputDir, sessionName)
   await mkdir(sessionDir, { recursive: true })
 
   await writeFile(join(sessionDir, 'recording.har'), JSON.stringify(har, null, 2))
   await writeFile(join(sessionDir, 'timeline.json'), JSON.stringify(timeline, null, 2))
   await writeFile(join(sessionDir, 'metadata.json'), JSON.stringify(metadata, null, 2))
+  const videoMaterial = video ? await writeVideoMaterial({ sessionDir, video }) : null
 
   const tabDirs = []
   for (const [targetId, tabData] of Object.entries(tabs)) {
@@ -55,6 +57,7 @@ export async function writeSession({ outputDir, sessionName, metadata, har, time
     '├── recording.har         HAR 1.2 格式，含所有 Tab 的网络请求',
     '├── timeline.json         全局事件时间线',
     '├── metadata.json         录制元数据',
+    ...(videoMaterial ? ['├── video/', `│   ├── manifest.json        窗口视频元数据（${videoMaterial.manifest.state}）`, ...(videoMaterial.hasVideoFile ? ['│   └── recording.mp4        Chrome 原生窗口 H.264 视频'] : [])] : []),
     '└── tabs/',
     ...tabDirs.map((d, i) => `    ${i === tabDirs.length - 1 ? '└' : '├'}── ${d}/`),
     '',
@@ -62,6 +65,7 @@ export async function writeSession({ outputDir, sessionName, metadata, har, time
     '- `recording.har` — 全部网络请求和响应，HAR 1.2 格式，含 headers、body、状态码、时序',
     '- `timeline.json` — 全局事件时间线，包含 Tab 创建/关闭/切换、页面导航、用户交互，按时间戳排列',
     '- `metadata.json` — 录制元数据：起始 URL、录制时长、Chrome 版本、Tab 列表（targetId + 标题 + URL）',
+    ...(videoMaterial ? ['- `video/manifest.json` — Chrome 原生窗口视频的时间轴与覆盖范围；事件应使用 `timeline.json` 的 `videoOffsetMs` 查询视频。', ...(videoMaterial.hasVideoFile ? ['- `video/recording.mp4` — 包含浏览器外壳、标签栏、地址栏和网页内容的 H.264 视频；不含音频。'] : [])] : []),
     '- `tabs/{tab}/events.json` — 该 Tab 内的用户交互事件序列（点击、输入、滚动），含目标元素选择器和时间戳',
     '- `tabs/{tab}/dom-{ts}.html` — 该 Tab 在导航完成时的完整 DOM 快照，文件名中的时间戳对应导航事件',
     '- `tabs/{tab}/console.json` — 该 Tab 的 Console 输出，含 log/warn/error 级别和 JS 异常堆栈',
@@ -85,4 +89,34 @@ function urlToFilePath(url) {
   } catch {
     return 'unknown.js'
   }
+}
+
+
+async function writeVideoMaterial({ sessionDir, video }) {
+  const state = video.state ?? 'complete'
+  const manifest = createVideoManifest({
+    state,
+    startEpochMs: video.startEpochMs,
+    durationMs: video.durationMs ?? 0,
+    coveredUntilOffsetMs: video.coveredUntilOffsetMs ?? video.durationMs ?? 0,
+    window: video.window,
+    fps: video.fps ?? 15
+  })
+  const videoDir = join(sessionDir, 'video')
+  await mkdir(videoDir, { recursive: true })
+
+  let hasVideoFile = false
+  if (state === 'complete' || state === 'partial') {
+    if (!video.sourcePath) throw new Error('Captured video requires sourcePath')
+    const temporaryTarget = join(videoDir, '.recording.mp4.tmp')
+    const target = join(videoDir, manifest.file)
+    await copyFile(video.sourcePath, temporaryTarget)
+    await rename(temporaryTarget, target)
+    await unlink(video.sourcePath).catch(() => {})
+    hasVideoFile = true
+  }
+
+  await writeFile(join(videoDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}
+`)
+  return { manifest, hasVideoFile }
 }
