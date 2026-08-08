@@ -40,6 +40,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   let dirty = false
   let timer = null
   let savePromise = null
+  let editRevision = 0
   let destroyed = false
 
   const setStatus = (state, message) => {
@@ -50,28 +51,38 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   const saveNow = async () => {
     clearTimeout(timer)
     timer = null
-    if (!dirty) return true
     if (savePromise) return savePromise
-    const text = textarea.value
-    setStatus('saving', '正在保存…')
+    if (!dirty) return true
     savePromise = (async () => {
-      try {
-        await api.savePrompt(recordingId, text)
+      while (dirty) {
+        const revision = editRevision
+        const text = textarea.value
+        setStatus('saving', '正在保存…')
+        try {
+          await api.savePrompt(recordingId, text)
+        } catch (error) {
+          if (!destroyed) setStatus('error', `保存失败 · ${error.message}`)
+          return false
+        }
         savedText = text.trim()
-        dirty = false
-        if (!destroyed) setStatus('saved', '已保存')
-        return true
-      } catch (error) {
-        if (!destroyed) setStatus('error', `保存失败 · ${error.message}`)
-        return false
-      } finally {
-        savePromise = null
+        if (revision === editRevision && textarea.value === text) {
+          dirty = false
+          if (!destroyed) setStatus('saved', '已保存')
+        } else {
+          dirty = true
+        }
       }
+      return true
     })()
-    return savePromise
+    try {
+      return await savePromise
+    } finally {
+      savePromise = null
+    }
   }
 
   const scheduleSave = () => {
+    editRevision += 1
     dirty = true
     clearTimeout(timer)
     setStatus('dirty', '未保存')

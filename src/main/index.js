@@ -1,7 +1,6 @@
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { createRecorderHttpServer as defaultCreateRecorderHttpServer } from './recorder/http-server.js'
-import { registerShellIpcHandlers as defaultRegisterShellIpcHandlers } from './shell-ipc.js'
 import { ensureAgentSkillsInstalled as defaultEnsureAgentSkillsInstalled } from './agent-skill-installer.js'
 import { createTelemetry as defaultCreateTelemetry } from './telemetry/index.js'
 import { hashForTelemetry } from './telemetry/config.js'
@@ -50,11 +49,9 @@ export async function createWindow({
 export function startApp({
   app,
   BrowserWindow,
-  ipcMain,
   dialog,
   shell,
   createRecorderHttpServer = defaultCreateRecorderHttpServer,
-  registerShellIpcHandlers = defaultRegisterShellIpcHandlers,
   ensureAgentSkillsInstalled = defaultEnsureAgentSkillsInstalled,
   createRecordingLibrary = options => new RecordingLibrary(options),
   createTelemetry = defaultCreateTelemetry,
@@ -63,8 +60,8 @@ export function startApp({
   env = process.env,
   state = { recorderServer: null, isQuitting: false }
 } = {}) {
-  if (!app || !BrowserWindow || !ipcMain || !dialog || !shell) {
-    throw new Error('startApp requires Electron app, BrowserWindow, ipcMain, dialog, and shell')
+  if (!app || !BrowserWindow || !dialog || !shell) {
+    throw new Error('startApp requires Electron app, BrowserWindow, dialog, and shell')
   }
 
   const activeTelemetry = telemetry ?? createTelemetry({ app, env, logger })
@@ -104,7 +101,6 @@ export function startApp({
     }
     const revealPath = path => shell.showItemInFolder(path)
 
-    registerShellIpcHandlers({ ipcMain, dialog })
     await createWindow({
       app,
       BrowserWindow,
@@ -141,8 +137,8 @@ export function startApp({
 async function bootstrapElectronApp() {
   const electronModule = await import('electron')
   const electronExports = electronModule['module.exports'] || electronModule.default || electronModule
-  const { app, BrowserWindow, ipcMain, dialog, shell } = electronExports
-  startApp({ app, BrowserWindow, ipcMain, dialog, shell })
+  const { app, BrowserWindow, dialog, shell } = electronExports
+  startApp({ app, BrowserWindow, dialog, shell })
 }
 
 if (process.versions.electron && !process.env.VITEST_POOL_ID && !process.env.VITEST && process.env.NODE_ENV !== 'test') {

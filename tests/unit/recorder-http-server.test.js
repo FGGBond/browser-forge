@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'path'
-import { access, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
+import { access, mkdtemp, open as openFile, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { createRecorderHttpServer } from '../../src/main/recorder/http-server.js'
+import { WebSocket } from 'ws'
 
 let recorderServer
 
@@ -169,6 +170,23 @@ describe('recorder HTTP server', () => {
     } finally {
       await rm(root, { recursive: true, force: true })
     }
+  })
+
+  it('maps native TCC denial to a stable Screen Recording permission code', async () => {
+    const denied = Object.assign(new Error('用户拒绝了应用程序、窗口、显示器捕捉的TCC'), { code: 'CAPTURE_START_FAILED' })
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      startupLogFile: null,
+      findAvailablePort: async () => 9555,
+      findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      waitForChromeDebugEndpoint: async () => {},
+      launchChrome: () => ({ pid: 4242, exitCode: null, once: () => {}, kill: () => {} }),
+      createVideoRecorder: () => ({ start: async () => { throw denied }, stop: async () => ({ state: 'failed', durationMs: 0, coveredUntilOffsetMs: 0 }) })
+    })
+    const url = await recorderServer.listen()
+    const result = await fetch(`${url}/api/start-recording`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ outputDir: '/tmp/browser-forge-test' }) }).then(response => response.json())
+
+    expect(result).toMatchObject({ ok: false, code: 'SCREEN_RECORDING_PERMISSION_DENIED' })
   })
 
   it('tracks recording start and stop events with summary fields', async () => {
@@ -465,6 +483,136 @@ describe('window video lifecycle', () => {
     expect(sessionStops).toEqual([expect.objectContaining({ state: 'complete', sourcePath: '/tmp/browser-forge-video.mp4' })])
   })
 
+  it('returns and broadcasts the promoted result after Chrome stops automatically', async () => {
+    const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
+    const stagingPath = `/tmp/browser-forge-managed/staging/${id}`
+    const recording = { id, title: 'Orders', state: 'active' }
+    const recordingLibrary = {
+      createStagingRecording: vi.fn(async () => ({ id, path: stagingPath })),
+      promote: vi.fn(async () => recording)
+    }
+    let exitHandler
+    class FakeRecordingSession {
+      constructor() { this._cdp = { getTargets: () => [], disconnect: async () => {} } }
+      async start() {}
+      async stop() { return stagingPath }
+      getLiveSummary() { return { type: 'summary', startedAt: 1, tabs: [], totals: {} } }
+    }
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      startupLogFile: null,
+      recordingLibrary,
+      generatePoster: async () => {},
+      findAvailablePort: async () => 9333,
+      findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      waitForChromeDebugEndpoint: async () => {},
+      launchChrome: () => ({ pid: 4242, exitCode: null, once: (event, handler) => { if (event === 'exit') exitHandler = handler }, kill: () => {} }),
+      createVideoRecorder: createFakeVideoRecorder,
+      RecordingSession: FakeRecordingSession
+    })
+    const url = await recorderServer.listen()
+    await fetch(`${url}/api/start-recording`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+
+    exitHandler?.(0, null)
+    await vi.waitFor(() => expect(recordingLibrary.promote).toHaveBeenCalled())
+    const stopped = await fetch(`${url}/api/stop-recording`, { method: 'POST' }).then(response => response.json())
+    expect(stopped).toEqual({ ok: true, recordingId: id, recording })
+
+    const terminal = await new Promise((resolve, reject) => {
+      const socket = new WebSocket(url.replace('http:', 'ws:'))
+      const timer = setTimeout(() => reject(new Error('terminal event timeout')), 1000)
+      socket.on('message', data => {
+        const message = JSON.parse(data.toString())
+        if (message.type !== 'recording-completed') return
+        clearTimeout(timer)
+        socket.close()
+        resolve(message)
+      })
+      socket.on('error', reject)
+    })
+    expect(terminal).toMatchObject({ type: 'recording-completed', recordingId: id, recording })
+  })
+
+  it('cancels and awaits an in-progress start before server shutdown', async () => {
+    let enteredWait
+    const waitStarted = new Promise(resolve => { enteredWait = resolve })
+    let releaseWait
+    const waitRelease = new Promise(resolve => { releaseWait = resolve })
+    const kill = vi.fn(() => releaseWait())
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      startupLogFile: null,
+      findAvailablePort: async () => 9333,
+      findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      waitForChromeDebugEndpoint: async () => { enteredWait(); await waitRelease },
+      launchChrome: () => ({ pid: 4242, exitCode: null, once: () => {}, kill }),
+      createVideoRecorder: createFakeVideoRecorder
+    })
+    const url = await recorderServer.listen()
+    const starting = fetch(`${url}/api/start-recording`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ outputDir: '/tmp/browser-forge-test' }) }).then(response => response.json())
+    await waitStarted
+
+    await recorderServer.close()
+    recorderServer = null
+    const result = await starting
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('closing')
+    expect(kill).toHaveBeenCalled()
+  })
+
+  it('orderly stops and promotes when quit begins after the recording session started', async () => {
+    const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
+    const stagingPath = `/tmp/browser-forge-managed/staging/${id}`
+    const recording = { id, title: 'Orders', state: 'active' }
+    const recordingLibrary = {
+      createStagingRecording: vi.fn(async () => ({ id, path: stagingPath })),
+      promote: vi.fn(async () => recording)
+    }
+    let enteredStartedTelemetry
+    const startedTelemetry = new Promise(resolve => { enteredStartedTelemetry = resolve })
+    let releaseStartedTelemetry
+    const telemetryRelease = new Promise(resolve => { releaseStartedTelemetry = resolve })
+    const telemetry = {
+      track: vi.fn(async name => {
+        if (name === 'recording_started') {
+          enteredStartedTelemetry()
+          await telemetryRelease
+        }
+      })
+    }
+    let stopCount = 0
+    class FakeRecordingSession {
+      constructor() { this._cdp = { getTargets: () => [], disconnect: async () => {} } }
+      async start() {}
+      async stop() { stopCount += 1; return stagingPath }
+      getLiveSummary() { return { type: 'summary', startedAt: 1, tabs: [], totals: {} } }
+    }
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      startupLogFile: null,
+      recordingLibrary,
+      telemetry,
+      generatePoster: async () => {},
+      findAvailablePort: async () => 9333,
+      findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      waitForChromeDebugEndpoint: async () => {},
+      launchChrome: () => ({ pid: 4242, exitCode: null, once: () => {}, kill: () => {} }),
+      createVideoRecorder: createFakeVideoRecorder,
+      RecordingSession: FakeRecordingSession
+    })
+    const url = await recorderServer.listen()
+    const starting = fetch(`${url}/api/start-recording`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) }).then(response => response.json())
+    await startedTelemetry
+
+    const closing = recorderServer.close()
+    releaseStartedTelemetry()
+    await closing
+    recorderServer = null
+    await starting
+    expect(stopCount).toBe(1)
+    expect(recordingLibrary.promote).toHaveBeenCalledWith({ id, sessionDir: stagingPath })
+  })
+
   it('starts without outputDir and promotes managed material before returning recording detail', async () => {
     const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
     const stagingPath = '/tmp/browser-forge-managed/staging/' + id
@@ -553,8 +701,8 @@ describe('recording library HTTP API', () => {
       get: vi.fn(async () => recording),
       rename: vi.fn(async (_id, title) => ({ ...recording, title })),
       getTimeline: vi.fn(async () => [{ type: 'click', videoOffsetMs: 123 }]),
-      getVideo: vi.fn(async () => ({ path: videoPath, status: 'complete' })),
-      getPoster: vi.fn(async () => ({ path: posterPath })),
+      getVideo: vi.fn(async () => ({ path: videoPath, status: 'complete', size: 100, handle: await openFile(videoPath, 'r') })),
+      getPoster: vi.fn(async () => ({ path: posterPath, size: 3, handle: await openFile(posterPath, 'r') })),
       getPrompt: vi.fn(async () => ({ text: '', status: 'empty', updatedAt: null })),
       savePrompt: vi.fn(async (_id, text) => ({ text, status: 'draft', updatedAt: '2026-08-08T12:20:00.000Z' })),
       getExternalAgentPrompt: vi.fn(async () => ({ recordingId: id, text: 'complete prompt' })),
@@ -599,6 +747,15 @@ describe('recording library HTTP API', () => {
     expect(response.headers.get('accept-ranges')).toBe('bytes')
     expect(response.headers.get('content-range')).toBe('bytes 10-19/100')
     expect((await response.arrayBuffer()).byteLength).toBe(10)
+  })
+
+  it('returns the standard unsatisfied Content-Range for invalid video ranges', async () => {
+    const { url } = await createLibraryServer()
+    const response = await fetch(`${url}/api/recordings/${id}/video`, { headers: { Range: 'bytes=100-101' } })
+
+    expect(response.status).toBe(416)
+    expect(response.headers.get('content-range')).toBe('bytes */100')
+    expect((await response.json()).error.code).toBe('INVALID_RANGE')
   })
 
   it('maps domain errors to stable JSON error codes', async () => {

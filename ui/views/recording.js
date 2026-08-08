@@ -46,12 +46,18 @@ export async function renderNewRecording({ container, api, onBack, onStarted }) 
     try {
       const chromePath = input.value.trim()
       const result = await api.startRecording({ chromePath })
-      if (!result.ok) throw new Error(result.error || '无法开始录制')
+      if (!result.ok) {
+        const error = new Error(result.error || '无法开始录制')
+        error.code = result.code
+        throw error
+      }
       onStarted(result)
     } catch (error) {
       button.disabled = false
       button.classList.remove('is-busy')
-      status.textContent = error.message
+      status.textContent = error.code === 'SCREEN_RECORDING_PERMISSION_DENIED'
+        ? '需要屏幕录制权限。请前往“系统设置 → 隐私与安全性 → 屏幕录制”，允许 Browser Forge 后重新打开 App。'
+        : error.message
       status.classList.add('error')
     }
   })
@@ -72,14 +78,20 @@ export async function renderRecording({ container, api, activeRecording, onStopp
       <p class="live-error" data-live-error hidden></p>
     </section>`
   const stop = container.querySelector('[data-stop]')
+  let finished = false
+  const finish = result => {
+    if (finished) return
+    finished = true
+    disconnectInspector()
+    onStopped(result)
+  }
   stop.addEventListener('click', async () => {
     stop.disabled = true
     stop.classList.add('is-busy')
     try {
       const result = await api.stopRecording()
       if (!result.ok) throw new Error(result.error || '停止录制失败')
-      disconnectInspector()
-      onStopped(result)
+      finish(result)
     } catch (error) {
       stop.disabled = false
       stop.classList.remove('is-busy')
@@ -92,8 +104,11 @@ export async function renderRecording({ container, api, activeRecording, onStopp
   try {
     applySummary(container, await api.getSummary())
   } catch {}
-  connectInspector(container)
-  return () => disconnectInspector()
+  connectInspector(container, message => finish({ ok: true, ...message }))
+  return {
+    beforeNavigate: async () => false,
+    cleanup: () => disconnectInspector()
+  }
 }
 
 export function applySummary(container, summary) {
@@ -134,13 +149,17 @@ function artifactCard(artifact) {
   return `<div class="artifact-card"><strong>${escapeHtml(artifact.kind || 'Artifact')}</strong><span>${escapeHtml(artifact.title || '')}</span></div>`
 }
 
-function connectInspector(container) {
+function connectInspector(container, onCompleted) {
   disconnectInspector()
   try {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
     inspectorSocket = new WebSocket(`${protocol}//${location.host}`)
     inspectorSocket.addEventListener('message', event => {
-      try { applySummary(container, JSON.parse(event.data)) } catch {}
+      try {
+        const message = JSON.parse(event.data)
+        if (message.type === 'recording-completed') onCompleted?.(message)
+        else applySummary(container, message)
+      } catch {}
     })
     inspectorSocket.addEventListener('error', () => {})
   } catch {}

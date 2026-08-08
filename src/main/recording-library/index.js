@@ -31,6 +31,8 @@ export class RecordingLibrary {
     this.logger = logger
     this.copyTree = copyTree || ((source, destination) => copyTreeWithoutSymlinks(source, destination, this.fs))
     this.busyRecordings = new Set()
+    this.exportDestinationTails = new Map()
+    this.managedDirectories = new Map()
     this.index = { schemaVersion: 1, revision: 0, recordings: [] }
     this.mutationTail = Promise.resolve()
     this.initialized = false
@@ -41,7 +43,8 @@ export class RecordingLibrary {
   }
 
   async initialize() {
-    await Promise.all([this.paths.root, this.paths.active, this.paths.trash, this.paths.staging].map(path => this.fs.mkdir(path, { recursive: true })))
+    await this.#ensureManagedDirectory(this.paths.root)
+    await Promise.all([this.paths.active, this.paths.trash, this.paths.staging].map(path => this.#ensureManagedDirectory(path, this.paths.root)))
     return this.#enqueue(async () => {
       const previousRevision = await this.#readIndexRevision()
       const report = { adopted: [], repaired: [], errors: [] }
@@ -65,6 +68,7 @@ export class RecordingLibrary {
   async createStagingRecording() {
     this.#requireInitialized()
     return this.#enqueue(async () => {
+      await Promise.all([this.paths.active, this.paths.trash, this.paths.staging].map(path => this.#assertManagedDirectory(path)))
       for (let attempt = 0; attempt < 100; attempt += 1) {
         const id = assertRecordingId(this.randomUUID())
         const candidates = [this.paths.active, this.paths.trash, this.paths.staging].map(parent => join(parent, id))
@@ -79,6 +83,8 @@ export class RecordingLibrary {
     this.#requireInitialized()
     const recordingId = assertRecordingId(id)
     return this.#enqueue(async () => {
+      await this.#assertManagedDirectory(this.paths.staging)
+      await this.#assertManagedDirectory(this.paths.active)
       const expectedPath = join(this.paths.staging, recordingId)
       if (resolve(sessionDir) !== expectedPath) throw libraryError('INVALID_INPUT', 'Session directory does not match the recording id')
       await assertSafeDirectory(expectedPath, { parent: this.paths.staging })
@@ -134,16 +140,16 @@ export class RecordingLibrary {
     this.#requireInitialized()
     const recording = await this.#resolve(id, ['active', 'trashed'])
     if (!['complete', 'partial'].includes(recording.metadata.video.status)) throw libraryError('INVALID_STATE', 'Recording has no playable video')
-    const path = await this.#resolveSafeFile(recording.path, join('video', 'recording.mp4'), { required: true, message: 'Video material is missing or invalid' })
-    return { path, status: recording.metadata.video.status }
+    const media = await this.#openSafeFile(recording.path, join('video', 'recording.mp4'), { required: true, message: 'Video material is missing or invalid' })
+    return { ...media, status: recording.metadata.video.status }
   }
 
   async getPoster(id) {
     this.#requireInitialized()
     const recording = await this.#resolve(id, ['active', 'trashed'])
-    const path = await this.#resolveSafeFile(recording.path, join('video', 'poster.png'), { required: false, message: 'Poster material is invalid' })
-    if (!path) throw libraryError('NOT_FOUND', 'Poster was not generated')
-    return { path }
+    const media = await this.#openSafeFile(recording.path, join('video', 'poster.png'), { required: false, message: 'Poster material is invalid' })
+    if (!media) throw libraryError('NOT_FOUND', 'Poster was not generated')
+    return media
   }
 
   async getPrompt(id) {
@@ -204,6 +210,7 @@ export class RecordingLibrary {
     return this.#enqueue(async () => {
       this.#assertNotBusy(recordingId)
       const source = await this.#resolveInState(recordingId, 'active')
+      await this.#assertManagedDirectory(this.paths.trash)
       const target = join(this.paths.trash, recordingId)
       await this.fs.rename(source.path, target)
       const timestamp = this.now().toISOString()
@@ -220,6 +227,7 @@ export class RecordingLibrary {
     return this.#enqueue(async () => {
       this.#assertNotBusy(recordingId)
       const source = await this.#resolveInState(recordingId, 'trashed')
+      await this.#assertManagedDirectory(this.paths.active)
       const target = join(this.paths.active, recordingId)
       await this.fs.rename(source.path, target)
       const metadata = { ...source.metadata, state: 'active', trashedAt: null, updatedAt: this.now().toISOString() }
@@ -259,13 +267,16 @@ export class RecordingLibrary {
     let temporaryPath
     try {
       const safeDestination = await assertSafeDirectory(destinationRoot)
-      const finalPath = await this.#nextExportPath(safeDestination, recording.metadata)
-      temporaryPath = `${finalPath}.browser-forge-exporting`
-      await this.fs.rm(temporaryPath, { recursive: true, force: true })
-      await this.copyTree(recording.path, temporaryPath)
-      await atomicWriteText(join(temporaryPath, 'EXPORT.md'), exportReadme())
-      await this.fs.rename(temporaryPath, finalPath)
-      return { path: finalPath }
+      return await this.#withExportDestinationLock(safeDestination, async () => {
+        const finalPath = await this.#nextExportPath(safeDestination, recording.metadata)
+        temporaryPath = `${finalPath}.browser-forge-exporting`
+        await this.fs.rm(temporaryPath, { recursive: true, force: true })
+        await this.copyTree(recording.path, temporaryPath)
+        await atomicWriteText(join(temporaryPath, 'EXPORT.md'), exportReadme())
+        await this.fs.rename(temporaryPath, finalPath)
+        temporaryPath = null
+        return { path: finalPath }
+      })
     } catch (error) {
       if (temporaryPath) await this.fs.rm(temporaryPath, { recursive: true, force: true }).catch(() => {})
       if (error?.code && ['INVALID_INPUT', 'INVALID_STATE', 'NOT_FOUND', 'BUSY', 'CORRUPT_MATERIAL'].includes(error.code)) throw error
@@ -286,6 +297,53 @@ export class RecordingLibrary {
       await atomicWriteJson(join(recording.path, 'recording.json'), metadata)
       await this.#replaceIndexEntry(toLibraryEntry(metadata))
       return this.#detail(recording.path, metadata)
+    })
+  }
+
+  async #ensureManagedDirectory(path, parent = null) {
+    try {
+      await this.fs.mkdir(path, { recursive: parent === null })
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error
+    }
+    const info = await this.fs.lstat(path)
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw libraryError('CORRUPT_MATERIAL', 'Managed recording directory is not a safe directory')
+    }
+    if (parent) assertContainedPath(parent, path)
+    const realpath = await this.fs.realpath(path)
+    this.managedDirectories.set(path, { realpath, dev: info.dev, ino: info.ino })
+  }
+
+  async #assertManagedDirectory(path) {
+    const expected = this.managedDirectories.get(path)
+    if (!expected) throw libraryError('INVALID_STATE', 'Managed recording directory identity is unavailable')
+    let info
+    let realpath
+    try {
+      info = await this.fs.lstat(path)
+      realpath = await this.fs.realpath(path)
+    } catch (error) {
+      throw libraryError('CORRUPT_MATERIAL', 'Managed recording directory changed after initialization', { cause: error })
+    }
+    if (
+      info.isSymbolicLink() ||
+      !info.isDirectory() ||
+      realpath !== expected.realpath ||
+      (Number.isInteger(expected.dev) && Number.isInteger(info.dev) && info.dev !== expected.dev) ||
+      (Number.isInteger(expected.ino) && Number.isInteger(info.ino) && info.ino !== expected.ino)
+    ) {
+      throw libraryError('CORRUPT_MATERIAL', 'Managed recording directory changed after initialization')
+    }
+  }
+
+  #withExportDestinationLock(destination, operation) {
+    const previous = this.exportDestinationTails.get(destination) || Promise.resolve()
+    const run = previous.catch(() => {}).then(operation)
+    const tail = run.catch(() => {})
+    this.exportDestinationTails.set(destination, tail)
+    return run.finally(() => {
+      if (this.exportDestinationTails.get(destination) === tail) this.exportDestinationTails.delete(destination)
     })
   }
 
@@ -410,6 +468,7 @@ export class RecordingLibrary {
     const recordingId = assertRecordingId(id)
     for (const state of states) {
       const parent = this.paths[LOCATION_DIRECTORY[state]]
+      await this.#assertManagedDirectory(parent)
       const path = assertContainedPath(parent, join(parent, recordingId))
       if (!await this.#exists(path)) continue
       await assertSafeDirectory(path, { parent })
@@ -430,6 +489,22 @@ export class RecordingLibrary {
     let total = 0
     for (const child of children) total += await this.#calculateTreeSize(join(path, child))
     return total
+  }
+
+  async #openSafeFile(recordingPath, relativePath, { required, message }) {
+    const path = await this.#resolveSafeFile(recordingPath, relativePath, { required, message })
+    if (!path) return null
+    let handle
+    try {
+      handle = await this.fs.open(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0))
+      const info = await handle.stat()
+      if (!info.isFile()) throw libraryError('CORRUPT_MATERIAL', message)
+      return { path, handle, size: info.size }
+    } catch (error) {
+      await handle?.close().catch(() => {})
+      if (error?.code === 'ELOOP') throw libraryError('CORRUPT_MATERIAL', message, { cause: error })
+      throw error
+    }
   }
 
   async #resolveSafeFile(recordingPath, relativePath, { required, message }) {

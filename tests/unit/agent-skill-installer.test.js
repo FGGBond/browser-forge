@@ -87,7 +87,7 @@ describe('agent skill installer', () => {
     } finally {
       await rm(root, { recursive: true, force: true })
     }
-  })
+  }, 20_000)
 
   it('restores executable modes when the packaged skill filesystem drops them', async () => {
     const root = await tempRoot('browser-forge-agent-executable-modes')

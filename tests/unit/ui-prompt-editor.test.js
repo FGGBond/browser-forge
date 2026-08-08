@@ -9,6 +9,7 @@ let server
 let baseUrl
 let savedPrompts
 let failNextSave
+let delayedSave
 const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
 const recording = { id, title: '订单查询', state: 'active', createdAt: '2026-08-08T12:15:00.000Z', durationMs: 42_000, startHost: 'example.com', videoStatus: 'failed', promptStatus: 'empty', sizeBytes: 1024 }
 const completePrompt = `请使用 browser-forge skill\n/Users/example/Library/Application Support/Browser Forge/recordings/active/${id}\n查询订单状态`
@@ -25,6 +26,7 @@ beforeAll(async () => {
     if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'PUT') {
       const body = await readBody(req)
       savedPrompts.push(body.text)
+      if (delayedSave) await delayedSave
       if (failNextSave) { failNextSave = false; res.statusCode = 500; return json(res, { error: { code: 'FILESYSTEM_FAILURE', message: 'disk full' } }) }
       return json(res, { text: body.text, status: body.text ? 'draft' : 'empty', updatedAt: '2026-08-08T12:20:00.000Z' })
     }
@@ -60,6 +62,26 @@ describe('guided prompt editor', () => {
     await page.locator('[data-copy-agent-prompt]').click()
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(completePrompt)
     await context.close()
+  })
+
+  it('persists edits made while an earlier autosave is still in flight', async () => {
+    savedPrompts = []
+    let releaseSave
+    delayedSave = new Promise(resolve => { releaseSave = resolve })
+    const page = await browser.newPage()
+    await page.goto(baseUrl, { waitUntil: 'networkidle' })
+    await page.getByText('订单查询').click()
+    const textarea = page.locator('[data-prompt-textarea]')
+    await textarea.fill('第一版指导')
+    await expect.poll(() => savedPrompts).toEqual(['第一版指导'])
+    await textarea.fill('第二版指导')
+    releaseSave()
+    delayedSave = null
+
+    await expect.poll(() => savedPrompts).toEqual(['第一版指导', '第二版指导'])
+    await expect.poll(() => page.locator('[data-save-state]').textContent()).toContain('已保存')
+    expect(await textarea.inputValue()).toBe('第二版指导')
+    await page.close()
   })
 
   it('keeps dirty text and prevents navigation when a flush save fails', async () => {

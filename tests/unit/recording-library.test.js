@@ -54,6 +54,35 @@ describe('RecordingLibrary initialization and reconciliation', () => {
     expect(JSON.parse(await readFile(paths.index, 'utf8'))).toEqual({ schemaVersion: 1, revision: 1, recordings: [] })
   })
 
+  it('rejects a symlinked managed root before creating library directories', async () => {
+    const symlinkRoot = join(root, 'linked-recordings')
+    await symlink(outside, symlinkRoot, 'dir')
+
+    await expect(new RecordingLibrary({ root: symlinkRoot, now }).initialize()).rejects.toMatchObject({ code: 'CORRUPT_MATERIAL' })
+    await expect(access(join(outside, 'active'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rejects symlinked fixed active, trash, or staging directories', async () => {
+    for (const name of ['active', 'trash', 'staging']) {
+      const libraryRoot = join(root, name)
+      await mkdir(libraryRoot)
+      await symlink(outside, join(libraryRoot, name), 'dir')
+
+      await expect(new RecordingLibrary({ root: libraryRoot, now }).initialize()).rejects.toMatchObject({ code: 'CORRUPT_MATERIAL' })
+    }
+  })
+
+  it('rejects a fixed directory replaced by a symlink after initialization', async () => {
+    const library = new RecordingLibrary({ root, now })
+    await library.initialize()
+    await rm(paths.trash, { recursive: true, force: true })
+    await symlink(outside, paths.trash, 'dir')
+    await seedRecording({ parent: outside, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Outside', state: 'trashed' })
+
+    await expect(library.deletePermanently(firstId)).rejects.toMatchObject({ code: 'CORRUPT_MATERIAL' })
+    await expect(access(join(outside, firstId, 'recording.json'))).resolves.toBeUndefined()
+  })
+
   it('rebuilds a corrupt index from active and trash directories and repairs location state', async () => {
     await mkdir(paths.root, { recursive: true })
     await writeFile(paths.index, '{broken')
@@ -284,6 +313,39 @@ describe('RecordingLibrary recycle bin and export', () => {
     }
   })
 
+  it('serializes export-name allocation across different recordings', async () => {
+    await seedMaterial()
+    const secondMetadata = await seedRecording({ parent: paths.active, id: secondId, createdAt: '2026-08-08T12:15:00.000Z', title: '订单 查询' })
+    secondMetadata.capture.startHost = 'example.com'
+    await atomicWriteJson(join(paths.active, secondId, 'recording.json'), secondMetadata)
+    const exportRoot = await mkdtemp(join(tmpdir(), 'bf-exports-'))
+    let releaseFirst
+    const firstBlocked = new Promise(resolve => { releaseFirst = resolve })
+    let copyCalls = 0
+    const copyTree = vi.fn(async (_source, destination) => {
+      copyCalls += 1
+      await mkdir(destination, { recursive: true })
+      if (copyCalls === 1) await firstBlocked
+    })
+    try {
+      const library = new RecordingLibrary({ root, now, copyTree })
+      await library.initialize()
+      const firstExport = library.export(firstId, exportRoot)
+      await vi.waitFor(() => expect(copyCalls).toBe(1))
+      const secondExport = library.export(secondId, exportRoot)
+      await new Promise(resolve => setTimeout(resolve, 25))
+
+      expect(copyCalls).toBe(1)
+      releaseFirst()
+      const [first, second] = await Promise.all([firstExport, secondExport])
+      expect(first.path).not.toBe(second.path)
+      expect(copyCalls).toBe(2)
+    } finally {
+      releaseFirst?.()
+      await rm(exportRoot, { recursive: true, force: true })
+    }
+  })
+
   it('rejects symlinks anywhere in an exported recording tree', async () => {
     await seedMaterial()
     await symlink(join(outside, 'secret'), join(paths.active, firstId, 'escape'))
@@ -337,8 +399,30 @@ describe('RecordingLibrary media resolution', () => {
     await library.initialize()
 
     expect(await library.getTimeline(firstId)).toEqual([{ type: 'click', videoOffsetMs: 100 }])
-    expect(await library.getVideo(firstId)).toEqual({ path: join(paths.active, firstId, 'video', 'recording.mp4'), status: 'complete' })
-    expect(await library.getPoster(firstId)).toEqual({ path: join(paths.active, firstId, 'video', 'poster.png') })
+    const video = await library.getVideo(firstId)
+    const poster = await library.getPoster(firstId)
+    expect(video).toMatchObject({ path: join(paths.active, firstId, 'video', 'recording.mp4'), status: 'complete', size: 5 })
+    expect(poster).toMatchObject({ path: join(paths.active, firstId, 'video', 'poster.png'), size: 6 })
+    expect(video.handle).toBeDefined()
+    expect(poster.handle).toBeDefined()
+    await video.handle.close()
+    await poster.handle.close()
+  })
+
+  it('keeps an already-open media handle bound to the validated file', async () => {
+    await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders' })
+    await mkdir(join(paths.active, firstId, 'video'), { recursive: true })
+    const videoPath = join(paths.active, firstId, 'video', 'recording.mp4')
+    await writeFile(videoPath, 'inside-video')
+    await writeFile(join(outside, 'outside.mp4'), 'outside-video')
+    const library = new RecordingLibrary({ root, now })
+    await library.initialize()
+
+    const media = await library.getVideo(firstId)
+    await rm(videoPath)
+    await symlink(join(outside, 'outside.mp4'), videoPath)
+    expect(await media.handle.readFile('utf8')).toBe('inside-video')
+    await media.handle.close()
   })
 
   it('reports total material size for destructive confirmation', async () => {

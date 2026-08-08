@@ -48,6 +48,8 @@ export async function navigate(route, patch = {}, { force = false } = {}) {
     cleanupView = null
     beforeNavigate = null
     state.update({ route, ...patch })
+  const recordingLocked = route === 'recording'
+  root.querySelectorAll('.app-sidebar [data-nav], .app-sidebar [data-new-recording]').forEach(button => { button.disabled = recordingLocked })
   root.querySelectorAll('[data-nav]').forEach(button => button.classList.toggle('active', button.dataset.nav === route || (['new-recording', 'recording', 'detail'].includes(route) && button.dataset.nav === 'library')))
   if (route === 'library') {
     await renderLibrary({
@@ -74,14 +76,18 @@ export async function navigate(route, patch = {}, { force = false } = {}) {
     return
   }
   if (route === 'recording') {
-    cleanupView = await renderRecording({
+    const controller = await renderRecording({
       container: main,
       api,
       activeRecording: state.value.activeRecording,
-      onStopped: result => result.recordingId ? navigate('detail', { selectedId: result.recordingId }) : navigate('library'),
-      onCancel: () => navigate('library')
+      onStopped: result => result.recordingId
+        ? navigate('detail', { selectedId: result.recordingId }, { force: true })
+        : navigate('library', {}, { force: true }),
+      onCancel: () => navigate('library', {}, { force: true })
     })
-    return
+    cleanupView = controller.cleanup
+    beforeNavigate = controller.beforeNavigate
+    return true
   }
   if (route === 'detail') {
     const controller = await renderDetail({

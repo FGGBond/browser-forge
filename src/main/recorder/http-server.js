@@ -4,7 +4,7 @@ import { createServer } from 'http'
 import { createReadStream } from 'fs'
 import { dirname, join } from 'path'
 import { homedir, tmpdir } from 'os'
-import { appendFile, mkdir, rm, stat, writeFile } from 'fs/promises'
+import { appendFile, mkdir, rm, writeFile } from 'fs/promises'
 import open from 'open'
 import { findAvailablePort as defaultFindAvailablePort, findChromePath as defaultFindChromePath, launchChrome as defaultLaunchChrome, waitForChromeDebugEndpoint as defaultWaitForChromeDebugEndpoint } from '../chrome-launcher.js'
 import { RecordingSession as DefaultRecordingSession } from './index.js'
@@ -14,6 +14,7 @@ import { hashForTelemetry } from '../telemetry/config.js'
 import { randomUUID } from 'crypto'
 import { VideoRecorder as DefaultVideoRecorder } from './video-recorder.js'
 import { createMediaRange } from './media-response.js'
+import { pipeline } from 'stream/promises'
 import { generatePoster as defaultGeneratePoster } from './poster-generator.js'
 
 export function createRecorderHttpServer({
@@ -47,10 +48,32 @@ export function createRecorderHttpServer({
   let activeVideoRecorder = null
   let activeVideoOutputPath = null
   let isStarting = false
+  let isClosing = false
+  let startSettledPromise = null
   let hasStartedActiveSession = false
   let stoppingPromise = null
   let unexpectedTerminalVideo
   let activeRecordingId = null
+  let lastStopResult = null
+  let lastStopEvent = null
+
+  function throwIfClosing() {
+    if (isClosing) throw Object.assign(new Error('Browser Forge is closing'), { code: 'APP_CLOSING' })
+  }
+
+  function broadcast(message) {
+    const payload = JSON.stringify(message)
+    for (const client of wss.clients) {
+      if (client.readyState === 1) client.send(payload)
+    }
+  }
+
+  function toPublicStopResult(stopped) {
+    if (recordingLibrary && stopped?.recording) {
+      return { ok: true, recordingId: stopped.recordingId, recording: stopped.recording }
+    }
+    return { ok: true, sessionDir: stopped }
+  }
 
   async function resetStartupLog(lines = []) {
     if (!startupLogFile) return
@@ -121,7 +144,13 @@ export function createRecorderHttpServer({
           recording = await recordingLibrary.promote({ id: recordingId, sessionDir })
         }
         await telemetry.track('recording_stopped', summary)
-        return recording ? { sessionDir, recordingId, recording } : sessionDir
+        const result = recording ? { sessionDir, recordingId, recording } : sessionDir
+        lastStopResult = result
+        lastStopEvent = recording
+          ? { type: 'recording-completed', recordingId, recording }
+          : { type: 'recording-completed', sessionDir: result }
+        broadcast(lastStopEvent)
+        return result
       } finally {
         await releaseActiveResources({ session, videoRecorder, chrome, videoOutputPath, stopVideo: false })
       }
@@ -155,6 +184,7 @@ export function createRecorderHttpServer({
   })
 
   app.post('/api/start-recording', async (req, res) => {
+    if (isClosing) return res.json({ ok: false, error: 'Browser Forge is closing' })
     await telemetry.track('recording_start_requested', { requested_port_mode: req.body.port ? 'explicit' : 'dynamic' })
     if (shouldClearActiveSession({ activeSession, chromeProcess })) {
       await stopActiveRecording().catch(() => {})
@@ -163,16 +193,24 @@ export function createRecorderHttpServer({
     if (activeSession) return res.json({ ok: false, error: 'Recording is already active' })
 
     isStarting = true
+    lastStopResult = null
+    lastStopEvent = null
+    let settleStart
+    const thisStartSettled = new Promise(resolve => { settleStart = resolve })
+    startSettledPromise = thisStartSettled
     let chromePort
     let videoOutputPath
     try {
       chromePort = Number(req.body.port) || await findAvailablePort()
+      throwIfClosing()
       const checkedAt = new Date().toISOString()
       await resetStartupLog([
         `[${checkedAt}] Browser Forge recorder startup`,
         `chromePort=${chromePort}`
       ])
+      throwIfClosing()
       const staging = recordingLibrary ? await recordingLibrary.createStagingRecording() : null
+      throwIfClosing()
       activeRecordingId = staging?.id ?? null
       const startOptions = await resolveStartOptions({
         chromePath: req.body.chromePath,
@@ -180,6 +218,7 @@ export function createRecorderHttpServer({
         port: chromePort,
         findChromePath
       })
+      throwIfClosing()
       const { chromePath, outputDir } = startOptions
       const baseUrl = startUrlBase || `http://127.0.0.1:${server.address().port}`
       const userDataDir = join(homedir(), '.browser-forge', 'chrome-profile')
@@ -193,6 +232,7 @@ export function createRecorderHttpServer({
       await appendStartupLog(`startUrl=${startUrl}`)
       await telemetry.track('chrome_launch_started', { port: chromePort })
       const chromeStartedAt = Date.now()
+      throwIfClosing()
       chromeProcess = launchChrome({
         execPath: chromePath,
         port: chromePort,
@@ -213,9 +253,11 @@ export function createRecorderHttpServer({
         chromeProcess,
         timeoutMs: chromeReadyTimeoutMs
       })
+      throwIfClosing()
       await appendStartupLog('chromeDebugEndpoint=ready')
       await telemetry.track('chrome_launch_succeeded', { duration_ms: Date.now() - chromeStartedAt, chrome_pid_present: Boolean(chromeProcess.pid) })
       await afterChromeLaunch()
+      throwIfClosing()
       unexpectedTerminalVideo = undefined
       let videoRecorder
       videoRecorder = createVideoRecorder({
@@ -231,6 +273,7 @@ export function createRecorderHttpServer({
         expectedWindowTitle: recordingTitle,
         outputPath: videoOutputPath
       })
+      throwIfClosing()
       await appendStartupLog(`videoRecorder=started startEpochMs=${video.startEpochMs}`)
       activeSession = new RecordingSession({
         port: chromePort,
@@ -238,6 +281,7 @@ export function createRecorderHttpServer({
         video
       })
       await activeSession.start()
+      throwIfClosing()
       sessionDir = null
       hasStartedActiveSession = true
       if (unexpectedTerminalVideo !== undefined) stopActiveRecording({ video: unexpectedTerminalVideo }).catch(() => {})
@@ -249,21 +293,22 @@ export function createRecorderHttpServer({
       await telemetry.track('chrome_launch_failed', { error_code: error.code ?? 'CHROME_LAUNCH_FAILED', message_hash: hashForTelemetry(error.message) })
       await clearActiveSession().catch(() => {})
       await rm(videoOutputPath ?? '', { force: true }).catch(() => {})
-      res.json({ ok: false, error: error.message, logFile: startupLogFile })
+      res.json({ ok: false, error: error.message, code: classifyRecordingStartError(error), logFile: startupLogFile })
     } finally {
       isStarting = false
+      settleStart()
+      if (startSettledPromise === thisStartSettled) startSettledPromise = null
     }
   })
 
   app.post('/api/stop-recording', async (req, res) => {
-    if (!activeSession && !stoppingPromise) return res.json({ ok: false, error: 'No active session' })
+    if (!activeSession && !stoppingPromise) {
+      if (lastStopResult !== null) return res.json(toPublicStopResult(lastStopResult))
+      return res.json({ ok: false, error: 'No active session' })
+    }
     try {
       const stopped = await stopActiveRecording()
-      if (recordingLibrary && stopped?.recording) {
-        res.json({ ok: true, recordingId: stopped.recordingId, recording: stopped.recording })
-      } else {
-        res.json({ ok: true, sessionDir: stopped })
-      }
+      res.json(toPublicStopResult(stopped))
     } catch (error) {
       res.json({ ok: false, error: error.message })
     }
@@ -302,6 +347,7 @@ export function createRecorderHttpServer({
   })
 
   wss.on('connection', (ws) => {
+    if (lastStopEvent) ws.send(JSON.stringify(lastStopEvent))
     const interval = setInterval(() => {
       if (activeSession) ws.send(JSON.stringify(activeSession.getLiveSummary()))
     }, 1000)
@@ -314,6 +360,12 @@ export function createRecorderHttpServer({
   }
 
   async function close() {
+    isClosing = true
+    if (startSettledPromise) {
+      if (hasStartedActiveSession) await stopActiveRecording()
+      else await releaseActiveResources()
+      await startSettledPromise
+    }
     if (activeSession || stoppingPromise) await stopActiveRecording()
     else await clearActiveSession()
     wss.close()
@@ -324,6 +376,14 @@ export function createRecorderHttpServer({
   }
 
   return { app, server, listen, close, getSummary }
+}
+
+function classifyRecordingStartError(error) {
+  const message = String(error?.message ?? '')
+  if (/TCC|screen recording|screen capture|not authorized|permission|denied|拒绝.*(?:捕捉|录制)/iu.test(message)) {
+    return 'SCREEN_RECORDING_PERMISSION_DENIED'
+  }
+  return error?.code || 'RECORDING_START_FAILED'
 }
 
 function safeTelemetrySummary(summary = {}) {
@@ -363,20 +423,27 @@ function registerRecordingLibraryRoutes({ app, recordingLibrary, chooseExportDir
 
   app.get('/api/recordings/:id/video', asyncRoute(async (req, res) => {
     const media = await recordingLibrary.getVideo(req.params.id)
-    const info = await stat(media.path)
-    const range = createMediaRange(req.headers.range, info.size)
+    let range
+    try {
+      range = createMediaRange(req.headers.range, media.size)
+    } catch (error) {
+      await media.handle.close().catch(() => {})
+      if (error?.code === 'INVALID_RANGE') res.setHeader('Content-Range', `bytes */${media.size}`)
+      throw error
+    }
     res.status(range.status)
     res.setHeader('Accept-Ranges', 'bytes')
     res.setHeader('Content-Type', 'video/mp4')
     res.setHeader('Content-Length', String(range.length))
-    if (range.status === 206) res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${info.size}`)
-    createReadStream(media.path, { start: range.start, end: range.end }).pipe(res)
+    if (range.status === 206) res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${media.size}`)
+    await pipeOpenedMedia(res, media, { start: range.start, end: range.end })
   }))
 
   app.get('/api/recordings/:id/poster', asyncRoute(async (req, res) => {
     const media = await recordingLibrary.getPoster(req.params.id)
     res.type('png')
-    createReadStream(media.path).pipe(res)
+    res.setHeader('Content-Length', String(media.size))
+    await pipeOpenedMedia(res, media)
   }))
 
   app.get('/api/recordings/:id/prompt', asyncRoute(async (req, res) => {
@@ -411,6 +478,25 @@ function registerRecordingLibraryRoutes({ app, recordingLibrary, chooseExportDir
     if (req.body?.reveal === true && revealPath) await revealPath(result.path)
     res.json(result)
   }))
+}
+
+async function pipeOpenedMedia(res, media, range = {}) {
+  const stream = createReadStream(media.path, {
+    fd: media.handle.fd,
+    autoClose: false,
+    ...range
+  })
+  try {
+    await pipeline(stream, res)
+  } catch (error) {
+    if (res.headersSent) {
+      res.destroy(error)
+      return
+    }
+    throw error
+  } finally {
+    await media.handle.close().catch(() => {})
+  }
 }
 
 function asyncRoute(handler) {

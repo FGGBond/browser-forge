@@ -25,7 +25,6 @@ function createElectronStubs() {
     app,
     BrowserWindow,
     loadedUrls,
-    ipcMain: {},
     dialog: { showOpenDialog: vi.fn() },
     shell: { showItemInFolder: vi.fn() },
     createRecordingLibrary: vi.fn(() => recordingLibrary)
@@ -36,14 +35,12 @@ describe('Electron app startup', () => {
   it('installs agent skills on ready before opening the recorder window', async () => {
     const stubs = createElectronStubs()
     const ensureAgentSkillsInstalled = vi.fn(() => Promise.resolve({ results: [] }))
-    const registerShellIpcHandlers = vi.fn()
     const recorderServer = { listen: vi.fn(() => Promise.resolve('http://127.0.0.1:3456')), close: vi.fn() }
     const createRecorderHttpServer = vi.fn(() => recorderServer)
 
     await startApp({
       ...stubs,
       ensureAgentSkillsInstalled,
-      registerShellIpcHandlers,
       createRecorderHttpServer
     })
 
@@ -53,7 +50,6 @@ describe('Electron app startup', () => {
       packageVersion: '1.2.3',
       logFile: '/user/data/skill-installation.json'
     }))
-    expect(registerShellIpcHandlers).toHaveBeenCalledWith({ ipcMain: stubs.ipcMain, dialog: stubs.dialog })
     expect(createRecorderHttpServer).toHaveBeenCalledWith(expect.objectContaining({
       nativeToolPathOptions: expect.objectContaining({ packaged: false, projectRoot: '/app/path' })
     }))
@@ -68,7 +64,6 @@ describe('Electron app startup', () => {
     await startApp({
       ...stubs,
       ensureAgentSkillsInstalled: vi.fn(() => Promise.reject(new Error('permission denied'))),
-      registerShellIpcHandlers: vi.fn(),
       createRecorderHttpServer: vi.fn(() => recorderServer),
       logger: { error: (...args) => errors.push(args) }
     })
@@ -93,7 +88,6 @@ describe('Electron app startup', () => {
       ...stubs,
       telemetry,
       ensureAgentSkillsInstalled: vi.fn(() => Promise.resolve({ results: [{ agent: 'codex', status: 'installed' }] })),
-      registerShellIpcHandlers: vi.fn(),
       createRecorderHttpServer: vi.fn(() => recorderServer)
     })
 
@@ -124,8 +118,7 @@ describe('Electron app startup', () => {
       ...stubs,
       createRecordingLibrary,
       createRecorderHttpServer,
-      ensureAgentSkillsInstalled: vi.fn(async () => ({ results: [] })),
-      registerShellIpcHandlers: vi.fn()
+      ensureAgentSkillsInstalled: vi.fn(async () => ({ results: [] }))
     })
 
     expect(createRecordingLibrary).toHaveBeenCalledWith({ root: '/user/data/recordings' })
