@@ -2,13 +2,14 @@ import { randomUUID as defaultRandomUUID } from 'crypto'
 import * as defaultFs from 'fs/promises'
 import { constants as fsConstants } from 'fs'
 import { join, resolve } from 'path'
-import { atomicWriteJson } from './atomic-file.js'
+import { atomicWriteJson, atomicWriteText } from './atomic-file.js'
 import {
   MAX_RECORDING_TITLE_LENGTH,
   createRecordingMetadata,
   normalizeRecordingMetadata,
   toLibraryEntry
 } from './metadata.js'
+import { buildExternalAgentPrompt } from './external-agent-prompt.js'
 import {
   assertContainedPath,
   assertRecordingId,
@@ -119,6 +120,57 @@ export class RecordingLibrary {
     return this.#detail(recording.path, recording.metadata)
   }
 
+  async getPrompt(id) {
+    this.#requireInitialized()
+    const recording = await this.#resolveActive(id)
+    if (recording.metadata.prompt.status !== 'draft') return { text: '', status: 'empty', updatedAt: null }
+    const text = await this.#readSafeText(join(recording.path, 'prompt.md'), 'Prompt material is invalid')
+    return {
+      text: text.replace(/\n$/, ''),
+      status: 'draft',
+      updatedAt: recording.metadata.prompt.updatedAt
+    }
+  }
+
+  async savePrompt(id, text) {
+    this.#requireInitialized()
+    const input = String(text ?? '')
+    if (Buffer.byteLength(input, 'utf8') > 256 * 1024) throw libraryError('INVALID_INPUT', 'Prompt is too large')
+    const normalized = input.trim()
+    return this.#enqueue(async () => {
+      const recording = await this.#resolveActive(id)
+      const promptPath = join(recording.path, 'prompt.md')
+      if (normalized) {
+        await atomicWriteText(promptPath, `${normalized}\n`)
+      } else {
+        await this.fs.unlink(promptPath).catch(error => {
+          if (error?.code !== 'ENOENT') throw error
+        })
+      }
+      const updatedAt = normalized ? this.now().toISOString() : null
+      const metadata = {
+        ...recording.metadata,
+        updatedAt: this.now().toISOString(),
+        prompt: { status: normalized ? 'draft' : 'empty', updatedAt }
+      }
+      await atomicWriteJson(join(recording.path, 'recording.json'), metadata)
+      await this.#replaceIndexEntry(toLibraryEntry(metadata))
+      return { text: normalized, status: metadata.prompt.status, updatedAt }
+    })
+  }
+
+  async getExternalAgentPrompt(id) {
+    this.#requireInitialized()
+    const recording = await this.#resolveActive(id)
+    const prompt = recording.metadata.prompt.status === 'draft'
+      ? await this.#readSafeText(join(recording.path, 'prompt.md'), 'Prompt material is invalid')
+      : ''
+    return {
+      recordingId: recording.metadata.id,
+      text: buildExternalAgentPrompt({ recordingPath: recording.path, guidance: prompt })
+    }
+  }
+
   async rename(id, title) {
     this.#requireInitialized()
     const trimmed = String(title ?? '').trim()
@@ -208,6 +260,22 @@ export class RecordingLibrary {
     this.logger?.warn?.('[browser-forge] recording reconciliation warning', item)
   }
 
+  async #resolveActive(id) {
+    const recordingId = assertRecordingId(id)
+    try {
+      return await this.#resolve(recordingId, ['active'])
+    } catch (error) {
+      if (error?.code !== 'NOT_FOUND') throw error
+      try {
+        await this.#resolve(recordingId, ['trashed'])
+      } catch (trashError) {
+        if (trashError?.code === 'NOT_FOUND') throw error
+        throw trashError
+      }
+      throw libraryError('INVALID_STATE', 'Recording must be restored before editing or analyzing its prompt')
+    }
+  }
+
   async #resolve(id, states) {
     const recordingId = assertRecordingId(id)
     for (const state of states) {
@@ -225,6 +293,29 @@ export class RecordingLibrary {
 
   async #readRequiredJson(path, message) {
     return this.#readSafeJson(path, { required: true, message })
+  }
+
+  async #readSafeText(path, message) {
+    let info
+    try {
+      info = await this.fs.lstat(path)
+    } catch (error) {
+      if (error?.code === 'ENOENT') throw libraryError('CORRUPT_MATERIAL', message, { cause: error })
+      throw error
+    }
+    if (info.isSymbolicLink() || !info.isFile()) throw libraryError('CORRUPT_MATERIAL', message)
+    let handle
+    try {
+      handle = await this.fs.open(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0))
+      const openedInfo = await handle.stat()
+      if (!openedInfo.isFile()) throw libraryError('CORRUPT_MATERIAL', message)
+      return await handle.readFile('utf8')
+    } catch (error) {
+      if (error?.code === 'ELOOP') throw libraryError('CORRUPT_MATERIAL', message, { cause: error })
+      throw error
+    } finally {
+      await handle?.close().catch(() => {})
+    }
   }
 
   async #readSafeJson(path, { required, message }) {

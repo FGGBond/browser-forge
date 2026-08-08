@@ -170,3 +170,59 @@ describe('RecordingLibrary reads and mutations', () => {
     await expect(access(staging.path)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })
+
+describe('RecordingLibrary prompts', () => {
+  it('saves one prompt atomically, updates index status, and removes the file when cleared', async () => {
+    await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders' })
+    const library = new RecordingLibrary({ root, now })
+    await library.initialize()
+
+    expect(await library.getPrompt(firstId)).toEqual({ text: '', status: 'empty', updatedAt: null })
+    const saved = await library.savePrompt(firstId, '  查询订单状态  ')
+    expect(saved).toEqual({ text: '查询订单状态', status: 'draft', updatedAt: '2026-08-08T12:20:00.000Z' })
+    expect(await library.getPrompt(firstId)).toEqual(saved)
+    expect(await readFile(join(paths.active, firstId, 'prompt.md'), 'utf8')).toBe('查询订单状态\n')
+    expect((await library.list({ state: 'active' }))[0].promptStatus).toBe('draft')
+
+    expect(await library.savePrompt(firstId, '   ')).toEqual({ text: '', status: 'empty', updatedAt: null })
+    await expect(access(join(paths.active, firstId, 'prompt.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rejects oversized prompt input before touching the recording', async () => {
+    await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders' })
+    const library = new RecordingLibrary({ root, now })
+    await library.initialize()
+
+    await expect(library.savePrompt(firstId, '界'.repeat(100_000))).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    expect((await library.get(firstId)).promptStatus).toBe('empty')
+  })
+
+  it('does not follow a symlinked prompt file', async () => {
+    await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders' })
+    await writeFile(join(outside, 'secret.md'), 'outside secret')
+    await symlink(join(outside, 'secret.md'), join(paths.active, firstId, 'prompt.md'))
+    const metadataPath = join(paths.active, firstId, 'recording.json')
+    const metadata = JSON.parse(await readFile(metadataPath, 'utf8'))
+    metadata.prompt = { status: 'draft', updatedAt: '2026-08-08T12:15:00.000Z' }
+    await atomicWriteJson(metadataPath, metadata)
+    const library = new RecordingLibrary({ root, now })
+    await library.initialize()
+
+    await expect(library.getPrompt(firstId)).rejects.toMatchObject({ code: 'CORRUPT_MATERIAL' })
+  })
+
+  it('derives the complete external prompt only for active managed recordings', async () => {
+    await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders' })
+    await seedRecording({ parent: paths.trash, id: secondId, createdAt: '2026-08-08T12:10:00.000Z', title: 'Trashed', state: 'trashed' })
+    const library = new RecordingLibrary({ root, now })
+    await library.initialize()
+    await library.savePrompt(firstId, '查询订单状态')
+
+    const result = await library.getExternalAgentPrompt(firstId)
+    expect(result.text).toContain(join(paths.active, firstId))
+    expect(result.text).toContain('查询订单状态')
+    expect(result.recordingId).toBe(firstId)
+    expect(await readFile(join(paths.active, firstId, 'prompt.md'), 'utf8')).not.toContain(paths.root)
+    await expect(library.getExternalAgentPrompt(secondId)).rejects.toMatchObject({ code: 'INVALID_STATE' })
+  })
+})
