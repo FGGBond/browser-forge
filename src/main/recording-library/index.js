@@ -22,13 +22,15 @@ const LIST_STATES = new Set(['active', 'trashed'])
 const LOCATION_DIRECTORY = { active: 'active', trashed: 'trash' }
 
 export class RecordingLibrary {
-  constructor({ root, fs = defaultFs, now = () => new Date(), randomUUID = defaultRandomUUID, logger = console } = {}) {
+  constructor({ root, fs = defaultFs, now = () => new Date(), randomUUID = defaultRandomUUID, logger = console, copyTree } = {}) {
     if (!root) throw libraryError('INVALID_INPUT', 'RecordingLibrary requires a root')
     this.paths = createLibraryPaths(root)
     this.fs = fs
     this.now = now
     this.randomUUID = randomUUID
     this.logger = logger
+    this.copyTree = copyTree || ((source, destination) => copyTreeWithoutSymlinks(source, destination, this.fs))
+    this.busyRecordings = new Set()
     this.index = { schemaVersion: 1, revision: 0, recordings: [] }
     this.mutationTail = Promise.resolve()
     this.initialized = false
@@ -138,6 +140,7 @@ export class RecordingLibrary {
     if (Buffer.byteLength(input, 'utf8') > 256 * 1024) throw libraryError('INVALID_INPUT', 'Prompt is too large')
     const normalized = input.trim()
     return this.#enqueue(async () => {
+      this.#assertNotBusy(id)
       const recording = await this.#resolveActive(id)
       const promptPath = join(recording.path, 'prompt.md')
       if (normalized) {
@@ -171,11 +174,89 @@ export class RecordingLibrary {
     }
   }
 
+  async trash(id) {
+    this.#requireInitialized()
+    const recordingId = assertRecordingId(id)
+    return this.#enqueue(async () => {
+      this.#assertNotBusy(recordingId)
+      const source = await this.#resolveInState(recordingId, 'active')
+      const target = join(this.paths.trash, recordingId)
+      await this.fs.rename(source.path, target)
+      const timestamp = this.now().toISOString()
+      const metadata = { ...source.metadata, state: 'trashed', trashedAt: timestamp, updatedAt: timestamp }
+      await atomicWriteJson(join(target, 'recording.json'), metadata)
+      await this.#replaceIndexEntry(toLibraryEntry(metadata))
+      return this.#detail(target, metadata)
+    })
+  }
+
+  async restore(id) {
+    this.#requireInitialized()
+    const recordingId = assertRecordingId(id)
+    return this.#enqueue(async () => {
+      this.#assertNotBusy(recordingId)
+      const source = await this.#resolveInState(recordingId, 'trashed')
+      const target = join(this.paths.active, recordingId)
+      await this.fs.rename(source.path, target)
+      const metadata = { ...source.metadata, state: 'active', trashedAt: null, updatedAt: this.now().toISOString() }
+      await atomicWriteJson(join(target, 'recording.json'), metadata)
+      await this.#replaceIndexEntry(toLibraryEntry(metadata))
+      return this.#detail(target, metadata)
+    })
+  }
+
+  async deletePermanently(id) {
+    this.#requireInitialized()
+    const recordingId = assertRecordingId(id)
+    return this.#enqueue(async () => {
+      this.#assertNotBusy(recordingId)
+      const recording = await this.#resolveInState(recordingId, 'trashed')
+      await assertSafeDirectory(recording.path, { parent: this.paths.trash })
+      try {
+        await this.fs.rm(recording.path, { recursive: true, force: false })
+      } catch (error) {
+        throw toLibraryError(error, 'FILESYSTEM_FAILURE', 'Could not permanently delete recording')
+      }
+      await this.#removeIndexEntry(recordingId)
+      return { id: recordingId, deleted: true }
+    })
+  }
+
+  async export(id, destinationRoot) {
+    this.#requireInitialized()
+    const recordingId = assertRecordingId(id)
+    const recording = await this.#enqueue(async () => {
+      this.#assertNotBusy(recordingId)
+      const resolved = await this.#resolveInState(recordingId, 'active')
+      this.busyRecordings.add(recordingId)
+      return resolved
+    })
+
+    let temporaryPath
+    try {
+      const safeDestination = await assertSafeDirectory(destinationRoot)
+      const finalPath = await this.#nextExportPath(safeDestination, recording.metadata)
+      temporaryPath = `${finalPath}.browser-forge-exporting`
+      await this.fs.rm(temporaryPath, { recursive: true, force: true })
+      await this.copyTree(recording.path, temporaryPath)
+      await atomicWriteText(join(temporaryPath, 'EXPORT.md'), exportReadme())
+      await this.fs.rename(temporaryPath, finalPath)
+      return { path: finalPath }
+    } catch (error) {
+      if (temporaryPath) await this.fs.rm(temporaryPath, { recursive: true, force: true }).catch(() => {})
+      if (error?.code && ['INVALID_INPUT', 'INVALID_STATE', 'NOT_FOUND', 'BUSY', 'CORRUPT_MATERIAL'].includes(error.code)) throw error
+      throw toLibraryError(error, 'FILESYSTEM_FAILURE', 'Could not export recording')
+    } finally {
+      this.busyRecordings.delete(recordingId)
+    }
+  }
+
   async rename(id, title) {
     this.#requireInitialized()
     const trimmed = String(title ?? '').trim()
     if (!trimmed || trimmed.length > MAX_RECORDING_TITLE_LENGTH) throw libraryError('INVALID_INPUT', 'Invalid title')
     return this.#enqueue(async () => {
+      this.#assertNotBusy(id)
       const recording = await this.#resolve(id, ['active', 'trashed'])
       const metadata = { ...recording.metadata, title: trimmed, updatedAt: this.now().toISOString() }
       await atomicWriteJson(join(recording.path, 'recording.json'), metadata)
@@ -260,19 +341,44 @@ export class RecordingLibrary {
     this.logger?.warn?.('[browser-forge] recording reconciliation warning', item)
   }
 
-  async #resolveActive(id) {
+  #assertNotBusy(id) {
+    const recordingId = assertRecordingId(id)
+    if (this.busyRecordings.has(recordingId)) throw libraryError('BUSY', 'Recording is busy')
+  }
+
+  async #resolveInState(id, desiredState) {
     const recordingId = assertRecordingId(id)
     try {
-      return await this.#resolve(recordingId, ['active'])
+      return await this.#resolve(recordingId, [desiredState])
     } catch (error) {
       if (error?.code !== 'NOT_FOUND') throw error
+      const otherState = desiredState === 'active' ? 'trashed' : 'active'
       try {
-        await this.#resolve(recordingId, ['trashed'])
-      } catch (trashError) {
-        if (trashError?.code === 'NOT_FOUND') throw error
-        throw trashError
+        await this.#resolve(recordingId, [otherState])
+      } catch (otherError) {
+        if (otherError?.code === 'NOT_FOUND') throw error
+        throw otherError
       }
-      throw libraryError('INVALID_STATE', 'Recording must be restored before editing or analyzing its prompt')
+      throw libraryError('INVALID_STATE', `Recording must be ${desiredState}`)
+    }
+  }
+
+  async #nextExportPath(destinationRoot, metadata) {
+    const baseName = `${sanitizeExportName(metadata.title)}-${formatExportTimestamp(metadata.createdAt)}`
+    for (let suffix = 1; suffix < 10_000; suffix += 1) {
+      const name = suffix === 1 ? baseName : `${baseName}-${suffix}`
+      const candidate = assertContainedPath(destinationRoot, join(destinationRoot, name))
+      if (!await this.#exists(candidate) && !await this.#exists(`${candidate}.browser-forge-exporting`)) return candidate
+    }
+    throw libraryError('BUSY', 'Unable to allocate an export directory')
+  }
+
+  async #resolveActive(id) {
+    try {
+      return await this.#resolveInState(id, 'active')
+    } catch (error) {
+      if (error?.code === 'INVALID_STATE') throw libraryError('INVALID_STATE', 'Recording must be restored before editing or analyzing its prompt')
+      throw error
     }
   }
 
@@ -354,6 +460,15 @@ export class RecordingLibrary {
     await atomicWriteJson(this.paths.index, this.index)
   }
 
+  async #removeIndexEntry(id) {
+    this.index = {
+      schemaVersion: 1,
+      revision: this.index.revision + 1,
+      recordings: this.index.recordings.filter(item => item.id !== id)
+    }
+    await atomicWriteJson(this.paths.index, this.index)
+  }
+
   #sortEntries(entries) {
     return [...entries].sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id))
   }
@@ -375,4 +490,44 @@ export class RecordingLibrary {
       throw error
     }
   }
+}
+
+
+async function copyTreeWithoutSymlinks(source, destination, fs) {
+  const sourceInfo = await fs.lstat(source)
+  if (sourceInfo.isSymbolicLink() || !sourceInfo.isDirectory()) throw libraryError('CORRUPT_MATERIAL', 'Unsafe export source')
+  await fs.mkdir(destination, { recursive: false })
+  const children = await fs.readdir(source, { withFileTypes: true })
+  for (const child of children) {
+    const sourcePath = join(source, child.name)
+    const destinationPath = join(destination, child.name)
+    const info = await fs.lstat(sourcePath)
+    if (info.isSymbolicLink()) throw libraryError('CORRUPT_MATERIAL', 'Export source contains a symlink')
+    if (info.isDirectory()) await copyTreeWithoutSymlinks(sourcePath, destinationPath, fs)
+    else if (info.isFile()) await fs.copyFile(sourcePath, destinationPath)
+    else throw libraryError('CORRUPT_MATERIAL', 'Export source contains unsupported material')
+  }
+}
+
+function sanitizeExportName(title) {
+  const normalized = String(title || '').normalize('NFKC')
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-+/g, '-')
+    .slice(0, 60)
+  return normalized || 'browser-forge-recording'
+}
+
+function formatExportTimestamp(value) {
+  const iso = new Date(value).toISOString()
+  return `${iso.slice(0, 10).replaceAll('-', '')}-${iso.slice(11, 19).replaceAll(':', '')}`
+}
+
+function exportReadme() {
+  return `# Browser Forge Recording Export\n\nThis directory is an independent copy of a Browser Forge recording. Supply this directory to the installed browser-forge skill. Use timeline.json event videoOffsetMs values with the bundled extract-video-frame.mjs tool when visual context is needed.\n`
+}
+
+function toLibraryError(error, code, message) {
+  if (error?.code && ['INVALID_INPUT', 'INVALID_STATE', 'NOT_FOUND', 'BUSY', 'CORRUPT_MATERIAL'].includes(error.code)) return error
+  return libraryError(code, message, { cause: error })
 }

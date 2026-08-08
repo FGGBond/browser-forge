@@ -226,3 +226,102 @@ describe('RecordingLibrary prompts', () => {
     await expect(library.getExternalAgentPrompt(secondId)).rejects.toMatchObject({ code: 'INVALID_STATE' })
   })
 })
+
+describe('RecordingLibrary recycle bin and export', () => {
+  async function seedMaterial(id = firstId) {
+    await seedRecording({ parent: paths.active, id, createdAt: '2026-08-08T12:15:00.000Z', title: '订单 查询', host: 'shop.example' })
+    await mkdir(join(paths.active, id, 'video'), { recursive: true })
+    await writeFile(join(paths.active, id, 'video', 'recording.mp4'), 'video-bytes')
+    await writeFile(join(paths.active, id, 'prompt.md'), '查询订单\n')
+    const metadataPath = join(paths.active, id, 'recording.json')
+    const metadata = JSON.parse(await readFile(metadataPath, 'utf8'))
+    metadata.prompt = { status: 'draft', updatedAt: '2026-08-08T12:16:00.000Z' }
+    await atomicWriteJson(metadataPath, metadata)
+  }
+
+  it('moves to trash, restores unchanged, and permanently deletes only trash entries', async () => {
+    await seedMaterial()
+    const library = new RecordingLibrary({ root, now })
+    await library.initialize()
+    const promptBefore = await readFile(join(paths.active, firstId, 'prompt.md'))
+    const videoBefore = await readFile(join(paths.active, firstId, 'video', 'recording.mp4'))
+
+    const trashed = await library.trash(firstId)
+    expect(trashed).toMatchObject({ state: 'trashed', metadata: { trashedAt: '2026-08-08T12:20:00.000Z' } })
+    await expect(access(join(paths.active, firstId))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(join(paths.trash, firstId, 'prompt.md'))).toEqual(promptBefore)
+    await expect(library.deletePermanently(secondId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+
+    const restored = await library.restore(firstId)
+    expect(restored).toMatchObject({ state: 'active', metadata: { trashedAt: null } })
+    expect(await readFile(join(paths.active, firstId, 'prompt.md'))).toEqual(promptBefore)
+    expect(await readFile(join(paths.active, firstId, 'video', 'recording.mp4'))).toEqual(videoBefore)
+    await expect(library.deletePermanently(firstId)).rejects.toMatchObject({ code: 'INVALID_STATE' })
+
+    await library.trash(firstId)
+    expect(await library.deletePermanently(firstId)).toEqual({ id: firstId, deleted: true })
+    await expect(library.get(firstId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(access(join(paths.trash, firstId))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('exports complete independent copies with deterministic conflict suffixes', async () => {
+    await seedMaterial()
+    const exportRoot = await mkdtemp(join(tmpdir(), 'bf-exports-'))
+    try {
+      const library = new RecordingLibrary({ root, now })
+      await library.initialize()
+      const first = await library.export(firstId, exportRoot)
+      const second = await library.export(firstId, exportRoot)
+
+      expect(first.path).toBe(join(exportRoot, '订单-查询-20260808-121500'))
+      expect(second.path).toBe(join(exportRoot, '订单-查询-20260808-121500-2'))
+      expect(await readFile(join(first.path, 'prompt.md'), 'utf8')).toBe('查询订单\n')
+      expect(await readFile(join(first.path, 'video', 'recording.mp4'), 'utf8')).toBe('video-bytes')
+      expect(await readFile(join(first.path, 'EXPORT.md'), 'utf8')).toContain('browser-forge')
+      expect(await readFile(join(paths.active, firstId, 'video', 'recording.mp4'), 'utf8')).toBe('video-bytes')
+    } finally {
+      await rm(exportRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects symlinks anywhere in an exported recording tree', async () => {
+    await seedMaterial()
+    await symlink(join(outside, 'secret'), join(paths.active, firstId, 'escape'))
+    const exportRoot = await mkdtemp(join(tmpdir(), 'bf-exports-'))
+    try {
+      const library = new RecordingLibrary({ root, now })
+      await library.initialize()
+      await expect(library.export(firstId, exportRoot)).rejects.toMatchObject({ code: 'CORRUPT_MATERIAL' })
+      expect((await lstat(join(paths.active, firstId, 'escape'))).isSymbolicLink()).toBe(true)
+    } finally {
+      await rm(exportRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('blocks same-recording mutations while export holds a stable snapshot', async () => {
+    await seedMaterial()
+    const exportRoot = await mkdtemp(join(tmpdir(), 'bf-exports-'))
+    let releaseCopy
+    let copyStarted
+    const enteredCopy = new Promise(resolve => { copyStarted = resolve })
+    const copyTree = vi.fn(async (_source, destination) => {
+      await mkdir(destination, { recursive: true })
+      copyStarted()
+      await new Promise(resolve => { releaseCopy = resolve })
+    })
+    try {
+      const library = new RecordingLibrary({ root, now, copyTree })
+      await library.initialize()
+      const exporting = library.export(firstId, exportRoot)
+      await enteredCopy
+
+      await expect(library.trash(firstId)).rejects.toMatchObject({ code: 'BUSY' })
+      await expect(library.rename(firstId, 'new title')).rejects.toMatchObject({ code: 'BUSY' })
+      await expect(library.savePrompt(firstId, 'new prompt')).rejects.toMatchObject({ code: 'BUSY' })
+      releaseCopy()
+      await exporting
+    } finally {
+      await rm(exportRoot, { recursive: true, force: true })
+    }
+  })
+})
