@@ -22,10 +22,10 @@ describe('recorder HTTP server', () => {
     const html = await fetch(url).then(response => response.text())
     const summary = await fetch(`${url}/api/summary`).then(response => response.json())
 
-    expect(html).toContain('Browser Tabs')
-    expect(html).toContain('screenshot-grid')
-    expect(html).toContain('view-setup')
-    expect(html).not.toContain('启动 Chrome 并开始录制</button></div>')
+    expect(html).toContain('<div id="app"')
+    expect(html).toContain('<link rel="stylesheet" href="/styles.css">')
+    expect(html).toContain('<script type="module" src="/app.js"></script>')
+    expect(html).not.toContain('output-dir')
     expect(summary).toEqual(expect.objectContaining({
       type: 'summary',
       startedAt: null,

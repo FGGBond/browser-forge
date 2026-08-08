@@ -2,6 +2,8 @@ import { api } from './api.js'
 import { createState } from './state.js'
 import { renderLibrary } from './views/library.js'
 import { renderNewRecording, renderRecording } from './views/recording.js'
+import { renderDetail } from './views/detail.js'
+import { renderTrash } from './views/trash.js'
 
 const state = createState({
   route: 'library',
@@ -39,16 +41,17 @@ export async function navigate(route, patch = {}) {
   cleanupView?.()
   cleanupView = null
   state.update({ route, ...patch })
-  root.querySelectorAll('[data-nav]').forEach(button => button.classList.toggle('active', button.dataset.nav === route || (route === 'new-recording' && button.dataset.nav === 'library')))
+  root.querySelectorAll('[data-nav]').forEach(button => button.classList.toggle('active', button.dataset.nav === route || (['new-recording', 'recording', 'detail'].includes(route) && button.dataset.nav === 'library')))
   if (route === 'library') {
     await renderLibrary({
       container: main,
       api,
       state,
       onNew: () => navigate('new-recording'),
-      onSelect: id => state.update({ selectedId: id }),
+      onSelect: id => navigate('detail', { selectedId: id }),
       onTrash: async id => {
-        await api.trashRecording(id)
+        const trashed = await api.trashRecording(id)
+        showUndoToast(trashed)
         await navigate('library')
       }
     })
@@ -68,14 +71,49 @@ export async function navigate(route, patch = {}) {
       container: main,
       api,
       activeRecording: state.value.activeRecording,
-      onStopped: result => navigate('library', { selectedId: result.recordingId || null }),
+      onStopped: result => result.recordingId ? navigate('detail', { selectedId: result.recordingId }) : navigate('library'),
       onCancel: () => navigate('library')
     })
     return
   }
-  main.innerHTML = `<section class="narrow-view"><button class="back-button" data-back>返回</button><div class="empty-state"><h1>回收站将在这里显示</h1><p>录制被移入 App 内回收站后，可以恢复或永久删除。</p></div></section>`
-  main.querySelector('[data-back]')?.addEventListener('click', () => navigate('library'))
+  if (route === 'detail') {
+    await renderDetail({
+      container: main,
+      api,
+      recordingId: state.value.selectedId,
+      onBack: () => navigate('library'),
+      onTrashed: async recording => { showUndoToast(recording); await navigate('library') }
+    })
+    return
+  }
+  if (route === 'trash') {
+    await renderTrash({
+      container: main,
+      api,
+      onBack: () => navigate('library'),
+      onRestored: recording => navigate('detail', { selectedId: recording.id })
+    })
+    return
+  }
 }
+
+function showUndoToast(recording) {
+  root.querySelector('[data-toast]')?.remove()
+  const toast = document.createElement('div')
+  toast.className = 'toast'
+  toast.dataset.toast = ''
+  toast.innerHTML = `<span>“${escapeHtml(recording.title)}”已移入回收站</span><button type="button" data-undo-trash>撤销</button>`
+  root.append(toast)
+  const timer = setTimeout(() => toast.remove(), 8000)
+  toast.querySelector('[data-undo-trash]').addEventListener('click', async () => {
+    clearTimeout(timer)
+    const restored = await api.restoreRecording(recording.id)
+    toast.remove()
+    await navigate('detail', { selectedId: restored.id })
+  })
+}
+
+function escapeHtml(value) { return String(value ?? '').replace(/[&<>"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]) }
 
 navigate('library')
 

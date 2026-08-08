@@ -341,6 +341,16 @@ describe('RecordingLibrary media resolution', () => {
     expect(await library.getPoster(firstId)).toEqual({ path: join(paths.active, firstId, 'video', 'poster.png') })
   })
 
+  it('reports total material size for destructive confirmation', async () => {
+    await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders' })
+    await mkdir(join(paths.active, firstId, 'video'), { recursive: true })
+    await writeFile(join(paths.active, firstId, 'video', 'recording.mp4'), Buffer.alloc(2048))
+    const library = new RecordingLibrary({ root, now })
+    await library.initialize()
+
+    expect((await library.get(firstId)).sizeBytes).toBeGreaterThanOrEqual(2048)
+  })
+
   it('rejects symlinked media and missing posters', async () => {
     await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders' })
     await mkdir(join(paths.active, firstId, 'video'), { recursive: true })

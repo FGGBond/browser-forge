@@ -119,7 +119,7 @@ export class RecordingLibrary {
   async get(id) {
     this.#requireInitialized()
     const recording = await this.#resolve(id, ['active', 'trashed'])
-    return this.#detail(recording.path, recording.metadata)
+    return { ...this.#detail(recording.path, recording.metadata), sizeBytes: await this.#calculateTreeSize(recording.path) }
   }
 
   async getTimeline(id) {
@@ -419,6 +419,17 @@ export class RecordingLibrary {
       return { path, metadata }
     }
     throw libraryError('NOT_FOUND', 'Recording was not found')
+  }
+
+  async #calculateTreeSize(path) {
+    const info = await this.fs.lstat(path)
+    if (info.isSymbolicLink()) throw libraryError('CORRUPT_MATERIAL', 'Recording contains a symlink')
+    if (info.isFile()) return info.size
+    if (!info.isDirectory()) throw libraryError('CORRUPT_MATERIAL', 'Recording contains unsupported material')
+    const children = await this.fs.readdir(path)
+    let total = 0
+    for (const child of children) total += await this.#calculateTreeSize(join(path, child))
+    return total
   }
 
   async #resolveSafeFile(recordingPath, relativePath, { required, message }) {
