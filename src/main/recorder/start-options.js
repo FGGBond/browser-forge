@@ -2,7 +2,7 @@ export async function resolveStartOptions({ chromePath, outputDir, port, findChr
   const resolvedChromePath = String(chromePath || '').trim() || await findChromePath()
   return {
     chromePath: resolvedChromePath,
-    outputDir,
+    ...(outputDir === undefined ? {} : { outputDir }),
     port
   }
 }

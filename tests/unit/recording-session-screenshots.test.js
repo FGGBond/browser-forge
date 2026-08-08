@@ -155,6 +155,19 @@ describe('RecordingSession screenshot triggers', () => {
     }))
   })
 
+  it('writes directly to an injected managed session directory', async () => {
+    const recording = new RecordingSession({ sessionDir: '/tmp/browser-forge-managed/staging/3d4527e4-4d47-4aea-a4ba-cd61218bbd27' })
+    recording._startedAt = 1_786_170_000_123
+    recording._cdp = { getTargets: () => [], _targets: new Map(), disconnect: vi.fn() }
+    const writeSession = vi.spyOn(recording, '_writeSession').mockResolvedValue(recording.sessionDir)
+    vi.spyOn(Date, 'now').mockReturnValue(1_786_170_001_123)
+
+    expect(await recording.stop()).toBe(recording.sessionDir)
+    expect(writeSession).toHaveBeenCalledWith(expect.objectContaining({ sessionDir: recording.sessionDir }))
+    expect(writeSession.mock.calls[0][0]).not.toHaveProperty('outputDir')
+    expect(writeSession.mock.calls[0][0]).not.toHaveProperty('sessionName')
+  })
+
   it('generates distinct session directories for recordings started in the same millisecond', async () => {
     const first = createStoppedRecording({ startedAt: 1_786_170_000_123 })
     const second = createStoppedRecording({ startedAt: 1_786_170_000_123 })

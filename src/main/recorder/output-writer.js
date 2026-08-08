@@ -1,11 +1,13 @@
 // src/main/recorder/output-writer.js
 import { copyFile, mkdir, rename, unlink, writeFile } from 'fs/promises'
-import { join } from 'path'
+import { basename, dirname, join } from 'path'
 import { createVideoManifest } from './video-manifest.js'
 
-export async function writeSession({ outputDir, sessionName, metadata, har, timeline, tabs, video = null }) {
-  const sessionDir = join(outputDir, sessionName)
-  await mkdir(outputDir, { recursive: true })
+export async function writeSession({ sessionDir: exactSessionDir, outputDir, sessionName, metadata, har, timeline, tabs, video = null }) {
+  const sessionDir = exactSessionDir || (outputDir && sessionName ? join(outputDir, sessionName) : null)
+  if (!sessionDir) throw new Error('writeSession requires sessionDir or outputDir plus sessionName')
+  await mkdir(dirname(sessionDir), { recursive: true })
+  const displayName = sessionName || basename(sessionDir)
   // A recording directory is immutable and must never be merged with a
   // previous session. In particular, an old recording.mp4 must not survive a
   // failed capture and become associated with a new manifest.
@@ -57,7 +59,7 @@ export async function writeSession({ outputDir, sessionName, metadata, har, time
     `时长：${durationStr} | Tab 数量：${persistedMetadata.tabs.length} | 网络请求：${harEntryCount}个`,
     '',
     '## 目录结构',
-    `${sessionName}/`,
+    `${displayName}/`,
     '├── RECORDING.md',
     '├── recording.har         HAR 1.2 格式，含所有 Tab 的网络请求',
     '├── timeline.json         全局事件时间线',

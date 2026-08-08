@@ -7,7 +7,6 @@ describe('resolveStartOptions', () => {
 
     const options = await resolveStartOptions({
       chromePath: '',
-      outputDir: '/tmp/browser-forge-output',
       port: 9222,
       findChromePath
     })
@@ -15,7 +14,6 @@ describe('resolveStartOptions', () => {
     expect(findChromePath).toHaveBeenCalledTimes(1)
     expect(options).toEqual({
       chromePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      outputDir: '/tmp/browser-forge-output',
       port: 9222
     })
   })

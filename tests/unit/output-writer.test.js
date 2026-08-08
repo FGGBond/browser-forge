@@ -183,3 +183,21 @@ describe('video material output', () => {
   })
 
 })
+
+describe('managed session output', () => {
+  it('writes an exact managed session directory without adding a timestamp child', async () => {
+    const sessionDir = join(tmpDir, 'staging', '3d4527e4-4d47-4aea-a4ba-cd61218bbd27')
+    const metadata = { startUrl: 'https://example.com', durationMs: 5000, chromeVersion: '120', tabs: [] }
+    const result = await writeSession({
+      sessionDir,
+      metadata,
+      har: { log: { version: '1.2', creator: { name: 'browser-forge', version: '0.1.0' }, pages: [], entries: [] } },
+      timeline: [],
+      tabs: {}
+    })
+
+    expect(result).toBe(sessionDir)
+    expect(JSON.parse(readFileSync(join(sessionDir, 'metadata.json'), 'utf8'))).toEqual(metadata)
+    expect(existsSync(join(sessionDir, 'RECORDING.md'))).toBe(true)
+  })
+})

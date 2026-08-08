@@ -13,9 +13,10 @@ import { addVideoOffset } from './video-manifest.js'
 import { randomUUID } from 'node:crypto'
 
 export class RecordingSession {
-  constructor({ port = 9222, outputDir, video = null }) {
+  constructor({ port = 9222, outputDir, sessionDir = null, video = null }) {
     this.port = port
     this.outputDir = outputDir
+    this.sessionDir = sessionDir
     this.video = video
     this._cdp = new CdpClient({ port })
     this._tabCollectors = new Map()
@@ -231,10 +232,10 @@ export class RecordingSession {
 
     const timeline = buildTimeline(this._timelineEvents)
 
-    const sessionName = `session-${formatDate(this._startedAt)}-${randomUUID()}`
+    const sessionName = this.sessionDir ? null : `session-${formatDate(this._startedAt)}-${randomUUID()}`
+    const outputTarget = this.sessionDir ? { sessionDir: this.sessionDir } : { outputDir: this.outputDir, sessionName }
     const sessionDir = await this._writeSession({
-      outputDir: this.outputDir,
-      sessionName,
+      ...outputTarget,
       metadata: {
         startedAt: new Date(this._startedAt).toISOString(),
         startUrl: targets[0]?.url ?? '',
