@@ -69,11 +69,13 @@ describe('recorder HTTP server', () => {
       waitForChromeDebugEndpoint: async () => ({ webSocketDebuggerUrl: 'ws://127.0.0.1:9333/devtools/browser/test' }),
       findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
       launchChrome: () => ({
+        pid: 1001,
         exitCode: null,
         killed: false,
         once: () => {},
         kill: () => killedProcesses.push('killed')
       }),
+      createVideoRecorder: createFakeVideoRecorder,
       RecordingSession: FakeRecordingSession
     })
     const url = await recorderServer.listen()
@@ -114,8 +116,9 @@ describe('recorder HTTP server', () => {
       findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
       launchChrome: options => {
         launched.push(options)
-        return { exitCode: null, killed: false, once: () => {}, kill: () => {} }
+        return { pid: 1002, exitCode: null, killed: false, once: () => {}, kill: () => {} }
       },
+      createVideoRecorder: createFakeVideoRecorder,
       RecordingSession: FakeRecordingSession
     })
     const url = await recorderServer.listen()
@@ -192,7 +195,8 @@ describe('recorder HTTP server', () => {
       telemetry: { track: async (name, properties = {}) => events.push([name, properties]) },
       waitForChromeDebugEndpoint: async () => ({ webSocketDebuggerUrl: 'ws://127.0.0.1:9666/devtools/browser/test' }),
       findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      launchChrome: () => ({ exitCode: null, killed: false, once: () => {}, kill: () => {} }),
+      launchChrome: () => ({ pid: 1003, exitCode: null, killed: false, once: () => {}, kill: () => {} }),
+      createVideoRecorder: createFakeVideoRecorder,
       RecordingSession: FakeRecordingSession
     })
     const url = await recorderServer.listen()
@@ -222,3 +226,98 @@ describe('recorder HTTP server', () => {
   })
 
 })
+
+describe('window video lifecycle', () => {
+  it('binds video capture to the Browser Forge Chrome PID/title before CDP collection and finalizes it before material writing', async () => {
+    const order = []
+    const launched = []
+    const video = {
+      start: async options => {
+        order.push('video:start')
+        expect(options.chromePid).toBe(4242)
+        expect(options.expectedWindowTitle).toMatch(/^Browser Forge Recording · [a-f0-9-]{36}$/)
+        expect(options.outputPath).toMatch(/\.mp4$/)
+        return {
+          startEpochMs: 1_786_170_000_000,
+          window: { pid: 4242, windowId: '99', title: options.expectedWindowTitle }
+        }
+      },
+      stop: async () => {
+        order.push('video:stop')
+        return {
+          state: 'complete',
+          durationMs: 234,
+          coveredUntilOffsetMs: 234,
+          sourcePath: '/tmp/browser-forge-video.mp4',
+          window: { pid: 4242, windowId: '99', title: 'Browser Forge Recording · token' }
+        }
+      }
+    }
+    const sessionStops = []
+    class FakeRecordingSession {
+      constructor(options) {
+        this.options = options
+        this._cdp = { getTargets: () => [], disconnect: async () => {} }
+      }
+      async start() { order.push('session:start') }
+      async stop({ video: finalVideo } = {}) {
+        order.push('session:stop')
+        sessionStops.push(finalVideo)
+        return '/tmp/session'
+      }
+      getLiveSummary() { return { type: 'summary', startedAt: 1, tabs: [], totals: {} } }
+    }
+
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      startupLogFile: null,
+      findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      waitForChromeDebugEndpoint: async () => { order.push('debug:ready') },
+      launchChrome: options => {
+        launched.push(options)
+        return { pid: 4242, exitCode: null, once: () => {}, kill: () => order.push('chrome:kill') }
+      },
+      createVideoRecorder: () => video,
+      RecordingSession: FakeRecordingSession
+    })
+    const url = await recorderServer.listen()
+
+    const start = await fetch(`${url}/api/start-recording`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outputDir: '/tmp/browser-forge-test', port: 9333 })
+    }).then(response => response.json())
+
+    expect(start).toEqual({ ok: true, port: 9333 })
+    const title = new URL(launched[0].startUrl).searchParams.get('bfRecordingTitle')
+    expect(title).toMatch(/^Browser Forge Recording · [a-f0-9-]{36}$/)
+    expect(order).toEqual(['debug:ready', 'video:start', 'session:start'])
+
+    const stop = await fetch(`${url}/api/stop-recording`, { method: 'POST' }).then(response => response.json())
+    expect(stop).toEqual({ ok: true, sessionDir: '/tmp/session' })
+    expect(order).toEqual(['debug:ready', 'video:start', 'session:start', 'video:stop', 'session:stop', 'chrome:kill'])
+    expect(sessionStops).toEqual([expect.objectContaining({ state: 'complete', sourcePath: '/tmp/browser-forge-video.mp4' })])
+  })
+})
+
+function createFakeVideoRecorder() {
+  let start = null
+  return {
+    async start(options) {
+      start = options
+      return {
+        startEpochMs: 1_786_170_000_000,
+        window: { pid: options.chromePid, windowId: 'fake-window', title: options.expectedWindowTitle }
+      }
+    },
+    async stop() {
+      return {
+        state: 'complete',
+        startEpochMs: 1_786_170_000_000,
+        durationMs: 1,
+        coveredUntilOffsetMs: 1,
+        sourcePath: start?.outputPath,
+        window: { pid: start?.chromePid ?? 1, windowId: 'fake-window', title: start?.expectedWindowTitle ?? 'title' }
+      }
+    }
+  }
+}

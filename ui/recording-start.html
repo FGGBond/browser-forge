@@ -143,5 +143,9 @@
       <p class="hint">录制过程中请保持此窗口打开。完成后回到 browser-forge 控制台停止录制。</p>
     </section>
   </main>
+  <script>
+    const recordingTitle = new URLSearchParams(window.location.search).get('bfRecordingTitle')
+    if (recordingTitle) document.title = recordingTitle
+  </script>
 </body>
 </html>

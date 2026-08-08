@@ -2,14 +2,16 @@ import express from 'express'
 import { WebSocketServer } from 'ws'
 import { createServer } from 'http'
 import { dirname, join } from 'path'
-import { homedir } from 'os'
-import { appendFile, mkdir, writeFile } from 'fs/promises'
+import { homedir, tmpdir } from 'os'
+import { appendFile, mkdir, rm, writeFile } from 'fs/promises'
 import open from 'open'
 import { findAvailablePort as defaultFindAvailablePort, findChromePath as defaultFindChromePath, launchChrome as defaultLaunchChrome, waitForChromeDebugEndpoint as defaultWaitForChromeDebugEndpoint } from '../chrome-launcher.js'
 import { RecordingSession as DefaultRecordingSession } from './index.js'
 import { shouldClearActiveSession } from './session-state.js'
 import { resolveStartOptions } from './start-options.js'
 import { hashForTelemetry } from '../telemetry/config.js'
+import { randomUUID } from 'crypto'
+import { VideoRecorder as DefaultVideoRecorder } from './video-recorder.js'
 
 export function createRecorderHttpServer({
   uiRoot,
@@ -21,6 +23,7 @@ export function createRecorderHttpServer({
   findAvailablePort = defaultFindAvailablePort,
   waitForChromeDebugEndpoint = defaultWaitForChromeDebugEndpoint,
   RecordingSession = DefaultRecordingSession,
+  createVideoRecorder = () => new DefaultVideoRecorder(),
   chromeReadyTimeoutMs = 20000,
   startupLogFile = join(homedir(), 'Library', 'Application Support', 'browser-forge', 'recorder-startup.log'),
   afterChromeLaunch = async () => {},
@@ -33,6 +36,7 @@ export function createRecorderHttpServer({
   let chromeProcess = null
   let activeSession = null
   let sessionDir = null
+  let activeVideoRecorder = null
   let isStarting = false
 
   async function resetStartupLog(lines = []) {
@@ -47,6 +51,9 @@ export function createRecorderHttpServer({
   }
 
   async function clearActiveSession() {
+    const videoRecorder = activeVideoRecorder
+    activeVideoRecorder = null
+    await videoRecorder?.stop?.().catch(() => {})
     await activeSession?._cdp?.disconnect?.().catch(() => {})
     activeSession = null
     chromeProcess?.kill?.()
@@ -58,8 +65,11 @@ export function createRecorderHttpServer({
     const summary = typeof activeSession.getTelemetrySummary === 'function'
       ? activeSession.getTelemetrySummary()
       : safeTelemetrySummary(activeSession.getLiveSummary?.())
+    const videoRecorder = activeVideoRecorder
+    activeVideoRecorder = null
     try {
-      sessionDir = await activeSession.stop()
+      const video = await videoRecorder?.stop?.()
+      sessionDir = await activeSession.stop({ video })
       await telemetry.track('recording_stopped', summary)
       return sessionDir
     } finally {
@@ -95,6 +105,7 @@ export function createRecorderHttpServer({
 
     isStarting = true
     let chromePort
+    let videoOutputPath
     try {
       chromePort = Number(req.body.port) || await findAvailablePort()
       const checkedAt = new Date().toISOString()
@@ -110,16 +121,20 @@ export function createRecorderHttpServer({
       })
       const baseUrl = startUrlBase || `http://127.0.0.1:${server.address().port}`
       const userDataDir = join(homedir(), '.browser-forge', 'chrome-profile')
+      const recordingToken = randomUUID()
+      const recordingTitle = `Browser Forge Recording · ${recordingToken}`
+      const startUrl = `${baseUrl}/recording-start.html?bfRecordingTitle=${encodeURIComponent(recordingTitle)}`
+      videoOutputPath = join(tmpdir(), `browser-forge-window-${recordingToken}.mp4`)
       await appendStartupLog(`chromePath=${chromePath}`)
       await appendStartupLog(`userDataDir=${userDataDir}`)
-      await appendStartupLog(`startUrl=${baseUrl}/recording-start.html`)
+      await appendStartupLog(`startUrl=${startUrl}`)
       await telemetry.track('chrome_launch_started', { port: chromePort })
       const chromeStartedAt = Date.now()
       chromeProcess = launchChrome({
         execPath: chromePath,
         port: chromePort,
         userDataDir,
-        startUrl: `${baseUrl}/recording-start.html`
+        startUrl
       })
       await appendStartupLog(`chromePid=${chromeProcess.pid ?? 'unknown'}`)
       await appendStartupLog(`chromeArgs=${JSON.stringify(chromeProcess.browserForge?.args ?? [])}`)
@@ -138,7 +153,14 @@ export function createRecorderHttpServer({
       await appendStartupLog('chromeDebugEndpoint=ready')
       await telemetry.track('chrome_launch_succeeded', { duration_ms: Date.now() - chromeStartedAt, chrome_pid_present: Boolean(chromeProcess.pid) })
       await afterChromeLaunch()
-      activeSession = new RecordingSession({ port: chromePort, outputDir })
+      activeVideoRecorder = createVideoRecorder()
+      const video = await activeVideoRecorder.start({
+        chromePid: chromeProcess.pid,
+        expectedWindowTitle: recordingTitle,
+        outputPath: videoOutputPath
+      })
+      await appendStartupLog(`videoRecorder=started startEpochMs=${video.startEpochMs}`)
+      activeSession = new RecordingSession({ port: chromePort, outputDir, video })
       await activeSession.start()
       sessionDir = null
       await appendStartupLog('recordingSession=started')
@@ -148,6 +170,7 @@ export function createRecorderHttpServer({
       await appendStartupLog(`startupError=${error.message}`)
       await telemetry.track('chrome_launch_failed', { error_code: error.code ?? 'CHROME_LAUNCH_FAILED', message_hash: hashForTelemetry(error.message) })
       await clearActiveSession()
+      await rm(videoOutputPath ?? '', { force: true }).catch(() => {})
       res.json({ ok: false, error: error.message, logFile: startupLogFile })
     } finally {
       isStarting = false

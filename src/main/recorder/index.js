@@ -9,11 +9,13 @@ import { ConsoleCollector } from './collectors/console.js'
 import { buildHar } from './har-builder.js'
 import { buildTimeline } from './timeline-builder.js'
 import { writeSession } from './output-writer.js'
+import { addVideoOffset } from './video-manifest.js'
 
 export class RecordingSession {
-  constructor({ port = 9222, outputDir }) {
+  constructor({ port = 9222, outputDir, video = null }) {
     this.port = port
     this.outputDir = outputDir
+    this.video = video
     this._cdp = new CdpClient({ port })
     this._tabCollectors = new Map()
     this._timelineEvents = []
@@ -22,7 +24,7 @@ export class RecordingSession {
   }
 
   async start() {
-    this._startedAt = Date.now()
+    this._startedAt = this.video?.startEpochMs ?? Date.now()
     this._cdp.onTargetAttached = (targetId, session) => this._setupTabCollectors(targetId, session)
     await this._cdp.connect()
   }
@@ -67,10 +69,10 @@ export class RecordingSession {
         const info = JSON.parse(payload)
         if (name === 'bfClick') {
           collectors.events.addEvent({ type: 'click', timestamp: ts, x: info.x, y: info.y, selector: info.selector })
-          this._timelineEvents.push({ timestamp: ts, type: 'click', targetId, x: info.x, y: info.y })
+          this._addTimelineEvent({ timestamp: ts, type: 'click', targetId, x: info.x, y: info.y })
         } else {
           collectors.events.addEvent({ type: 'keydown', timestamp: ts, key: info.key, selector: info.selector })
-          this._timelineEvents.push({ timestamp: ts, type: 'keydown', targetId, key: info.key })
+          this._addTimelineEvent({ timestamp: ts, type: 'keydown', targetId, key: info.key })
         }
       } catch {}
       if (name === 'bfClick') {
@@ -93,7 +95,7 @@ export class RecordingSession {
 
     session.Page.frameNavigated(async ({ frame }) => {
       if (frame.parentId) return
-      this._timelineEvents.push({ timestamp: Date.now(), type: 'navigation', targetId, url: frame.url })
+      this._addTimelineEvent({ timestamp: Date.now(), type: 'navigation', targetId, url: frame.url })
       const targetEntry = this._cdp._targets.get(targetId)
       if (targetEntry) targetEntry.info = { ...targetEntry.info, url: frame.url }
       try {
@@ -200,8 +202,8 @@ export class RecordingSession {
     }
   }
 
-  async stop() {
-    const durationMs = Date.now() - this._startedAt
+  async stop({ video = this.video } = {}) {
+    const durationMs = video?.durationMs ?? Math.max(0, Date.now() - this._startedAt)
     await this._captureActiveTabScreenshot()
     const targets = this._cdp.getTargets()
 
@@ -237,11 +239,17 @@ export class RecordingSession {
         startUrl: targets[0]?.url ?? '',
         durationMs,
         chromeVersion: 'unknown',
-        tabs: targets.map(t => ({ targetId: t.targetId, title: t.title, url: t.url }))
+        tabs: targets.map(t => ({ targetId: t.targetId, title: t.title, url: t.url })),
+        video: video ? {
+          state: video.state ?? 'complete',
+          startEpochMs: video.startEpochMs ?? this.video?.startEpochMs ?? null,
+          durationMs: video.durationMs ?? durationMs
+        } : null
       },
       har,
       timeline,
-      tabs
+      tabs,
+      video: video ? { ...video, startEpochMs: video.startEpochMs ?? this.video?.startEpochMs } : null
     })
 
     await this._cdp.disconnect()
@@ -273,6 +281,12 @@ export class RecordingSession {
       } catch {}
     }
     return null
+  }
+
+  _addTimelineEvent(event) {
+    const correlated = addVideoOffset(event, this.video?.startEpochMs)
+    this._timelineEvents.push(correlated)
+    return correlated
   }
 
   _writeSession(data) {

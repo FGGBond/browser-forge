@@ -45,6 +45,30 @@ describe('RecordingSession screenshot triggers', () => {
     ])
   })
 
+  it('maps interaction timeline events to offsets from the persisted first video frame', async () => {
+    const recording = new RecordingSession({
+      outputDir: '/tmp/browser-forge-test',
+      video: { startEpochMs: 800, window: { pid: 1, windowId: 'x', title: 'title' } }
+    })
+    const bindingHandlers = []
+    const session = createFakeSession({ bindingHandlers })
+    vi.spyOn(Date, 'now').mockReturnValue(1_050)
+
+    await recording._setupTabCollectors('tab-1', session)
+    bindingHandlers[0]({
+      name: 'bfClick',
+      payload: JSON.stringify({ x: 10, y: 20, selector: 'BUTTON' })
+    })
+    await Promise.resolve()
+
+    expect(recording._timelineEvents).toContainEqual({
+      timestamp: 1_050, type: 'click', targetId: 'tab-1', x: 10, y: 20, videoOffsetMs: 250
+    })
+    expect(recording._addTimelineEvent({ timestamp: 700, type: 'navigation', targetId: 'tab-1' })).toEqual({
+      timestamp: 700, type: 'navigation', targetId: 'tab-1', videoOffsetMs: 0
+    })
+  })
+
   it('captures a screenshot immediately when the user clicks', async () => {
     vi.useFakeTimers()
     const recording = new RecordingSession({ outputDir: '/tmp/browser-forge-test' })
