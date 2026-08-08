@@ -122,6 +122,30 @@ export class RecordingLibrary {
     return this.#detail(recording.path, recording.metadata)
   }
 
+  async getTimeline(id) {
+    this.#requireInitialized()
+    const recording = await this.#resolve(id, ['active', 'trashed'])
+    const timeline = await this.#readRequiredJson(join(recording.path, 'timeline.json'), 'Timeline is missing or invalid')
+    if (!Array.isArray(timeline)) throw libraryError('CORRUPT_MATERIAL', 'Timeline must be an array')
+    return timeline
+  }
+
+  async getVideo(id) {
+    this.#requireInitialized()
+    const recording = await this.#resolve(id, ['active', 'trashed'])
+    if (!['complete', 'partial'].includes(recording.metadata.video.status)) throw libraryError('INVALID_STATE', 'Recording has no playable video')
+    const path = await this.#resolveSafeFile(recording.path, join('video', 'recording.mp4'), { required: true, message: 'Video material is missing or invalid' })
+    return { path, status: recording.metadata.video.status }
+  }
+
+  async getPoster(id) {
+    this.#requireInitialized()
+    const recording = await this.#resolve(id, ['active', 'trashed'])
+    const path = await this.#resolveSafeFile(recording.path, join('video', 'poster.png'), { required: false, message: 'Poster material is invalid' })
+    if (!path) throw libraryError('NOT_FOUND', 'Poster was not generated')
+    return { path }
+  }
+
   async getPrompt(id) {
     this.#requireInitialized()
     const recording = await this.#resolveActive(id)
@@ -395,6 +419,20 @@ export class RecordingLibrary {
       return { path, metadata }
     }
     throw libraryError('NOT_FOUND', 'Recording was not found')
+  }
+
+  async #resolveSafeFile(recordingPath, relativePath, { required, message }) {
+    const path = assertContainedPath(recordingPath, join(recordingPath, relativePath))
+    let info
+    try {
+      info = await this.fs.lstat(path)
+    } catch (error) {
+      if (error?.code === 'ENOENT' && !required) return null
+      if (error?.code === 'ENOENT') throw libraryError('CORRUPT_MATERIAL', message, { cause: error })
+      throw error
+    }
+    if (info.isSymbolicLink() || !info.isFile()) throw libraryError('CORRUPT_MATERIAL', message)
+    return path
   }
 
   async #readRequiredJson(path, message) {

@@ -325,3 +325,31 @@ describe('RecordingLibrary recycle bin and export', () => {
     }
   })
 })
+
+describe('RecordingLibrary media resolution', () => {
+  it('resolves timeline, video, and poster through validated recording IDs', async () => {
+    await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders' })
+    await mkdir(join(paths.active, firstId, 'video'), { recursive: true })
+    await atomicWriteJson(join(paths.active, firstId, 'timeline.json'), [{ type: 'click', videoOffsetMs: 100 }])
+    await writeFile(join(paths.active, firstId, 'video', 'recording.mp4'), 'video')
+    await writeFile(join(paths.active, firstId, 'video', 'poster.png'), 'poster')
+    const library = new RecordingLibrary({ root, now })
+    await library.initialize()
+
+    expect(await library.getTimeline(firstId)).toEqual([{ type: 'click', videoOffsetMs: 100 }])
+    expect(await library.getVideo(firstId)).toEqual({ path: join(paths.active, firstId, 'video', 'recording.mp4'), status: 'complete' })
+    expect(await library.getPoster(firstId)).toEqual({ path: join(paths.active, firstId, 'video', 'poster.png') })
+  })
+
+  it('rejects symlinked media and missing posters', async () => {
+    await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders' })
+    await mkdir(join(paths.active, firstId, 'video'), { recursive: true })
+    await writeFile(join(outside, 'video.mp4'), 'outside')
+    await symlink(join(outside, 'video.mp4'), join(paths.active, firstId, 'video', 'recording.mp4'))
+    const library = new RecordingLibrary({ root, now })
+    await library.initialize()
+
+    await expect(library.getVideo(firstId)).rejects.toMatchObject({ code: 'CORRUPT_MATERIAL' })
+    await expect(library.getPoster(firstId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+})

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'path'
 import { access, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
@@ -488,3 +488,116 @@ function createFakeVideoRecorder() {
     }
   }
 }
+
+
+describe('recording library HTTP API', () => {
+  const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
+
+  async function createLibraryServer(overrides = {}) {
+    const mediaRoot = await mkdtemp(join(tmpdir(), 'bf-media-api-'))
+    const videoPath = join(mediaRoot, 'recording.mp4')
+    const posterPath = join(mediaRoot, 'poster.png')
+    await writeFile(videoPath, Buffer.alloc(100, 7))
+    await writeFile(posterPath, Buffer.from('png'))
+    const recording = { id, title: 'Orders', state: 'active', videoStatus: 'complete' }
+    const recordingLibrary = {
+      list: vi.fn(async () => [recording]),
+      get: vi.fn(async () => recording),
+      rename: vi.fn(async (_id, title) => ({ ...recording, title })),
+      getTimeline: vi.fn(async () => [{ type: 'click', videoOffsetMs: 123 }]),
+      getVideo: vi.fn(async () => ({ path: videoPath, status: 'complete' })),
+      getPoster: vi.fn(async () => ({ path: posterPath })),
+      getPrompt: vi.fn(async () => ({ text: '', status: 'empty', updatedAt: null })),
+      savePrompt: vi.fn(async (_id, text) => ({ text, status: 'draft', updatedAt: '2026-08-08T12:20:00.000Z' })),
+      getExternalAgentPrompt: vi.fn(async () => ({ recordingId: id, text: 'complete prompt' })),
+      trash: vi.fn(async () => ({ ...recording, state: 'trashed' })),
+      restore: vi.fn(async () => recording),
+      deletePermanently: vi.fn(async () => ({ id, deleted: true })),
+      export: vi.fn(async (_id, destination) => ({ path: join(destination, 'Orders') })),
+      ...overrides.recordingLibrary
+    }
+    const chooseExportDirectory = overrides.chooseExportDirectory ?? vi.fn(async () => mediaRoot)
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      startupLogFile: null,
+      recordingLibrary,
+      chooseExportDirectory,
+      revealPath: overrides.revealPath
+    })
+    const url = await recorderServer.listen()
+    return { url, recordingLibrary, chooseExportDirectory, mediaRoot }
+  }
+
+  it('serves list, detail, rename, timeline, poster, and prompt routes through recording IDs', async () => {
+    const { url, recordingLibrary } = await createLibraryServer()
+
+    expect(await fetch(`${url}/api/recordings?state=active&q=order`).then(r => r.json())).toEqual({ recordings: [expect.objectContaining({ id })] })
+    expect(await fetch(`${url}/api/recordings/${id}`).then(r => r.json())).toEqual(expect.objectContaining({ id }))
+    expect(await fetch(`${url}/api/recordings/${id}/timeline`).then(r => r.json())).toEqual({ events: [{ type: 'click', videoOffsetMs: 123 }] })
+    expect(await fetch(`${url}/api/recordings/${id}/prompt`).then(r => r.json())).toEqual({ text: '', status: 'empty', updatedAt: null })
+    expect((await fetch(`${url}/api/recordings/${id}/poster`)).headers.get('content-type')).toContain('image/png')
+
+    const renamed = await fetch(`${url}/api/recordings/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Renamed' }) }).then(r => r.json())
+    expect(renamed.title).toBe('Renamed')
+    expect(recordingLibrary.list).toHaveBeenCalledWith({ state: 'active', query: 'order' })
+    expect(recordingLibrary.rename).toHaveBeenCalledWith(id, 'Renamed')
+  })
+
+  it('serves a seekable MP4 with byte ranges', async () => {
+    const { url } = await createLibraryServer()
+    const response = await fetch(`${url}/api/recordings/${id}/video`, { headers: { Range: 'bytes=10-19' } })
+
+    expect(response.status).toBe(206)
+    expect(response.headers.get('accept-ranges')).toBe('bytes')
+    expect(response.headers.get('content-range')).toBe('bytes 10-19/100')
+    expect((await response.arrayBuffer()).byteLength).toBe(10)
+  })
+
+  it('maps domain errors to stable JSON error codes', async () => {
+    const error = Object.assign(new Error('missing'), { code: 'NOT_FOUND' })
+    const { url } = await createLibraryServer({ recordingLibrary: { get: vi.fn(async () => { throw error }) } })
+    const response = await fetch(`${url}/api/recordings/${id}`)
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'missing' } })
+  })
+
+  it('persists and derives prompts without accepting paths', async () => {
+    const { url, recordingLibrary } = await createLibraryServer()
+    const saved = await fetch(`${url}/api/recordings/${id}/prompt`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'guidance', path: '/tmp/ignored' }) }).then(r => r.json())
+    expect(saved.status).toBe('draft')
+    expect(recordingLibrary.savePrompt).toHaveBeenCalledWith(id, 'guidance')
+    expect(await fetch(`${url}/api/recordings/${id}/external-agent-prompt`).then(r => r.json())).toEqual({ recordingId: id, text: 'complete prompt' })
+  })
+
+  it('uses the Electron directory adapter and ignores a renderer destination path', async () => {
+    const chooseExportDirectory = vi.fn(async () => '/Users/example/Desktop')
+    const { url, recordingLibrary } = await createLibraryServer({ chooseExportDirectory })
+    const result = await fetch(`${url}/api/recordings/${id}/export`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destination: '/tmp/attacker' }) }).then(r => r.json())
+
+    expect(chooseExportDirectory).toHaveBeenCalledWith(expect.objectContaining({ recordingId: id }))
+    expect(recordingLibrary.export).toHaveBeenCalledWith(id, '/Users/example/Desktop')
+    expect(result.path).toBe('/Users/example/Desktop/Orders')
+  })
+
+  it('supports trash, restore, permanent delete, and export cancellation', async () => {
+    const { url, recordingLibrary } = await createLibraryServer({ chooseExportDirectory: vi.fn(async () => null) })
+    expect((await fetch(`${url}/api/recordings/${id}/trash`, { method: 'POST' })).status).toBe(200)
+    expect((await fetch(`${url}/api/recordings/${id}/restore`, { method: 'POST' })).status).toBe(200)
+    expect((await fetch(`${url}/api/recordings/${id}`, { method: 'DELETE' })).status).toBe(200)
+    const canceled = await fetch(`${url}/api/recordings/${id}/export`, { method: 'POST' })
+    expect(canceled.status).toBe(409)
+    expect((await canceled.json()).error.code).toBe('EXPORT_CANCELED')
+    expect(recordingLibrary.trash).toHaveBeenCalledWith(id)
+    expect(recordingLibrary.restore).toHaveBeenCalledWith(id)
+    expect(recordingLibrary.deletePermanently).toHaveBeenCalledWith(id)
+  })
+
+  it('rejects oversized prompt JSON with a stable input error', async () => {
+    const { url } = await createLibraryServer()
+    const response = await fetch(`${url}/api/recordings/${id}/prompt`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'x'.repeat(300 * 1024) })
+    })
+    expect(response.status).toBe(413)
+    expect((await response.json()).error.code).toBe('INVALID_INPUT')
+  })
+})

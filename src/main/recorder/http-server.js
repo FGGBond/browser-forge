@@ -1,9 +1,10 @@
 import express from 'express'
 import { WebSocketServer } from 'ws'
 import { createServer } from 'http'
+import { createReadStream } from 'fs'
 import { dirname, join } from 'path'
 import { homedir, tmpdir } from 'os'
-import { appendFile, mkdir, rm, writeFile } from 'fs/promises'
+import { appendFile, mkdir, rm, stat, writeFile } from 'fs/promises'
 import open from 'open'
 import { findAvailablePort as defaultFindAvailablePort, findChromePath as defaultFindChromePath, launchChrome as defaultLaunchChrome, waitForChromeDebugEndpoint as defaultWaitForChromeDebugEndpoint } from '../chrome-launcher.js'
 import { RecordingSession as DefaultRecordingSession } from './index.js'
@@ -12,6 +13,7 @@ import { resolveStartOptions } from './start-options.js'
 import { hashForTelemetry } from '../telemetry/config.js'
 import { randomUUID } from 'crypto'
 import { VideoRecorder as DefaultVideoRecorder } from './video-recorder.js'
+import { createMediaRange } from './media-response.js'
 
 export function createRecorderHttpServer({
   uiRoot,
@@ -28,6 +30,9 @@ export function createRecorderHttpServer({
   chromeReadyTimeoutMs = 20000,
   startupLogFile = join(homedir(), 'Library', 'Application Support', 'browser-forge', 'recorder-startup.log'),
   afterChromeLaunch = async () => {},
+  recordingLibrary = null,
+  chooseExportDirectory = null,
+  revealPath = null,
   telemetry = { track: async () => {} }
 } = {}) {
   const app = express()
@@ -122,7 +127,10 @@ export function createRecorderHttpServer({
     }
   }
 
-  app.use(express.json())
+  app.use(express.json({ limit: '256kb' }))
+
+  if (recordingLibrary) registerRecordingLibraryRoutes({ app, recordingLibrary, chooseExportDirectory, revealPath })
+
   app.use(express.static(uiRoot))
 
   app.get('/api/chrome-path', async (req, res) => {
@@ -252,10 +260,18 @@ export function createRecorderHttpServer({
     res.type('png').send(image)
   })
 
-  app.post('/api/open-folder', (req, res) => {
-    const { path } = req.body
-    openFolder(path)
-    res.json({ ok: true })
+  if (!recordingLibrary) {
+    app.post('/api/open-folder', (req, res) => {
+      const { path } = req.body
+      openFolder(path)
+      res.json({ ok: true })
+    })
+  }
+
+  app.use((error, req, res, next) => {
+    if (res.headersSent) return next(error)
+    const mapped = mapApiError(error)
+    res.status(mapped.status).json({ error: { code: mapped.code, message: mapped.message } })
   })
 
   wss.on('connection', (ws) => {
@@ -297,4 +313,100 @@ function safeTelemetrySummary(summary = {}) {
     artifact_count: Number(totals.artifacts) || 0,
     top_hosts: hosts
   }
+}
+
+
+function registerRecordingLibraryRoutes({ app, recordingLibrary, chooseExportDirectory, revealPath }) {
+  app.get('/api/recordings', asyncRoute(async (req, res) => {
+    const recordings = await recordingLibrary.list({ state: req.query.state || 'active', query: req.query.q || '' })
+    res.json({ recordings })
+  }))
+
+  app.get('/api/recordings/:id', asyncRoute(async (req, res) => {
+    res.json(await recordingLibrary.get(req.params.id))
+  }))
+
+  app.patch('/api/recordings/:id', asyncRoute(async (req, res) => {
+    res.json(await recordingLibrary.rename(req.params.id, req.body?.title))
+  }))
+
+  app.get('/api/recordings/:id/timeline', asyncRoute(async (req, res) => {
+    res.json({ events: await recordingLibrary.getTimeline(req.params.id) })
+  }))
+
+  app.get('/api/recordings/:id/video', asyncRoute(async (req, res) => {
+    const media = await recordingLibrary.getVideo(req.params.id)
+    const info = await stat(media.path)
+    const range = createMediaRange(req.headers.range, info.size)
+    res.status(range.status)
+    res.setHeader('Accept-Ranges', 'bytes')
+    res.setHeader('Content-Type', 'video/mp4')
+    res.setHeader('Content-Length', String(range.length))
+    if (range.status === 206) res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${info.size}`)
+    createReadStream(media.path, { start: range.start, end: range.end }).pipe(res)
+  }))
+
+  app.get('/api/recordings/:id/poster', asyncRoute(async (req, res) => {
+    const media = await recordingLibrary.getPoster(req.params.id)
+    res.type('png')
+    createReadStream(media.path).pipe(res)
+  }))
+
+  app.get('/api/recordings/:id/prompt', asyncRoute(async (req, res) => {
+    res.json(await recordingLibrary.getPrompt(req.params.id))
+  }))
+
+  app.put('/api/recordings/:id/prompt', asyncRoute(async (req, res) => {
+    res.json(await recordingLibrary.savePrompt(req.params.id, req.body?.text))
+  }))
+
+  app.get('/api/recordings/:id/external-agent-prompt', asyncRoute(async (req, res) => {
+    res.json(await recordingLibrary.getExternalAgentPrompt(req.params.id))
+  }))
+
+  app.post('/api/recordings/:id/trash', asyncRoute(async (req, res) => {
+    res.json(await recordingLibrary.trash(req.params.id))
+  }))
+
+  app.post('/api/recordings/:id/restore', asyncRoute(async (req, res) => {
+    res.json(await recordingLibrary.restore(req.params.id))
+  }))
+
+  app.delete('/api/recordings/:id', asyncRoute(async (req, res) => {
+    res.json(await recordingLibrary.deletePermanently(req.params.id))
+  }))
+
+  app.post('/api/recordings/:id/export', asyncRoute(async (req, res) => {
+    if (!chooseExportDirectory) throw apiError('UNSUPPORTED_SHELL', 'Export requires the Electron App')
+    const destination = await chooseExportDirectory({ recordingId: req.params.id })
+    if (!destination) throw apiError('EXPORT_CANCELED', 'Export canceled')
+    const result = await recordingLibrary.export(req.params.id, destination)
+    if (req.body?.reveal === true && revealPath) await revealPath(result.path)
+    res.json(result)
+  }))
+}
+
+function asyncRoute(handler) {
+  return (req, res, next) => Promise.resolve(handler(req, res)).catch(next)
+}
+
+function apiError(code, message) {
+  return Object.assign(new Error(message), { code })
+}
+
+function mapApiError(error) {
+  if (error?.type === 'entity.too.large') return { status: 413, code: 'INVALID_INPUT', message: 'Request body is too large' }
+  const statusByCode = {
+    INVALID_INPUT: 400,
+    NOT_FOUND: 404,
+    INVALID_STATE: 409,
+    BUSY: 409,
+    EXPORT_CANCELED: 409,
+    CORRUPT_MATERIAL: 422,
+    INVALID_RANGE: 416,
+    UNSUPPORTED_SHELL: 501,
+    FILESYSTEM_FAILURE: 500
+  }
+  const code = error?.code && statusByCode[error.code] ? error.code : 'FILESYSTEM_FAILURE'
+  return { status: error?.status || statusByCode[code] || 500, code, message: error?.message || 'Request failed' }
 }
