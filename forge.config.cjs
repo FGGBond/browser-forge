@@ -40,6 +40,12 @@ module.exports = {
     ...(electronZipDir ? { electronZipDir } : {}),
     ignore: [
       /^\/\.git($|\/)/,
+      // .claude holds Claude Code state; leftover git worktrees live under
+      // .claude/worktrees and are full checkouts (their own node_modules), so
+      // packaging them bloats the app by hundreds of MB of pure cruft.
+      /^\/\.claude($|\/)/,
+      // dist is the build output itself — never re-package a prior build.
+      /^\/dist($|\/)/,
       /^\/\.superpowers($|\/)/,
       /^\/docs\/superpowers($|\/)/,
       /^\/tests($|\/)/,
