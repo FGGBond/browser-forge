@@ -66,18 +66,13 @@ export async function navigate(route, patch = {}, { force = false } = {}) {
     beforeNavigate = null
     state.update({ route, ...patch })
     if (route === 'library') {
-      await renderLibrary({
+      const controller = await renderLibrary({
         container: main,
         api,
         state,
-        onNew: () => navigate('new-recording'),
-        onSelect: id => navigate('detail', { selectedId: id }),
-        onTrash: async id => {
-          const trashed = await api.trashRecording(id)
-          showUndoToast(trashed)
-          await navigate('library')
-        }
+        onSelect: id => navigate('detail', { selectedId: id })
       })
+      cleanupView = controller?.cleanup
       return true
     }
     if (route === 'new-recording') {

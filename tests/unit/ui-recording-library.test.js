@@ -16,19 +16,22 @@ describe('managed recording library UI foundation', () => {
     expect(readUi('views/sidebar.js')).toContain('录制仓库')
   })
 
-  it('renders title, time, duration, host, video status, search, and new-recording controls', () => {
+  it('renders searchable single-row recordings with inline video and analysis controls', () => {
     const source = readUi('views/library.js')
     expect(source).toContain('data-search')
-    expect(source).toContain('data-new-recording')
+    expect(source).not.toContain('data-new-recording')
+    expect(source).toContain('recording-row')
+    expect(source).toContain('mountVideoPlayer')
+    expect(source).toContain('去分析')
     expect(source).toContain('formatDuration')
     expect(source).toContain('videoStatus')
     expect(source).toContain('startHost')
   })
 
-  it('uses responsive list/detail screens rather than compressing the player', () => {
+  it('uses responsive repository rows without the old card/detail split', () => {
     const css = readUi('styles.css')
     expect(css).toContain('@media (max-width: 840px)')
-    expect(css).toContain('.library-grid')
+    expect(css).toContain('.recording-row')
     expect(css).toContain('prefers-reduced-motion: reduce')
   })
 })

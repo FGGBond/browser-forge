@@ -1,3 +1,5 @@
+import { mountVideoPlayer } from './video-player.js'
+
 const VIDEO_LABELS = {
   complete: ['视频可用', 'success'],
   partial: ['部分视频', 'warning'],
@@ -5,16 +7,15 @@ const VIDEO_LABELS = {
   unavailable: ['无视频', 'neutral']
 }
 
-export async function renderLibrary({ container, api, state, onSelect, onNew, onTrash }) {
+export async function renderLibrary({ container, api, state, onSelect }) {
   container.innerHTML = `
-    <section class="library-view" aria-labelledby="library-title">
-      <header class="view-header">
+    <section class="library-view repository-view" aria-labelledby="library-title">
+      <header class="view-header repository-header">
         <div>
-          <p class="eyebrow">Recording library</p>
-          <h1 id="library-title">浏览器录制</h1>
-          <p class="view-subtitle">回看操作、补充目标，并把录制交给 Agent 生成可复用 skill。</p>
+          <p class="eyebrow">Recording repository</p>
+          <h1 id="library-title">录制仓库</h1>
+          <p class="view-subtitle">直接回看每段浏览器操作，搜索网站，并进入分析工作区。</p>
         </div>
-        <button class="button primary" type="button" data-new-recording>${plusIcon()}<span>新建录制</span></button>
       </header>
       <div class="library-toolbar">
         <label class="search-field">
@@ -24,84 +25,104 @@ export async function renderLibrary({ container, api, state, onSelect, onNew, on
         </label>
         <span class="result-count" data-result-count>正在读取…</span>
       </div>
-      <div class="library-grid">
-        <div class="recording-list" data-recording-list aria-busy="true">
-          ${skeletonCards(3)}
-        </div>
-        <aside class="detail-welcome" aria-label="录制详情提示">
-          <div class="welcome-art">${windowIcon()}</div>
-          <h2>选择一段录制</h2>
-          <p>在这里播放窗口视频、定位关键事件，并撰写给 Agent 的任务说明。</p>
-          <button class="button quiet" type="button" data-new-recording-secondary>开始第一次录制</button>
-        </aside>
-      </div>
+      <div class="recording-repository" data-recording-list aria-busy="true">${skeletonRows(3)}</div>
     </section>`
 
   const search = container.querySelector('[data-search]')
   const list = container.querySelector('[data-recording-list]')
   const count = container.querySelector('[data-result-count]')
-  container.querySelectorAll('[data-new-recording], [data-new-recording-secondary]').forEach(button => button.addEventListener('click', onNew))
-
   let searchTimer
+  let playerControllers = []
+  let destroyed = false
+  const destroyPlayers = () => {
+    for (const controller of playerControllers) controller.destroy()
+    playerControllers = []
+  }
+  const renderPlayers = recordings => {
+    destroyPlayers()
+    for (const recording of recordings) {
+      if (!['complete', 'partial'].includes(recording.videoStatus)) continue
+      const slot = list.querySelector(`[data-row-player="${CSS.escape(recording.id)}"]`)
+      if (!slot) continue
+      playerControllers.push(mountVideoPlayer({
+        container: slot,
+        src: `/api/recordings/${encodeURIComponent(recording.id)}/video`,
+        poster: `/api/recordings/${encodeURIComponent(recording.id)}/poster`,
+        durationMs: recording.durationMs,
+        compact: true,
+        title: recording.title
+      }))
+    }
+  }
+  const refresh = () => loadLibrary({ api, state, list, count, onSelect, onRendered: renderPlayers })
+
   search.addEventListener('input', () => {
     clearTimeout(searchTimer)
     searchTimer = setTimeout(() => {
+      if (destroyed) return
       state.update({ query: search.value.trim() })
-      loadLibrary({ api, state, list, count, onSelect, onTrash })
+      refresh()
     }, 180)
   })
-  await loadLibrary({ api, state, list, count, onSelect, onTrash })
+  await refresh()
+  return {
+    cleanup() {
+      destroyed = true
+      clearTimeout(searchTimer)
+      destroyPlayers()
+    }
+  }
 }
 
-export async function loadLibrary({ api, state, list, count, onSelect, onTrash }) {
+export async function loadLibrary({ api, state, list, count, onSelect, onRendered = () => {} }) {
   list.setAttribute('aria-busy', 'true')
   try {
     const recordings = await api.listRecordings({ state: state.value.filter, query: state.value.query })
     state.update({ recordings })
     count.textContent = `${recordings.length} 段录制`
-    list.innerHTML = recordings.length
-      ? recordings.map(recording => recordingCard(recording, onTrash)).join('')
-      : emptyLibrary(state.value.query)
-    list.querySelectorAll('[data-recording-id]').forEach(card => {
-      card.addEventListener('click', event => {
-        if (event.target.closest('[data-card-action]')) return
-        onSelect(card.dataset.recordingId)
+    list.innerHTML = recordings.length ? recordings.map(recordingRow).join('') : emptyLibrary(state.value.query)
+    list.querySelectorAll('[data-recording-id]').forEach(row => {
+      row.addEventListener('click', event => {
+        if (event.target.closest('button,input,video,[data-video-player]')) return
+        onSelect(row.dataset.recordingId)
       })
-      card.addEventListener('keydown', event => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault()
-          onSelect(card.dataset.recordingId)
-        }
+      row.addEventListener('keydown', event => {
+        if (event.target !== row || !['Enter', ' '].includes(event.key)) return
+        event.preventDefault()
+        onSelect(row.dataset.recordingId)
       })
     })
-    list.querySelectorAll('[data-card-trash]').forEach(button => button.addEventListener('click', () => onTrash?.(button.dataset.cardTrash)))
+    list.querySelectorAll('[data-analyze]').forEach(button => button.addEventListener('click', () => onSelect(button.dataset.analyze)))
+    onRendered(recordings)
   } catch (error) {
     count.textContent = '读取失败'
-    list.innerHTML = `<div class="inline-error"><strong>无法读取录制库</strong><span>${escapeHtml(error.message)}</span><button class="button quiet" data-retry>重试</button></div>`
-    list.querySelector('[data-retry]')?.addEventListener('click', () => loadLibrary({ api, state, list, count, onSelect, onTrash }))
+    list.innerHTML = `<div class="inline-error"><strong>无法读取录制仓库</strong><span>${escapeHtml(error.message)}</span><button class="button quiet" data-retry>重试</button></div>`
+    list.querySelector('[data-retry]')?.addEventListener('click', () => loadLibrary({ api, state, list, count, onSelect, onRendered }))
   } finally {
     list.setAttribute('aria-busy', 'false')
   }
 }
 
-function recordingCard(recording) {
+function recordingRow(recording) {
   const [videoText, tone] = VIDEO_LABELS[recording.videoStatus] || VIDEO_LABELS.unavailable
+  const playable = ['complete', 'partial'].includes(recording.videoStatus)
+  const hosts = [...new Set([recording.startHost, ...(recording.visitedHosts || [])].filter(Boolean))]
   return `
-    <article class="recording-card" data-recording-id="${escapeAttribute(recording.id)}" tabindex="0">
-      <div class="recording-poster ${recording.videoStatus !== 'complete' ? 'is-placeholder' : ''}">
-        ${recording.videoStatus === 'complete'
-          ? `<img loading="lazy" src="/api/recordings/${encodeURIComponent(recording.id)}/poster" alt="" onerror="this.closest('.recording-poster').classList.add('is-placeholder');this.remove()">`
-          : ''}
-        <span class="poster-placeholder">${windowIcon()}</span>
-        <span class="duration-badge">${formatDuration(recording.durationMs)}</span>
+    <article class="recording-row" data-recording-id="${escapeAttribute(recording.id)}" tabindex="0">
+      <div class="repository-video">
+        ${playable ? `<div data-row-player="${escapeAttribute(recording.id)}"></div>` : `<div class="repository-video-placeholder">${windowIcon()}<span>${videoText}</span></div>`}
       </div>
-      <div class="recording-card-body">
-        <div class="recording-title-row">
-          <h2>${escapeHtml(recording.title)}</h2>
-          <button class="icon-button subtle" type="button" data-card-action data-card-trash="${escapeAttribute(recording.id)}" aria-label="移入回收站">${trashIcon()}</button>
+      <div class="recording-row-content">
+        <div class="recording-row-heading">
+          <div class="recording-row-title"><h2>${escapeHtml(recording.title)}</h2><p>${escapeHtml(hosts.join(' · ') || '未知网站')}</p></div>
+          <span class="status-pill ${tone}"><i></i>${videoText}</span>
         </div>
-        <p class="recording-meta"><span>${escapeHtml(recording.startHost || '未知网站')}</span><span aria-hidden="true">·</span><time datetime="${escapeAttribute(recording.createdAt)}">${formatDate(recording.createdAt)}</time></p>
-        <div class="recording-status-row"><span class="status-pill ${tone}"><i></i>${videoText}</span><span class="prompt-state">${recording.promptStatus === 'draft' ? '已写说明' : '待写说明'}</span></div>
+        <dl class="recording-row-meta">
+          <div><dt>录制时间</dt><dd><time datetime="${escapeAttribute(recording.createdAt)}">${formatDate(recording.createdAt)}</time></dd></div>
+          <div><dt>时长</dt><dd>${formatDuration(recording.durationMs)}</dd></div>
+          <div><dt>分析说明</dt><dd>${recording.promptStatus === 'draft' ? '已有草稿' : '待补充'}</dd></div>
+        </dl>
+        <div class="recording-row-actions"><button class="button primary" type="button" data-analyze="${escapeAttribute(recording.id)}">去分析</button></div>
       </div>
     </article>`
 }
@@ -114,20 +135,11 @@ export function formatDuration(durationMs = 0) {
 function formatDate(value) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '时间未知'
-  return new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
+  return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
 }
-
-function emptyLibrary(query) {
-  return `<div class="empty-list">${searchIcon()}<strong>${query ? '没有匹配的录制' : '还没有录制'}</strong><span>${query ? '试试更短的网站或名称关键词。' : '点击“新建录制”，Browser Forge 会自动管理全部物料。'}</span></div>`
-}
-
-function skeletonCards(count) {
-  return Array.from({ length: count }, () => '<div class="recording-card skeleton"><div class="recording-poster"></div><div class="recording-card-body"><i></i><i></i><i></i></div></div>').join('')
-}
-
-function escapeHtml(value) { return String(value ?? '').replace(/[&<>"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]) }
-function escapeAttribute(value) { return escapeHtml(value).replace(/'/g, '&#39;') }
-function plusIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>' }
+function emptyLibrary(query) { return `<div class="empty-list">${searchIcon()}<strong>${query ? '没有匹配的录制' : '还没有录制'}</strong><span>${query ? '试试录制名称、主站点或访问过的网站。' : '点击左上角“新录制”开始第一段浏览器操作。'}</span></div>` }
+function skeletonRows(count) { return Array.from({ length: count }, () => '<div class="recording-row skeleton"><div class="repository-video"></div><div class="recording-row-content"><i></i><i></i><i></i></div></div>').join('') }
+function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]) }
+function escapeAttribute(value) { return escapeHtml(value) }
 function searchIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="4.5"/><path d="m12 12 4 4"/></svg>' }
 function windowIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M7 7h.01M10 7h.01"/></svg>' }
-function trashIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 3h4l1 3H7l1-3ZM6 6l1 11h6l1-11M9 9v5M11 9v5"/></svg>' }

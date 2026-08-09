@@ -24,12 +24,17 @@ function meaningfulHost(url) {
   }
 }
 
-export function deriveStartHost(timeline = []) {
+export function deriveVisitedHosts(timeline = []) {
+  const hosts = []
   for (const event of timeline) {
     const host = meaningfulHost(event?.url || event?.documentUrl || event?.pageUrl)
-    if (host) return host
+    if (host && !hosts.includes(host)) hosts.push(host)
   }
-  return null
+  return hosts
+}
+
+export function deriveStartHost(timeline = []) {
+  return deriveVisitedHosts(timeline)[0] || null
 }
 
 function localizedTimestamp(createdAt, locale, timeZone) {
@@ -61,7 +66,8 @@ export function createRecordingMetadata({
   timeZone
 }) {
   const timestamp = asIsoDate(createdAt, 'createdAt')
-  const startHost = deriveStartHost(timeline)
+  const visitedHosts = deriveVisitedHosts(timeline)
+  const startHost = visitedHosts[0] || null
   return {
     schemaVersion: 1,
     id: assertRecordingId(id),
@@ -73,7 +79,8 @@ export function createRecordingMetadata({
     capture: {
       status: VALID_CAPTURE_STATES.has(captureStatus) ? captureStatus : 'failed',
       durationMs: Math.max(0, Math.round(Number(durationMs) || 0)),
-      startHost
+      startHost,
+      visitedHosts
     },
     video: {
       status: VALID_VIDEO_STATES.has(videoStatus) ? videoStatus : 'unavailable',
@@ -117,7 +124,8 @@ export function normalizeRecordingMetadata(value, locationState, { now = new Dat
     capture: {
       status: captureStatus,
       durationMs: Math.max(0, Math.round(Number(value.capture?.durationMs) || 0)),
-      startHost: value.capture?.startHost ? String(value.capture.startHost) : null
+      startHost: value.capture?.startHost ? String(value.capture.startHost) : null,
+      visitedHosts: [...new Set((Array.isArray(value.capture?.visitedHosts) ? value.capture.visitedHosts : []).map(host => String(host).trim().toLowerCase()).filter(Boolean))].slice(0, 50)
     },
     video: {
       status: videoStatus,
@@ -139,6 +147,7 @@ export function toLibraryEntry(metadata) {
     createdAt: metadata.createdAt,
     durationMs: metadata.capture.durationMs,
     startHost: metadata.capture.startHost || null,
+    visitedHosts: metadata.capture.visitedHosts || [],
     videoStatus: metadata.video.status,
     promptStatus: metadata.prompt.status
   }

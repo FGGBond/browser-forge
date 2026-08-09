@@ -126,7 +126,7 @@ export class RecordingLibrary {
     const needle = String(query || '').trim().toLocaleLowerCase()
     return this.#sortEntries(this.index.recordings
       .filter(entry => entry.state === state)
-      .filter(entry => !needle || `${entry.title}\n${entry.startHost || ''}`.toLocaleLowerCase().includes(needle)))
+      .filter(entry => !needle || `${entry.title}\n${entry.startHost || ''}\n${(entry.visitedHosts || []).join('\n')}`.toLocaleLowerCase().includes(needle)))
       .map(entry => ({ ...entry }))
   }
 

@@ -27,13 +27,14 @@ afterEach(async () => {
   await rm(outside, { recursive: true, force: true })
 })
 
-async function seedRecording({ parent, id, createdAt, title, state = 'active', host = 'example.com', durationMs = 42_000, videoStatus = 'complete' }) {
+async function seedRecording({ parent, id, createdAt, title, state = 'active', host = 'example.com', durationMs = 42_000, videoStatus = 'complete', visitedHosts = [] }) {
   const directory = join(parent, id)
   await mkdir(directory, { recursive: true })
   const metadata = createRecordingMetadata({ id, createdAt, durationMs, videoStatus })
   metadata.title = title
   metadata.state = state
   metadata.capture.startHost = host
+  metadata.capture.visitedHosts = visitedHosts
   if (state === 'trashed') metadata.trashedAt = createdAt
   await atomicWriteJson(join(directory, 'recording.json'), metadata)
   await atomicWriteJson(join(directory, 'timeline.json'), [])
@@ -142,7 +143,7 @@ describe('RecordingLibrary initialization and reconciliation', () => {
 
 describe('RecordingLibrary reads and mutations', () => {
   it('sorts newest first, searches title and host, and renames without moving the UUID directory', async () => {
-    await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders dashboard', host: 'shop.example' })
+    await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders dashboard', host: 'shop.example', visitedHosts: ['shop.example', 'billing.partner.example'] })
     await seedRecording({ parent: paths.active, id: secondId, createdAt: '2026-08-08T12:18:00.000Z', title: 'Customer list', host: 'crm.example' })
     const library = new RecordingLibrary({ root, now })
     await library.initialize()
@@ -150,6 +151,7 @@ describe('RecordingLibrary reads and mutations', () => {
     expect((await library.list({ state: 'active' })).map(item => item.id)).toEqual([secondId, firstId])
     expect((await library.list({ state: 'active', query: 'orders' })).map(item => item.id)).toEqual([firstId])
     expect((await library.list({ state: 'active', query: 'CRM.EXAMPLE' })).map(item => item.id)).toEqual([secondId])
+    expect((await library.list({ state: 'active', query: 'billing.partner' })).map(item => item.id)).toEqual([firstId])
 
     const before = join(paths.active, firstId)
     const updated = await library.rename(firstId, '  订单/查询:*?  ')

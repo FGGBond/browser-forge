@@ -32,7 +32,12 @@ describe('recording metadata', () => {
     const metadata = createRecordingMetadata({
       id,
       createdAt,
-      timeline: [{ url: 'https://example.com/orders/1' }],
+      timeline: [
+        { type: 'navigation', url: 'http://127.0.0.1:43123/recording-start.html' },
+        { type: 'navigation', url: 'https://example.com/orders/1' },
+        { type: 'navigation', url: 'https://admin.example.net/dashboard' },
+        { type: 'navigation', url: 'https://example.com/orders/2' }
+      ],
       durationMs: 42_000,
       captureStatus: 'complete',
       videoStatus: 'complete',
@@ -46,7 +51,7 @@ describe('recording metadata', () => {
       title: 'example.com · 8月8日 20:15',
       state: 'active',
       trashedAt: null,
-      capture: { status: 'complete', durationMs: 42_000 },
+      capture: { status: 'complete', durationMs: 42_000, visitedHosts: ['example.com', 'admin.example.net'] },
       video: {
         status: 'complete',
         relativePath: 'video/recording.mp4',
@@ -61,6 +66,7 @@ describe('recording metadata', () => {
       createdAt,
       durationMs: 42_000,
       startHost: 'example.com',
+      visitedHosts: ['example.com', 'admin.example.net'],
       videoStatus: 'complete',
       promptStatus: 'empty'
     })
