@@ -219,6 +219,7 @@
     const startButton = destinationForm.querySelector('button[type="submit"]')
     const readiness = document.querySelector('[data-readiness]')
     let recorderReady = false
+    let renderedReady = false
 
     async function waitUntilRecorderReady() {
       try {
@@ -229,7 +230,10 @@
         recorderReady = false
       }
       startButton.disabled = !recorderReady
-      readiness.textContent = recorderReady ? '录制已准备完成' : '正在准备录制…'
+      if (recorderReady !== renderedReady) {
+        readiness.textContent = recorderReady ? '录制已准备完成' : '正在准备录制…'
+        renderedReady = recorderReady
+      }
       if (!recorderReady) window.setTimeout(waitUntilRecorderReady, 200)
     }
 

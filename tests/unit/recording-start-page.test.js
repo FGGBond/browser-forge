@@ -44,6 +44,15 @@ describe('recording start page', () => {
     }))
     await page.goto('http://browser-forge.test/recording-start.html?bfRecordingTitle=Browser%20Forge%20Recording%20%C2%B7%20token')
 
+    const liveMutations = await page.evaluate(() => {
+      window.__readinessMutations = 0
+      new MutationObserver(() => { window.__readinessMutations += 1 }).observe(document.querySelector('[data-readiness]'), { childList: true, characterData: true, subtree: true })
+      return window.__readinessMutations
+    })
+    expect(liveMutations).toBe(0)
+    await page.waitForTimeout(450)
+    expect(await page.evaluate(() => window.__readinessMutations)).toBe(0)
+
     const input = page.getByRole('textbox', { name: '目标网址' })
     expect(await input.isVisible()).toBe(true)
     const start = page.getByRole('button', { name: '开始' })

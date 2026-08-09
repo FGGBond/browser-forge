@@ -1,8 +1,9 @@
 import CDP from 'chrome-remote-interface'
 
 export class CdpClient {
-  constructor({ port = 9222 } = {}) {
+  constructor({ port = 9222, cdp = CDP } = {}) {
     this.port = port
+    this._cdp = cdp
     this._targets = new Map()
     this._browser = null
   }
@@ -13,12 +14,12 @@ export class CdpClient {
 
   async connect() {
     // Connect to browser endpoint (not a tab), so it works even with no open pages
-    const { webSocketDebuggerUrl } = await CDP.Version({ port: this.port })
-    this._browser = await CDP({ target: webSocketDebuggerUrl })
+    const { webSocketDebuggerUrl } = await this._cdp.Version({ port: this.port })
+    this._browser = await this._cdp({ target: webSocketDebuggerUrl })
     await this._browser.Target.setDiscoverTargets({ discover: true })
 
     this._browser.Target.targetCreated(({ targetInfo }) => {
-      if (targetInfo.type === 'page') this._attachTarget(targetInfo)
+      if (targetInfo.type === 'page') this._attachTarget(targetInfo).catch(() => {})
     })
 
     this._browser.Target.targetDestroyed(({ targetId }) => {
@@ -36,9 +37,9 @@ export class CdpClient {
       targetId: targetInfo.targetId,
       flatten: true
     })
-    const session = await CDP({ port: this.port, sessionId })
+    const session = await this._cdp({ port: this.port, sessionId })
     this._targets.set(targetInfo.targetId, { session, info: targetInfo })
-    this.onTargetAttached?.(targetInfo.targetId, session)
+    await this.onTargetAttached?.(targetInfo.targetId, session)
   }
 
   async disconnect() {
