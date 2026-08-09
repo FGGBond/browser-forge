@@ -44,6 +44,12 @@ beforeAll(async () => {
 afterAll(async () => { await browser.close(); await new Promise(resolve => server.close(resolve)) })
 
 describe('recording detail UI', () => {
+  it('stacks detail actions when the analysis pane narrows the main workspace', () => {
+    const css = readFileSync(join(process.cwd(), 'ui', 'styles.css'), 'utf8')
+    expect(css).toContain('.analysis-workspace.analysis-pane-open .detail-header')
+    expect(css).toContain('.analysis-main .detail-heading { width:100%; }')
+  })
+
   it('shows a private video workspace and collapsible Agent-ready analysis pane without internal materials', async () => {
     requests = []
     const page = await browser.newPage()

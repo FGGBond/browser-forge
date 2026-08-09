@@ -9,6 +9,7 @@ let server
 let baseUrl
 let requests
 let deleteShouldFail
+let deleted
 const id = 'b6789ee6-dd70-4b26-a829-ff551752e745'
 const recording = { id, title: '旧的订单录制', state: 'trashed', createdAt: '2026-08-08T12:15:00.000Z', durationMs: 42_000, startHost: 'example.com', videoStatus: 'complete', promptStatus: 'draft', sizeBytes: 2_621_440 }
 const contentTypes = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' }
@@ -17,7 +18,7 @@ beforeAll(async () => {
   browser = await chromium.launch()
   server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost')
-    if (url.pathname === '/api/recordings') return json(res, { recordings: url.searchParams.get('state') === 'trashed' ? [recording] : [] })
+    if (url.pathname === '/api/recordings') return json(res, { recordings: url.searchParams.get('state') === 'trashed' && !deleted ? [recording] : [] })
     if (url.pathname === `/api/recordings/${id}` && req.method === 'GET') return json(res, recording)
     if (url.pathname === `/api/recordings/${id}/restore`) {
       requests.push({ method: req.method, path: url.pathname })
@@ -26,6 +27,7 @@ beforeAll(async () => {
     if (url.pathname === `/api/recordings/${id}` && req.method === 'DELETE') {
       requests.push({ method: req.method, path: url.pathname })
       if (deleteShouldFail) return json(res, { error: '磁盘暂时不可写' }, 500)
+      deleted = true
       return json(res, { id, deleted: true })
     }
     serveUi(url.pathname, res)
@@ -40,6 +42,7 @@ describe('App recycle bin UI', () => {
   it('uses a single management list with poster, metadata, and direct row actions', async () => {
     requests = []
     deleteShouldFail = false
+    deleted = false
     const page = await browser.newPage({ viewport: { width: 1180, height: 760 } })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
     await page.getByRole('button', { name: '回收站' }).click()
@@ -65,6 +68,7 @@ describe('App recycle bin UI', () => {
   it('allows cancellation and keeps permanent-delete errors visible in the dialog', async () => {
     requests = []
     deleteShouldFail = false
+    deleted = false
     const page = await browser.newPage()
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
     await page.getByRole('button', { name: '回收站' }).click()
@@ -91,6 +95,7 @@ describe('App recycle bin UI', () => {
     await dialog.getByRole('button', { name: '永久删除' }).click()
     await expect.poll(() => requests.filter(item => item.method === 'DELETE').length).toBe(2)
     await expect.poll(() => dialog.count()).toBe(0)
+    await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe('trash-title')
     await page.close()
   })
 })

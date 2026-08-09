@@ -10,6 +10,8 @@ describe('recording workspace shell', () => {
     const css = readUi('styles.css')
     expect(css).toContain('color-scheme: light dark')
     expect(css).toContain('@media (prefers-color-scheme: dark)')
+    expect(css).toMatch(/\.search-field \{[^}]*background: var\(--surface\)/s)
+    expect(css).toMatch(/\.detail-title-input:hover[^}]*background:var\(--surface\)/s)
     for (const token of [
       '--bg:', '--sidebar-bg:', '--surface:', '--surface-solid:', '--surface-muted:',
       '--line:', '--line-strong:', '--text:', '--muted:', '--subtle:', '--overlay:',

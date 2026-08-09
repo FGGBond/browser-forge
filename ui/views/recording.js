@@ -271,9 +271,9 @@ export async function renderRecording({ container, api, activeRecording, onStopp
       <section class="open-pages-card" aria-labelledby="open-pages-title">
         <div class="open-pages-heading">
           <div><p class="eyebrow">Chrome window</p><h2 id="open-pages-title">已打开页面</h2></div>
-          <span data-tab-count>0 个页面</span>
+          <span data-tab-count aria-live="polite" aria-atomic="true">0 个页面</span>
         </div>
-        <div class="open-pages-list" data-open-pages aria-live="polite"><div class="panel-empty">等待 Chrome 页面…</div></div>
+        <div class="open-pages-list" data-open-pages><div class="panel-empty">等待 Chrome 页面…</div></div>
       </section>
       <p class="live-error" data-live-error role="alert" aria-live="polite" hidden></p>
     </section>`
@@ -317,19 +317,21 @@ export function applySummary(container, summary) {
   const count = container.querySelector('[data-tab-count]')
   const pages = container.querySelector('[data-open-pages]')
   if (!count || !pages) return
+  const signature = JSON.stringify(tabs.map(tab => [tab.targetId || '', tab.title || '', tab.url || '']))
+  if (pages.dataset.summarySignature === signature) return
+  pages.dataset.summarySignature = signature
   count.textContent = `${tabs.length} 个页面`
   pages.innerHTML = tabs.length
     ? tabs.map(openPageSummary).join('')
     : '<div class="panel-empty">等待 Chrome 页面…</div>'
 }
 
-function openPageSummary(tab, index) {
+function openPageSummary(tab) {
   const title = tab.title || '未命名页面'
   return `
     <article class="open-page-summary">
       <span class="favicon">${escapeHtml(title.slice(0, 1).toUpperCase())}</span>
       <div><strong>${escapeHtml(title)}</strong><small>${escapeHtml(hostname(tab.url))}</small></div>
-      ${index === 0 ? '<span class="current-page">当前</span>' : ''}
     </article>`
 }
 

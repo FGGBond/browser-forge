@@ -7,7 +7,7 @@ export async function renderTrash({ container, api, onBack, onRestored }) {
       <header class="view-header">
         <div>
           <p class="eyebrow">Recycle bin</p>
-          <h1 id="trash-title">回收站</h1>
+          <h1 id="trash-title" tabindex="-1">回收站</h1>
           <p class="view-subtitle">在这里恢复仍需保留的录制，或永久清理不再需要的内容。</p>
         </div>
       </header>
@@ -24,7 +24,10 @@ export async function renderTrash({ container, api, onBack, onRestored }) {
       recording,
       api,
       onRestored,
-      onDeleted: () => renderTrash({ container, api, onBack, onRestored })
+      onDeleted: async () => {
+        await renderTrash({ container, api, onBack, onRestored })
+        container.querySelector('#trash-title')?.focus()
+      }
     }))
   } catch (error) {
     list.innerHTML = `<div class="inline-error" role="alert"><strong>无法读取回收站</strong><span>${escapeHtml(error.message)}</span></div>`
@@ -70,7 +73,7 @@ export function confirmDestructive({ recording, api, onDeleted, returnFocus }) {
     try {
       await api.deleteRecording(recording.id)
       dialog.close()
-      onDeleted?.()
+      await onDeleted?.()
     } catch (error) {
       button.disabled = false
       errorNotice.textContent = error.message
