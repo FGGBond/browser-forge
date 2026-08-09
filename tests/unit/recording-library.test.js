@@ -190,11 +190,14 @@ describe('RecordingLibrary reads and mutations', () => {
     await atomicWriteJson(join(staging.path, 'timeline.json'), [{ type: 'navigation', url: 'https://example.com/orders', videoOffsetMs: 0 }])
     await atomicWriteJson(join(staging.path, 'video', 'manifest.json'), { version: 1, state: 'partial', durationMs: 12_000, file: 'recording.mp4' })
 
-    const detail = await library.promote({ id: stagedId, sessionDir: staging.path })
+    const detail = await library.promote({ id: stagedId, sessionDir: staging.path, promptText: '  查询订单状态  ' })
 
     expect(detail).toMatchObject({ id: stagedId, state: 'active', title: expect.stringContaining('example.com') })
     expect(detail.metadata.capture).toMatchObject({ status: 'complete', durationMs: 12_345 })
     expect(detail.metadata.video.status).toBe('partial')
+    expect(detail.promptStatus).toBe('draft')
+    expect(await library.getPrompt(stagedId)).toMatchObject({ text: '查询订单状态', status: 'draft' })
+    expect(await readFile(join(paths.active, stagedId, 'prompt.md'), 'utf8')).toBe('查询订单状态\n')
     await access(join(paths.active, stagedId, 'recording.json'))
     await expect(access(staging.path)).rejects.toMatchObject({ code: 'ENOENT' })
   })

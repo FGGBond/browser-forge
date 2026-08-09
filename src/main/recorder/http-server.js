@@ -61,6 +61,7 @@ export function createRecorderHttpServer({
   let stoppingPromise = null
   let unexpectedTerminalVideo
   let activeRecordingId = null
+  let activeGoalText = ''
   let lastStopResult = null
   let lastStopEvent = null
 
@@ -107,6 +108,7 @@ export function createRecorderHttpServer({
       hasStartedActiveSession = false
       activeRecordingId = null
     }
+    activeGoalText = ''
     if (chromeProcess === chrome) chromeProcess = null
     if (stopVideo) await videoRecorder?.stop?.().catch(() => {})
     await session?._cdp?.disconnect?.().catch(() => {})
@@ -133,6 +135,7 @@ export function createRecorderHttpServer({
       ? session.getTelemetrySummary()
       : safeTelemetrySummary(session.getLiveSummary?.())
     const recordingId = activeRecordingId
+    const goalText = activeGoalText
 
     activeVideoRecorder = null
     const stopPromise = (async () => {
@@ -148,7 +151,7 @@ export function createRecorderHttpServer({
               nativeToolPathOptions
             }).catch(error => appendStartupLog(`posterGeneration=failed message=${error.message}`))
           }
-          recording = await recordingLibrary.promote({ id: recordingId, sessionDir })
+          recording = await recordingLibrary.promote({ id: recordingId, sessionDir, promptText: goalText })
         }
         await telemetry.track('recording_stopped', summary)
         const result = recording ? { sessionDir, recordingId, recording } : sessionDir
@@ -269,6 +272,11 @@ export function createRecorderHttpServer({
         `chromePort=${chromePort}`
       ])
       throwIfClosing()
+      const goalInput = String(req.body?.goalText ?? '')
+      if (Buffer.byteLength(goalInput, 'utf8') > 256 * 1024) {
+        throw Object.assign(new Error('Recording goal is too large'), { code: 'INVALID_INPUT' })
+      }
+      activeGoalText = goalInput.trim()
       const staging = recordingLibrary ? await recordingLibrary.createStagingRecording() : null
       throwIfClosing()
       activeRecordingId = staging?.id ?? null

@@ -67,7 +67,7 @@ describe('managed recording workflow', () => {
     })
     const url = await server.listen()
 
-    const started = await fetch(`${url}/api/start-recording`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(response => response.json())
+    const started = await fetch(`${url}/api/start-recording`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goalText: '查询订单状态' }) }).then(response => response.json())
     const stopped = await fetch(`${url}/api/stop-recording`, { method: 'POST' }).then(response => response.json())
     expect(stopped.recordingId).toBe(started.recordingId)
     expect(stopped.recording).toMatchObject({ id: started.recordingId, state: 'active', title: expect.stringContaining('example.com'), videoStatus: 'failed' })
@@ -77,5 +77,6 @@ describe('managed recording workflow', () => {
     const restartedLibrary = new RecordingLibrary({ root: libraryRoot })
     await restartedLibrary.initialize()
     expect((await restartedLibrary.list({ state: 'active' })).map(item => item.id)).toEqual([started.recordingId])
+    expect(await restartedLibrary.getPrompt(started.recordingId)).toMatchObject({ text: '查询订单状态', status: 'draft' })
   })
 })

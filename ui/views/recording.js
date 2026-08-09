@@ -3,14 +3,18 @@ let currentSummary
 
 export async function renderNewRecording({ container, api, onBack, onStarted }) {
   container.innerHTML = `
-    <section class="recording-setup narrow-view">
-      <button class="back-button" type="button" data-back>${backIcon()}<span>返回录制库</span></button>
-      <div class="setup-card">
-        <div class="setup-icon">${recordIcon()}</div>
+    <section class="recording-setup new-recording-view">
+      <button class="back-button" type="button" data-back>${backIcon()}<span>返回录制仓库</span></button>
+      <div class="new-recording-hero">
+        <span class="new-recording-mark">${recordIcon()}</span>
         <p class="eyebrow">New recording</p>
-        <h1>录制一个清晰的浏览器流程</h1>
-        <p class="setup-lead">只会录制 Browser Forge 打开的 Chrome 窗口。桌面、其他 App 和个人浏览器窗口不会进入视频。</p>
-        <div class="privacy-note">${shieldIcon()}<span>操作事件会与视频时间轴自动对齐，之后可按事件提取对应画面。</span></div>
+        <h1>有什么想要完成的浏览器操作？</h1>
+        <p class="setup-lead">先写下目标，录制完成后它会成为分析说明草稿。也可以留空，直接开始录制。</p>
+      </div>
+      <div class="goal-composer">
+        <label class="sr-only" for="recording-goal">录制目标</label>
+        <textarea id="recording-goal" data-goal-text class="goal-textarea" rows="5" placeholder="例如：登录后台，查询指定订单并导出发票。录制完成后，希望 Agent 生成一个可复用的查询与导出 skill。"></textarea>
+        <div class="goal-context-note">${shieldIcon()}<span>只会录制 Browser Forge 打开的 Chrome 窗口；桌面、其他 App 和个人浏览器窗口不会进入视频。</span></div>
         <details class="advanced-settings">
           <summary>高级设置</summary>
           <label class="field-label" for="chrome-path">Chrome 路径</label>
@@ -32,6 +36,7 @@ export async function renderNewRecording({ container, api, onBack, onStarted }) 
 
   container.querySelector('[data-back]').addEventListener('click', onBack)
   const input = container.querySelector('[data-chrome-path]')
+  const goalInput = container.querySelector('[data-goal-text]')
   const button = container.querySelector('[data-start]')
   const buttonLabel = container.querySelector('[data-start-label]')
   const status = container.querySelector('[data-status]')
@@ -53,7 +58,7 @@ export async function renderNewRecording({ container, api, onBack, onStarted }) 
   const updateButton = () => {
     const supported = permission?.supported !== false
     const granted = permission?.granted === true
-    buttonLabel.textContent = granted ? '打开 Chrome 并开始录制' : '允许屏幕录制'
+    buttonLabel.textContent = granted ? '开始录制' : '允许屏幕录制'
     button.disabled = busy || !permissionLoaded || !supported || (granted && (!chromeLoaded || !input.value.trim()))
   }
 
@@ -227,7 +232,8 @@ export async function renderNewRecording({ container, api, onBack, onStarted }) 
         setStatus('正在启动隔离的 Chrome 窗口…')
       }
       const chromePath = input.value.trim()
-      const result = await api.startRecording({ chromePath })
+      const goalText = goalInput.value.trim()
+      const result = await api.startRecording({ chromePath, goalText })
       if (!result.ok) {
         if (result.code === 'SCREEN_RECORDING_PERMISSION_REQUIRED' || result.code === 'SCREEN_RECORDING_UNSUPPORTED') {
           showPermissionRecovery(result.permission || { supported: true, status: 'not-granted', granted: false, restartRequired: false })

@@ -79,9 +79,12 @@ export class RecordingLibrary {
     })
   }
 
-  async promote({ id, sessionDir }) {
+  async promote({ id, sessionDir, promptText = '' }) {
     this.#requireInitialized()
     const recordingId = assertRecordingId(id)
+    const promptInput = String(promptText ?? '')
+    if (Buffer.byteLength(promptInput, 'utf8') > 256 * 1024) throw libraryError('INVALID_INPUT', 'Prompt is too large')
+    const normalizedPrompt = promptInput.trim()
     return this.#enqueue(async () => {
       await this.#assertManagedDirectory(this.paths.staging)
       await this.#assertManagedDirectory(this.paths.active)
@@ -97,7 +100,7 @@ export class RecordingLibrary {
       const videoManifest = await this.#readSafeJson(join(expectedPath, 'video', 'manifest.json'), { required: false, message: 'Video manifest is invalid' })
       const createdAt = capture.startedAt || capture.createdAt || this.now()
       const titleTimeline = timeline.length > 0 ? timeline : [{ type: 'navigation', url: capture.startUrl }]
-      const metadata = createRecordingMetadata({
+      let metadata = createRecordingMetadata({
         id: recordingId,
         createdAt,
         timeline: titleTimeline,
@@ -105,6 +108,11 @@ export class RecordingLibrary {
         captureStatus: capture.status || 'complete',
         videoStatus: videoManifest?.state || 'unavailable'
       })
+      if (normalizedPrompt) {
+        const updatedAt = this.now().toISOString()
+        await atomicWriteText(join(expectedPath, 'prompt.md'), `${normalizedPrompt}\n`)
+        metadata = { ...metadata, updatedAt, prompt: { status: 'draft', updatedAt } }
+      }
       await atomicWriteJson(join(expectedPath, 'recording.json'), metadata)
       await this.fs.rename(expectedPath, target)
       await this.#replaceIndexEntry(toLibraryEntry(metadata))

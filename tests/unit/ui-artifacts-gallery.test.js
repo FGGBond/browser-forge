@@ -63,8 +63,8 @@ describe('live Inspector and responsive shell', () => {
   it('renders live event and screenshot material after recording starts', async () => {
     const page = await browser.newPage()
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
-    await page.getByRole('button', { name: '新建录制' }).first().click()
-    await page.getByRole('button', { name: '打开 Chrome 并开始录制' }).click()
+    await page.getByRole('button', { name: '新录制' }).first().click()
+    await page.getByRole('button', { name: '开始录制' }).click()
     await page.locator('.screenshot-card').waitFor()
 
     expect(await page.locator('.metric').first().textContent()).toContain('2')

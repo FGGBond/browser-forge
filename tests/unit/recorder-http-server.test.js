@@ -718,7 +718,7 @@ describe('window video lifecycle', () => {
     recorderServer = null
     await starting
     expect(stopCount).toBe(1)
-    expect(recordingLibrary.promote).toHaveBeenCalledWith({ id, sessionDir: stagingPath })
+    expect(recordingLibrary.promote).toHaveBeenCalledWith({ id, sessionDir: stagingPath, promptText: '' })
   })
 
   it('starts without outputDir and promotes managed material before returning recording detail', async () => {
@@ -756,7 +756,7 @@ describe('window video lifecycle', () => {
 
     const started = await fetch(`${url}/api/start-recording`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ outputDir: '/tmp/attacker-ignored' })
+      body: JSON.stringify({ outputDir: '/tmp/attacker-ignored', goalText: '  查询订单状态  ' })
     }).then(response => response.json())
     expect(started).toEqual({ ok: true, port: 9333, recordingId: id })
     expect(sessionOptions[0]).toEqual(expect.objectContaining({ port: 9333, sessionDir: stagingPath }))
@@ -764,7 +764,7 @@ describe('window video lifecycle', () => {
 
     const stopped = await fetch(`${url}/api/stop-recording`, { method: 'POST' }).then(response => response.json())
     expect(generatePoster).toHaveBeenCalledWith(expect.objectContaining({ recordingDir: stagingPath }))
-    expect(recordingLibrary.promote).toHaveBeenCalledWith({ id, sessionDir: stagingPath })
+    expect(recordingLibrary.promote).toHaveBeenCalledWith({ id, sessionDir: stagingPath, promptText: '查询订单状态' })
     expect(stopped).toEqual({ ok: true, recordingId: id, recording })
   })
 

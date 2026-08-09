@@ -111,14 +111,16 @@ describe('managed start recording UI', () => {
     const page = await openNewRecording()
 
     expect(await page.locator('#output-dir').count()).toBe(0)
+    expect(await page.getByRole('heading', { name: '有什么想要完成的浏览器操作？' }).count()).toBe(1)
     expect(await page.getByText('只会录制 Browser Forge 打开的 Chrome 窗口').count()).toBeGreaterThan(0)
+    await page.locator('[data-goal-text]').fill('  查询订单状态  ')
 
     await Promise.all([
       page.waitForResponse(response => response.url().endsWith('/api/start-recording')),
-      page.getByRole('button', { name: '打开 Chrome 并开始录制' }).click()
+      page.getByRole('button', { name: '开始录制' }).click()
     ])
 
-    expect(startRequests).toEqual([{ chromePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' }])
+    expect(startRequests).toEqual([{ chromePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', goalText: '查询订单状态' }])
     expect(permissionRequestCount).toBe(0)
     await page.locator('[data-stop]').waitFor()
     expect(await page.getByRole('button', { name: '录制仓库', exact: true }).isDisabled()).toBe(true)
@@ -194,7 +196,7 @@ describe('managed start recording UI', () => {
     await page.getByRole('button', { name: '再次检查权限' }).click()
 
     await expect.poll(() => permissionCheckCount).toBe(2)
-    expect(await page.getByRole('button', { name: '打开 Chrome 并开始录制' }).isDisabled()).toBe(false)
+    expect(await page.getByRole('button', { name: '开始录制' }).isDisabled()).toBe(false)
     expect(permissionRequestCount).toBe(0)
     expect(permissionResetCount).toBe(0)
     expect(appRevealCount).toBe(0)
