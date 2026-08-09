@@ -54,7 +54,7 @@ describe('recording detail UI', () => {
     requests = []
     const page = await browser.newPage()
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
-    await page.locator('[data-recording-id]').click()
+    await page.getByRole('button', { name: '去分析' }).click()
     const video = page.locator('video')
     await video.waitFor()
     expect(await video.getAttribute('src')).toBe(`/api/recordings/${id}/video`)
@@ -78,7 +78,7 @@ describe('recording detail UI', () => {
     requests = []
     const page = await browser.newPage()
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
-    await page.locator('[data-recording-id]').click()
+    await page.getByRole('button', { name: '去分析' }).click()
     const input = page.locator('[data-title-input]')
     await input.fill('新名称')
     await input.press('Enter')
