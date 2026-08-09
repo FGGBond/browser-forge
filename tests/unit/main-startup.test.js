@@ -1,8 +1,10 @@
+import { EventEmitter } from 'events'
 import { describe, expect, it, vi } from 'vitest'
 import { startApp } from '../../src/main/index.js'
 
 function createElectronStubs() {
   const loadedUrls = []
+  const windows = []
   const app = {
     isPackaged: false,
     getAppPath: () => '/app/path',
@@ -13,12 +15,38 @@ function createElectronStubs() {
     quit: vi.fn(),
     relaunch: vi.fn()
   }
-  class BrowserWindow {
+  class BrowserWindow extends EventEmitter {
     constructor(options) {
+      super()
       this.options = options
+      this.closed = false
+      this.destroyed = false
+      this.webContents = {
+        executeJavaScript: vi.fn(async () => true),
+        isDestroyed: vi.fn(() => false)
+      }
+      this.show = vi.fn()
+      this.focus = vi.fn()
+      windows.push(this)
     }
     loadURL(url) {
       loadedUrls.push(url)
+    }
+    close() {
+      const event = { preventDefault: vi.fn() }
+      this.emit('close', event)
+      if (!event.preventDefault.mock.calls.length) {
+        this.closed = true
+        this.emit('closed')
+      }
+    }
+    destroy() {
+      this.destroyed = true
+      this.closed = true
+      this.emit('closed')
+    }
+    isDestroyed() {
+      return this.destroyed
     }
   }
   const recordingLibrary = { initialize: vi.fn(async () => {}) }
@@ -26,6 +54,7 @@ function createElectronStubs() {
     app,
     BrowserWindow,
     loadedUrls,
+    windows,
     dialog: { showOpenDialog: vi.fn() },
     shell: { showItemInFolder: vi.fn(), openExternal: vi.fn(async () => {}) },
     screenRecordingPermission: { check: vi.fn(), request: vi.fn() },
@@ -185,5 +214,113 @@ describe('Electron app startup', () => {
     })
   })
 
+  it('flushes the renderer before an ordinary window close and only closes after true', async () => {
+    const stubs = createElectronStubs()
+    await startApp({
+      ...stubs,
+      createRecorderHttpServer: vi.fn(() => ({ listen: vi.fn(async () => 'http://127.0.0.1:8001'), close: vi.fn() })),
+      ensureAgentSkillsInstalled: vi.fn(async () => ({ results: [] }))
+    })
+    const win = stubs.windows[0]
+
+    win.close()
+
+    await vi.waitFor(() => expect(win.closed).toBe(true))
+    expect(win.webContents.executeJavaScript).toHaveBeenCalledWith(expect.stringContaining('__browserForgeBeforeClose'))
+    expect(win.webContents.executeJavaScript).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the ordinary window open when renderer flush returns false or rejects', async () => {
+    const stubs = createElectronStubs()
+    const errors = []
+    await startApp({
+      ...stubs,
+      logger: { error: (...args) => errors.push(args) },
+      createRecorderHttpServer: vi.fn(() => ({ listen: vi.fn(async () => 'http://127.0.0.1:8002'), close: vi.fn() })),
+      ensureAgentSkillsInstalled: vi.fn(async () => ({ results: [] }))
+    })
+    const win = stubs.windows[0]
+
+    win.webContents.executeJavaScript.mockResolvedValueOnce(false)
+    win.close()
+    await vi.waitFor(() => expect(win.show).toHaveBeenCalled())
+    expect(win.webContents.executeJavaScript).toHaveBeenCalledTimes(1)
+    expect(win.closed).toBe(false)
+    expect(win.focus).toHaveBeenCalled()
+
+    win.webContents.executeJavaScript.mockRejectedValueOnce(new Error('renderer gone'))
+    win.close()
+    await vi.waitFor(() => expect(errors.flat().join(' ')).toContain('renderer gone'))
+    expect(win.webContents.executeJavaScript).toHaveBeenCalledTimes(2)
+    expect(win.closed).toBe(false)
+  })
+
+  it('times out an ordinary close without hanging or destroying the window', async () => {
+    const stubs = createElectronStubs()
+    const errors = []
+    await startApp({
+      ...stubs,
+      closeFlushTimeoutMs: 20,
+      logger: { error: (...args) => errors.push(args) },
+      createRecorderHttpServer: vi.fn(() => ({ listen: vi.fn(async () => 'http://127.0.0.1:8003'), close: vi.fn() })),
+      ensureAgentSkillsInstalled: vi.fn(async () => ({ results: [] }))
+    })
+    const win = stubs.windows[0]
+    win.webContents.executeJavaScript.mockImplementationOnce(() => new Promise(() => {}))
+
+    win.close()
+
+    await vi.waitFor(() => expect(errors.flat().join(' ')).toContain('timed out'), { timeout: 500 })
+    expect(win.closed).toBe(false)
+    expect(win.focus).toHaveBeenCalled()
+  })
+
+  it('flushes all windows before App quit and force quit does not recurse', async () => {
+    const stubs = createElectronStubs()
+    const recorderServer = { listen: vi.fn(async () => 'http://127.0.0.1:8004'), close: vi.fn(async () => {}) }
+    await startApp({
+      ...stubs,
+      createRecorderHttpServer: vi.fn(() => recorderServer),
+      ensureAgentSkillsInstalled: vi.fn(async () => ({ results: [] }))
+    })
+    const beforeQuit = stubs.app.on.mock.calls.find(([name]) => name === 'before-quit')[1]
+    const firstEvent = { preventDefault: vi.fn() }
+
+    beforeQuit(firstEvent)
+
+    expect(firstEvent.preventDefault).toHaveBeenCalled()
+    await vi.waitFor(() => expect(stubs.app.quit).toHaveBeenCalledTimes(1))
+    expect(stubs.windows[0].webContents.executeJavaScript).toHaveBeenCalledTimes(1)
+    expect(recorderServer.close).toHaveBeenCalledTimes(1)
+
+    const forcedEvent = { preventDefault: vi.fn() }
+    beforeQuit(forcedEvent)
+    expect(forcedEvent.preventDefault).not.toHaveBeenCalled()
+    expect(stubs.app.quit).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancels App quit on an explicit renderer save failure but degrades after timeout', async () => {
+    const stubs = createElectronStubs()
+    const recorderServer = { listen: vi.fn(async () => 'http://127.0.0.1:8005'), close: vi.fn(async () => {}) }
+    await startApp({
+      ...stubs,
+      closeFlushTimeoutMs: 20,
+      createRecorderHttpServer: vi.fn(() => recorderServer),
+      ensureAgentSkillsInstalled: vi.fn(async () => ({ results: [] }))
+    })
+    const beforeQuit = stubs.app.on.mock.calls.find(([name]) => name === 'before-quit')[1]
+    stubs.windows[0].webContents.executeJavaScript.mockResolvedValueOnce(false)
+
+    beforeQuit({ preventDefault: vi.fn() })
+    await vi.waitFor(() => expect(stubs.windows[0].webContents.executeJavaScript).toHaveBeenCalledTimes(1))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(stubs.app.quit).not.toHaveBeenCalled()
+    expect(recorderServer.close).not.toHaveBeenCalled()
+
+    stubs.windows[0].webContents.executeJavaScript.mockImplementationOnce(() => new Promise(() => {}))
+    beforeQuit({ preventDefault: vi.fn() })
+    await vi.waitFor(() => expect(stubs.app.quit).toHaveBeenCalledTimes(1), { timeout: 500 })
+    expect(recorderServer.close).toHaveBeenCalledTimes(1)
+  })
 
 })

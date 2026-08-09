@@ -32,7 +32,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     <section class="guidance-editor" aria-label="Skill 要求指导">
       <div class="guidance-agent-status">
         <span class="guidance-agent-mark" aria-hidden="true">${sparkIcon()}</span>
-        <div><strong>尚未配置 Agent</strong><p>先整理要求，再复制给外部 <span>browser-forge skill</span>。</p></div>
+        <div><strong>尚未配置 Agent</strong><p>先整理要求，再复制给外部 Agent，并让它使用 <span>browser-forge skill</span>。</p></div>
       </div>
       <div class="guidance-save-error-slot" data-save-error-slot></div>
       <div class="guidance-flow" data-guidance-flow></div>
@@ -48,6 +48,8 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   let savePromise = null
   let editRevision = 0
   let dirty = false
+  let requiresMigration = parsed.legacy
+  let transitionPending = false
   let savedText = prompt.text || ''
   let destroyed = false
   let saveErrorVisible = false
@@ -81,7 +83,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   }
 
   const saveLoop = async () => {
-    while (dirty) {
+    while (dirty || requiresMigration) {
       syncActiveEditor()
       const revision = editRevision
       const text = serializeGuidanceMarkdown(fields)
@@ -96,6 +98,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
       }
 
       savedText = text
+      requiresMigration = false
       syncActiveEditor()
       if (revision === editRevision && serializeGuidanceMarkdown(fields) === text) {
         dirty = false
@@ -109,7 +112,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     clearTimeout(timer)
     timer = null
     syncActiveEditor()
-    if (!dirty) return true
+    if (!dirty && !requiresMigration) return true
     if (!savePromise) {
       savePromise = saveLoop().finally(() => {
         savePromise = null
@@ -137,7 +140,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
               : index <= maxReachedStep
                 ? 'reached'
                 : ''
-          return `<li class="${state}"><button type="button" data-guidance-step-jump="${index}" aria-label="${index + 1}. ${question.title}" ${index === stepIndex ? 'aria-current="step"' : ''} ${index > maxReachedStep ? 'disabled' : ''}><span>${index + 1}</span><small>${shortLabel(question.key)}</small></button></li>`
+          return `<li class="${state}"><button type="button" data-guidance-step-jump="${index}" aria-label="${index + 1}. ${question.title}" ${index === stepIndex ? 'aria-current="step"' : ''} ${transitionPending || index > maxReachedStep ? 'disabled' : ''}><span>${index + 1}</span><small>${shortLabel(question.key)}</small></button></li>`
         }).join('')}
       </ol>
       <strong>${stepIndex + 1}/3</strong>
@@ -155,8 +158,8 @@ export async function renderPromptEditor({ container, recordingId, api }) {
         <textarea class="prompt-textarea" data-prompt-textarea spellcheck="true" aria-label="${question.title}" placeholder="${question.placeholder}"></textarea>
       </section>
       <div class="guidance-actions">
-        ${stepIndex > 0 ? '<button class="button quiet" type="button" data-guidance-previous>上一步</button>' : '<span></span>'}
-        <button class="button primary" type="button" data-guidance-next>${stepIndex === QUESTIONS.length - 1 ? '检查并完成' : '下一步'}</button>
+        ${stepIndex > 0 ? `<button class="button quiet" type="button" data-guidance-previous ${transitionPending ? 'disabled' : ''}>上一步</button>` : '<span></span>'}
+        <button class="button primary" type="button" data-guidance-next ${transitionPending ? 'disabled' : ''}>${stepIndex === QUESTIONS.length - 1 ? '检查并完成' : '下一步'}</button>
       </div>`
 
     const textarea = flow.querySelector('[data-prompt-textarea]')
@@ -176,12 +179,12 @@ export async function renderPromptEditor({ container, recordingId, api }) {
           <p>使用 browser-forge skill 分析录制并生成可独立运行的 skill 与 CLI 工具。</p>
         </header>
         <div class="guidance-review-list">
-          ${QUESTIONS.map(question => renderReviewCard(question, fields[question.key])).join('')}
+          ${QUESTIONS.map(question => renderReviewCard(question, fields[question.key], transitionPending)).join('')}
         </div>
       </section>
       <div class="guidance-actions guidance-review-actions">
-        <button class="button quiet" type="button" data-guidance-previous>返回修改</button>
-        <button class="button primary" type="button" data-copy-agent-prompt>${copyIcon()}<span data-copy-label>复制给外部 Agent</span></button>
+        <button class="button quiet" type="button" data-guidance-previous ${transitionPending ? 'disabled' : ''}>返回修改</button>
+        <button class="button primary" type="button" data-copy-agent-prompt ${transitionPending ? 'disabled' : ''}>${copyIcon()}<span data-copy-label>复制给外部 Agent</span></button>
       </div>`
   }
 
@@ -197,6 +200,29 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     if (focusTitle) focusRenderedTitle()
   }
 
+  const updateTransitionButtons = () => {
+    flow.querySelectorAll('[data-guidance-next], [data-guidance-previous], [data-guidance-step-jump], [data-edit-guidance], [data-copy-agent-prompt]').forEach(button => {
+      button.disabled = transitionPending || (
+        button.matches('[data-guidance-step-jump]') && Number(button.dataset.guidanceStepJump) > maxReachedStep
+      )
+    })
+  }
+
+  const runFlushedTransition = async transition => {
+    if (transitionPending) return false
+    transitionPending = true
+    updateTransitionButtons()
+    try {
+      if (!await saveNow()) return false
+      if (destroyed) return false
+      transition()
+      return true
+    } finally {
+      transitionPending = false
+      updateTransitionButtons()
+    }
+  }
+
   const showStep = index => {
     if (!Number.isInteger(index) || index < 0 || index > maxReachedStep) return
     syncActiveEditor()
@@ -206,7 +232,9 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   }
 
   const copyExternalPrompt = async button => {
-    button.disabled = true
+    if (transitionPending) return
+    transitionPending = true
+    updateTransitionButtons()
     try {
       if (!await saveNow()) return
       const result = await api.getExternalAgentPrompt(recordingId)
@@ -218,7 +246,8 @@ export async function renderPromptEditor({ container, recordingId, api }) {
         if (label.isConnected) label.textContent = '复制给外部 Agent'
       }, 1800)
     } finally {
-      button.disabled = false
+      transitionPending = false
+      updateTransitionButtons()
     }
   }
 
@@ -234,26 +263,29 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     if (!button || !container.contains(button)) return
 
     if (button.matches('[data-guidance-next]')) {
-      syncActiveEditor()
-      if (stepIndex === QUESTIONS.length - 1) {
-        reviewOpen = true
-        renderView({ focusTitle: true })
-      } else {
-        maxReachedStep = Math.max(maxReachedStep, stepIndex + 1)
-        showStep(stepIndex + 1)
-      }
+      void runFlushedTransition(() => {
+        if (stepIndex === QUESTIONS.length - 1) {
+          reviewOpen = true
+          renderView({ focusTitle: true })
+        } else {
+          maxReachedStep = Math.max(maxReachedStep, stepIndex + 1)
+          showStep(stepIndex + 1)
+        }
+      })
       return
     }
     if (button.matches('[data-guidance-previous]')) {
-      showStep(reviewOpen ? QUESTIONS.length - 1 : stepIndex - 1)
+      void runFlushedTransition(() => showStep(reviewOpen ? QUESTIONS.length - 1 : stepIndex - 1))
       return
     }
     if (button.matches('[data-guidance-step-jump]')) {
-      showStep(Number(button.dataset.guidanceStepJump))
+      const index = Number(button.dataset.guidanceStepJump)
+      void runFlushedTransition(() => showStep(index))
       return
     }
     if (button.matches('[data-edit-guidance]')) {
-      showStep(QUESTIONS.findIndex(question => question.key === button.dataset.editGuidance))
+      const index = QUESTIONS.findIndex(question => question.key === button.dataset.editGuidance)
+      void runFlushedTransition(() => showStep(index))
       return
     }
     if (button.matches('[data-retry-save]')) {
@@ -281,17 +313,17 @@ export async function renderPromptEditor({ container, recordingId, api }) {
       container.removeEventListener('click', handleClick)
       destroyActiveEditor()
     },
-    get dirty() { return dirty },
+    get dirty() { return dirty || requiresMigration },
     get savedText() { return savedText }
   }
 }
 
-function renderReviewCard(question, value) {
+function renderReviewCard(question, value, disabled = false) {
   const preview = value.trim()
     ? renderSafeMarkdown(value)
     : '<p class="guidance-review-empty">待补充</p>'
   return `<article class="guidance-review-card">
-    <div class="guidance-review-card-heading"><h4>${question.title}</h4><button class="button quiet" type="button" data-edit-guidance="${question.key}">返回修改</button></div>
+    <div class="guidance-review-card-heading"><h4>${question.title}</h4><button class="button quiet" type="button" data-edit-guidance="${question.key}" ${disabled ? 'disabled' : ''}>返回修改</button></div>
     <div class="guidance-markdown-preview">${preview}</div>
   </article>`
 }

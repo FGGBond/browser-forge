@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { GUIDED_PROMPT_TEMPLATE, buildExternalAgentPrompt } from '../../src/main/recording-library/external-agent-prompt.js'
+import { serializeGuidanceMarkdown } from '../../ui/guidance-format.js'
 
 describe('external Agent prompt domain', () => {
   it('exports the complete guided Chinese template', () => {
@@ -26,6 +27,32 @@ describe('external Agent prompt domain', () => {
     expect(result).toContain('不需要额外安装 FFmpeg、Homebrew、Python 或 pip')
     expect(result).toContain('必须实际执行用户给出的验收任务')
     expect(result).toContain('每一项验收标准是否通过')
+  })
+
+
+  it('renders parsed guidance as three explicit titled sections with missing values called out', () => {
+    const guidance = serializeGuidanceMarkdown({
+      actions: '先查询订单，再打开物流详情。',
+      capability: '',
+      acceptance: ''
+    })
+    const result = buildExternalAgentPrompt({ recordingPath: '/managed/recording', guidance })
+
+    expect(result).toContain(`### 本次录制中的动作与意图\n先查询订单，再打开物流详情。`)
+    expect(result).toContain(`### 希望提取的 skill 能力\n未提供`)
+    expect(result).toContain(`### Skill 验收标准\n未提供`)
+    expect(result.match(/### 本次录制中的动作与意图/g)).toHaveLength(1)
+    expect(result.match(/### 希望提取的 skill 能力/g)).toHaveLength(1)
+    expect(result.match(/### Skill 验收标准/g)).toHaveLength(1)
+  })
+
+  it('treats untouched legacy guidance as actions instead of trusting its free-form structure', () => {
+    const legacy = `# 旧说明\n\n先查询订单，再打开物流详情。`
+    const result = buildExternalAgentPrompt({ recordingPath: '/managed/recording', guidance: legacy })
+
+    expect(result).toContain(`### 本次录制中的动作与意图\n${legacy}`)
+    expect(result).toContain(`### 希望提取的 skill 能力\n未提供`)
+    expect(result).toContain(`### Skill 验收标准\n未提供`)
   })
 
   it('provides actionable fallback guidance when the persisted prompt is empty', () => {

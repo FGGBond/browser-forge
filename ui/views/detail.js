@@ -46,6 +46,7 @@ export async function renderDetail({
     let pendingFocusSequence = paneOpen ? paneOpenSequence : null
     let closeSequence = 0
     let closeTimer = null
+    let paneClosePending = false
 
     const canMoveFocusToGuidance = () => {
       const active = document.activeElement
@@ -109,9 +110,31 @@ export async function renderDetail({
       closeTimer = setTimeout(() => finishPaneClose(sequence), paneExitDuration)
     }
 
+    const setPaneClosePending = pending => {
+      paneClosePending = Boolean(pending)
+      closePane.disabled = paneClosePending
+      togglePane.disabled = paneClosePending
+    }
+    const closeAnalysisPane = async () => {
+      if (!paneOpen || paneClosePending) return false
+      setPaneClosePending(true)
+      try {
+        if (promptReady && !await promptController.flush()) return false
+        if (destroyed) return false
+        setPaneClosePending(false)
+        setPaneOpen(false)
+        return true
+      } finally {
+        if (!destroyed && paneClosePending) setPaneClosePending(false)
+      }
+    }
+
     container.querySelector('[data-back]').addEventListener('click', onBack)
-    togglePane.addEventListener('click', () => setPaneOpen(!paneOpen))
-    closePane.addEventListener('click', () => setPaneOpen(false))
+    togglePane.addEventListener('click', () => {
+      if (paneOpen) void closeAnalysisPane()
+      else setPaneOpen(true)
+    })
+    closePane.addEventListener('click', () => { void closeAnalysisPane() })
 
     const commitTitle = async () => {
       const next = titleInput.value.trim()

@@ -72,6 +72,7 @@ describe('three-step guidance editor', () => {
 
     await expectStep(page, 1, '这次录制中，你完成了什么？')
     expect(await page.getByText('尚未配置 Agent', { exact: true }).count()).toBe(1)
+    expect(await page.locator('.guidance-agent-status p').textContent()).toBe('先整理要求，再复制给外部 Agent，并让它使用 browser-forge skill。')
     expect(await page.getByText('browser-forge skill', { exact: true }).count()).toBe(1)
     expect(await page.getByText('Agent guidance', { exact: true }).count()).toBe(0)
     expect(await page.getByText('说明尚未保存', { exact: true }).count()).toBe(0)
@@ -122,16 +123,75 @@ describe('three-step guidance editor', () => {
     page = await openGuidance()
     expect(await readActiveEditor(page)).toBe(legacy)
     await page.locator('[data-guidance-next]').click()
+    await expectStep(page, 2, '希望把这段操作变成什么能力？')
     await fillActiveEditor(page, '把旧操作变成可复用的订单查询能力')
 
-    await expect.poll(() => savedPrompts.length).toBe(1)
-    expect(parseGuidanceMarkdown(savedPrompts[0])).toEqual({
+    await expect.poll(() => savedPrompts.length).toBe(2)
+    expect(parseGuidanceMarkdown(savedPrompts.at(-1))).toEqual({
       actions: legacy,
       capability: '把旧操作变成可复用的订单查询能力',
       acceptance: '',
       legacy: false
     })
     await page.close()
+  })
+
+  it('migrates untouched legacy guidance before copying the external Agent prompt', async () => {
+    const legacy = '# 旧说明\n\n先查询订单，再打开物流详情。'
+    promptText = legacy
+    const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
+    const page = await openGuidance(context)
+    try {
+      await page.locator('[data-guidance-next]').click()
+      await expectStep(page, 2, '希望把这段操作变成什么能力？')
+      await page.locator('[data-guidance-next]').click()
+      await expectStep(page, 3, '怎样证明这个 skill 可以交付？')
+      await page.getByRole('button', { name: '检查并完成' }).click()
+      await page.locator('[data-guidance-review]').waitFor()
+      await page.locator('[data-copy-agent-prompt]').click()
+
+      await expect.poll(() => savedPrompts.length).toBe(1)
+      await expect.poll(() => requestEvents.includes('external-prompt')).toBe(true)
+      expect(parseGuidanceMarkdown(savedPrompts[0])).toEqual({
+        actions: legacy,
+        capability: '',
+        acceptance: '',
+        legacy: false
+      })
+      expect(requestEvents.indexOf('save:done')).toBeLessThan(requestEvents.indexOf('external-prompt'))
+    } finally {
+      await context.close()
+    }
+  })
+
+  it('flushes immediately and waits before changing steps, while save failure keeps the current step', async () => {
+    let releaseSave
+    delayedSave = new Promise(resolve => { releaseSave = resolve })
+    const page = await openGuidance()
+    try {
+      await fillActiveEditor(page, '必须先保存再进入下一步')
+
+      await page.locator('[data-guidance-next]').click()
+      await expect.poll(() => savedPrompts.length, { timeout: 180, interval: 10 }).toBe(1)
+      expect(await page.locator('[data-guidance-step]').getAttribute('data-guidance-step')).toBe('1')
+      expect(await page.locator('[data-guidance-next]').isDisabled()).toBe(true)
+
+      releaseSave()
+      delayedSave = null
+      await expect.poll(() => page.locator('[data-guidance-step]').getAttribute('data-guidance-step')).toBe('2')
+      await expectStep(page, 2, '希望把这段操作变成什么能力？')
+
+      failSavesRemaining = 1
+      await fillActiveEditor(page, '失败时不能返回上一步')
+      await page.locator('[data-guidance-previous]').click()
+      await page.locator('[data-save-error]').waitFor()
+      expect(await page.locator('[data-guidance-step]').getAttribute('data-guidance-step')).toBe('2')
+      expect(await readActiveEditor(page)).toBe('失败时不能返回上一步')
+    } finally {
+      releaseSave?.()
+      delayedSave = null
+      await page.close()
+    }
   })
 
   it('autosaves the complete structured guidance after 500ms without normal save-state microcopy', async () => {
@@ -229,19 +289,40 @@ describe('three-step guidance editor', () => {
   })
 
   it('returns false from flush/beforeNavigate on failure so navigation is blocked', async () => {
-    failSavesRemaining = 1
+    failSavesRemaining = 2
     const page = await openGuidance()
     await fillActiveEditor(page, '离开前必须保存的指导')
     await page.locator('[data-close-analysis]').click()
+    await page.locator('[data-save-error]').waitFor()
     await page.locator('[data-nav="library"]').click()
 
     await page.locator('[data-analysis-workspace]').waitFor()
-    expect(savedPrompts).toHaveLength(1)
-    await page.locator('[data-toggle-analysis]').click()
+    expect(savedPrompts).toHaveLength(2)
     await page.locator('[data-save-error]').waitFor()
     expect(await page.locator('[data-save-error]').textContent()).toContain('保存失败，内容仍保留在编辑器中。')
     expect(await readActiveEditor(page)).toBe('离开前必须保存的指导')
     await page.close()
+  })
+
+  it('exposes a global app-close hook that flushes the current controller and does not retain it after cleanup', async () => {
+    failSavesRemaining = 1
+    const page = await openGuidance()
+    try {
+      await fillActiveEditor(page, '窗口关闭前必须保存')
+
+      await expect(page.evaluate(() => window.__browserForgeBeforeClose())).resolves.toBe(false)
+      await page.locator('[data-save-error]').waitFor()
+      expect(savedPrompts).toHaveLength(1)
+
+      await page.locator('[data-nav="library"]').click()
+      await page.locator('[data-recording-id]').waitFor()
+      const saveCountAfterNavigation = savedPrompts.length
+      await expect(page.evaluate(() => window.__browserForgeBeforeClose())).resolves.toBe(true)
+      await page.waitForTimeout(50)
+      expect(savedPrompts).toHaveLength(saveCountAfterNavigation)
+    } finally {
+      await page.close()
+    }
   })
 
   it('flushes all three answers before copying the external Agent prompt', async () => {
@@ -249,10 +330,13 @@ describe('three-step guidance editor', () => {
     const page = await openGuidance(context)
     await fillActiveEditor(page, '查询订单并读取物流状态')
     await page.locator('[data-guidance-next]').click()
+    await expectStep(page, 2, '希望把这段操作变成什么能力？')
     await fillActiveEditor(page, '根据订单号返回物流信息')
     await page.locator('[data-guidance-next]').click()
+    await expectStep(page, 3, '怎样证明这个 skill 可以交付？')
     await fillActiveEditor(page, '使用 JD123 查询并与详情页核对')
     await page.getByRole('button', { name: '检查并完成' }).click()
+    await page.locator('[data-guidance-review]').waitFor()
     await page.locator('[data-copy-agent-prompt]').click()
 
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).not.toBe('')
@@ -347,7 +431,7 @@ async function openGuidance(context = browser) {
 async function expectStep(page, number, title) {
   const step = page.locator('[data-guidance-step]')
   await step.waitFor()
-  expect(await step.getAttribute('data-guidance-step')).toBe(String(number))
+  await expect.poll(() => step.getAttribute('data-guidance-step')).toBe(String(number))
   expect(await page.locator('[data-guidance-progress]').textContent()).toContain(`${number}/3`)
   await page.getByText(title, { exact: true }).waitFor()
   expect(await activeEditorCount(page)).toBe(1)

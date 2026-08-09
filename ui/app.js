@@ -75,6 +75,20 @@ let cleanupView
 let beforeNavigate
 let navigating = false
 
+const beforeCloseHook = async () => {
+  const activeBeforeNavigate = beforeNavigate
+  if (!activeBeforeNavigate) return true
+  try {
+    return await activeBeforeNavigate() !== false
+  } catch {
+    return false
+  }
+}
+window.__browserForgeBeforeClose = beforeCloseHook
+window.addEventListener('pagehide', () => {
+  if (window.__browserForgeBeforeClose === beforeCloseHook) delete window.__browserForgeBeforeClose
+}, { once: true })
+
 function renderWorkspaceSidebar(value = state.value) {
   cleanupSidebar?.()
   shell.classList.toggle('sidebar-collapsed', value.sidebarCollapsed)

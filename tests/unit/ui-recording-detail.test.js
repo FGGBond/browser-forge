@@ -12,6 +12,8 @@ let requests
 let promptDelayMs = 0
 let promptShouldFail = false
 let promptText = ''
+let promptSaveDelayMs = 0
+let promptSaveShouldFail = false
 const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
 const recording = { id, title: '订单查询', state: 'active', createdAt: '2026-08-08T12:15:00.000Z', durationMs: 42_000, startHost: 'example.com', videoStatus: 'complete', promptStatus: 'empty', sizeBytes: 1048576 }
 const contentTypes = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' }
@@ -27,7 +29,7 @@ beforeAll(async () => {
       if (promptShouldFail) { res.statusCode = 500; return json(res, { error: { message: 'prompt failed' } }) }
       return json(res, { text: promptText, status: promptText ? 'draft' : 'empty', updatedAt: promptText ? '2026-08-08T12:20:00.000Z' : null })
     }
-    if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'PUT') { const body = await readBody(req); requests.push({ method: req.method, path: url.pathname, body }); return json(res, { text: body.text, status: body.text ? 'draft' : 'empty', updatedAt: '2026-08-08T12:20:00.000Z' }) }
+    if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'PUT') { const body = await readBody(req); requests.push({ method: req.method, path: url.pathname, body }); if (promptSaveDelayMs) await new Promise(resolve => setTimeout(resolve, promptSaveDelayMs)); if (promptSaveShouldFail) { res.statusCode = 500; return json(res, { error: { message: 'disk full' } }) }; promptText = body.text; return json(res, { text: body.text, status: body.text ? 'draft' : 'empty', updatedAt: '2026-08-08T12:20:00.000Z' }) }
     if (url.pathname === `/api/recordings/${id}/external-agent-prompt`) return json(res, { recordingId: id, text: 'complete prompt' })
     if (url.pathname === `/api/recordings/${id}/timeline`) { requests.push({ method: 'GET', path: url.pathname }); return json(res, { events: [
       { type: 'click', label: '提交', videoOffsetMs: 12_345, timestamp: Date.parse(recording.createdAt) + 12_345 },
@@ -54,6 +56,8 @@ beforeEach(() => {
   promptDelayMs = 0
   promptShouldFail = false
   promptText = ''
+  promptSaveDelayMs = 0
+  promptSaveShouldFail = false
 })
 
 afterAll(async () => { await browser.close(); await new Promise(resolve => server.close(resolve)) })
@@ -240,6 +244,36 @@ describe('recording detail UI', () => {
       await page.close()
     }
   })
+
+  it('flushes immediately before closing the pane and keeps it open when saving fails', async () => {
+    promptSaveDelayMs = 260
+    const page = await browser.newPage()
+    try {
+      await openDetail(page)
+      await page.locator('[data-guidance-step-title]').waitFor({ state: 'attached' })
+      await page.locator('[data-toggle-analysis]').click()
+      await fillActiveEditor(page, '关闭分析栏前必须保存')
+      await page.locator('[data-close-analysis]').click()
+
+      await expect.poll(() => requests.some(item => item.method === 'PUT'), { timeout: 180, interval: 10 }).toBe(true)
+      expect(await page.locator('[data-toggle-analysis]').getAttribute('aria-expanded')).toBe('true')
+      expect(await page.locator('[data-analysis-pane]').getAttribute('hidden')).toBeNull()
+      expect(await page.locator('[data-close-analysis]').isDisabled()).toBe(true)
+      expect(await page.locator('[data-toggle-analysis]').isDisabled()).toBe(true)
+      await expect.poll(() => page.locator('[data-toggle-analysis]').getAttribute('aria-expanded')).toBe('false')
+
+      await page.locator('[data-toggle-analysis]').click()
+      await fillActiveEditor(page, '保存失败时分析栏必须保持打开')
+      promptSaveShouldFail = true
+      await page.locator('[data-toggle-analysis]').click()
+      await page.locator('[data-save-error]').waitFor()
+      expect(await page.locator('[data-toggle-analysis]').getAttribute('aria-expanded')).toBe('true')
+      expect(await page.locator('[data-analysis-pane]').getAttribute('hidden')).toBeNull()
+      expect(await page.locator('[data-analysis-workspace]').getAttribute('class')).not.toContain('analysis-pane-closing')
+    } finally {
+      await page.close()
+    }
+  }, 8_000)
 
   it('cancels a pending close when the pane is quickly reopened', async () => {
     const page = await browser.newPage()
