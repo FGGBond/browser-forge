@@ -41,6 +41,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   const flow = container.querySelector('[data-guidance-flow]')
   const errorSlot = container.querySelector('[data-save-error-slot]')
   let stepIndex = 0
+  let maxReachedStep = 0
   let reviewOpen = false
   let activeEditor = null
   let timer = null
@@ -88,6 +89,9 @@ export async function renderPromptEditor({ container, recordingId, api }) {
         await api.savePrompt(recordingId, text)
       } catch {
         renderSaveError(true)
+        if (!destroyed && editRevision !== revision && timer === null) {
+          timer = setTimeout(saveNow, 500)
+        }
         return false
       }
 
@@ -125,7 +129,16 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   const renderProgress = () => `
     <div class="guidance-progress" data-guidance-progress>
       <ol aria-label="Skill 要求进度">
-        ${QUESTIONS.map((question, index) => `<li class="${index === stepIndex ? 'current' : index < stepIndex ? 'complete' : ''}" ${index === stepIndex ? 'aria-current="step"' : ''}><span>${index + 1}</span><small>${shortLabel(question.key)}</small></li>`).join('')}
+        ${QUESTIONS.map((question, index) => {
+          const state = index === stepIndex
+            ? 'current'
+            : index < maxReachedStep
+              ? 'complete'
+              : index <= maxReachedStep
+                ? 'reached'
+                : ''
+          return `<li class="${state}"><button type="button" data-guidance-step-jump="${index}" aria-label="${index + 1}. ${question.title}" ${index === stepIndex ? 'aria-current="step"' : ''} ${index > maxReachedStep ? 'disabled' : ''}><span>${index + 1}</span><small>${shortLabel(question.key)}</small></button></li>`
+        }).join('')}
       </ol>
       <strong>${stepIndex + 1}/3</strong>
     </div>`
@@ -159,30 +172,37 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     flow.innerHTML = `
       <section class="guidance-review" data-guidance-review>
         <header class="guidance-review-heading">
-          <h3>检查你的 skill 要求</h3>
-          <p>确认三项说明足以让外部 Agent 实现并执行验收。</p>
+          <h3 data-guidance-review-title tabindex="-1">检查你的 skill 要求</h3>
+          <p>使用 browser-forge skill 分析录制并生成可独立运行的 skill 与 CLI 工具。</p>
         </header>
         <div class="guidance-review-list">
           ${QUESTIONS.map(question => renderReviewCard(question, fields[question.key])).join('')}
         </div>
       </section>
       <div class="guidance-actions guidance-review-actions">
-        <button class="button quiet" type="button" data-guidance-previous>返回上一步</button>
+        <button class="button quiet" type="button" data-guidance-previous>返回修改</button>
         <button class="button primary" type="button" data-copy-agent-prompt>${copyIcon()}<span data-copy-label>复制给外部 Agent</span></button>
       </div>`
   }
 
-  const renderView = () => {
+  const focusRenderedTitle = () => {
+    const selector = reviewOpen ? '[data-guidance-review-title]' : '[data-guidance-step-title]'
+    flow.querySelector(selector)?.focus({ preventScroll: true })
+  }
+
+  const renderView = ({ focusTitle = false } = {}) => {
     destroyActiveEditor()
     if (reviewOpen) renderReview()
     else renderStep()
+    if (focusTitle) focusRenderedTitle()
   }
 
   const showStep = index => {
+    if (!Number.isInteger(index) || index < 0 || index > maxReachedStep) return
     syncActiveEditor()
-    stepIndex = Math.max(0, Math.min(QUESTIONS.length - 1, index))
+    stepIndex = index
     reviewOpen = false
-    renderView()
+    renderView({ focusTitle: true })
   }
 
   const copyExternalPrompt = async button => {
@@ -217,14 +237,19 @@ export async function renderPromptEditor({ container, recordingId, api }) {
       syncActiveEditor()
       if (stepIndex === QUESTIONS.length - 1) {
         reviewOpen = true
-        renderView()
+        renderView({ focusTitle: true })
       } else {
+        maxReachedStep = Math.max(maxReachedStep, stepIndex + 1)
         showStep(stepIndex + 1)
       }
       return
     }
     if (button.matches('[data-guidance-previous]')) {
       showStep(reviewOpen ? QUESTIONS.length - 1 : stepIndex - 1)
+      return
+    }
+    if (button.matches('[data-guidance-step-jump]')) {
+      showStep(Number(button.dataset.guidanceStepJump))
       return
     }
     if (button.matches('[data-edit-guidance]')) {

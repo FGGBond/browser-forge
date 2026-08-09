@@ -56,6 +56,8 @@ describe('recording workspace product boundaries', () => {
     for (const hook of [
       'data-guidance-step',
       'data-guidance-progress',
+      'data-guidance-step-jump',
+      'data-guidance-review-title',
       'data-guidance-next',
       'data-guidance-previous',
       'data-guidance-review',
@@ -69,6 +71,8 @@ describe('recording workspace product boundaries', () => {
     }
     expect(promptEditor).toContain('尚未配置 Agent')
     expect(promptEditor).toContain('browser-forge skill')
+    expect(promptEditor).toContain('使用 browser-forge skill 分析录制并生成可独立运行的 skill 与 CLI 工具。')
+    expect(promptEditor).toContain('maxReachedStep')
     expect(promptEditor).not.toContain('Agent guidance')
     expect(promptEditor).not.toContain('data-save-state')
     expect(promptEditor).not.toContain('说明尚未保存')

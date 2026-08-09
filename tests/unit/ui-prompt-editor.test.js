@@ -171,6 +171,31 @@ describe('three-step guidance editor', () => {
     await page.close()
   })
 
+  it('automatically retries the newest revision when the in-flight older revision fails after its debounce fires', async () => {
+    let releaseSave
+    delayedSave = new Promise(resolve => { releaseSave = resolve })
+    failSavesRemaining = 1
+    const page = await openGuidance()
+
+    await fillActiveEditor(page, '会失败的第一版')
+    await expect.poll(() => savedPrompts.length).toBe(1)
+    await fillActiveEditor(page, '应自动保存的第二版')
+    await page.waitForTimeout(650)
+    expect(savedPrompts).toHaveLength(1)
+
+    releaseSave()
+    delayedSave = null
+
+    await expect.poll(() => savedPrompts.length).toBe(2)
+    expect(savedPrompts.map(text => parseGuidanceMarkdown(text).actions)).toEqual([
+      '会失败的第一版',
+      '应自动保存的第二版'
+    ])
+    await expect.poll(() => page.locator('[data-save-error]').count()).toBe(0)
+    expect(await readActiveEditor(page)).toBe('应自动保存的第二版')
+    await page.close()
+  })
+
   it('keeps dirty content through save failure, supports dismiss and retry, and hides the alert after recovery', async () => {
     failSavesRemaining = 1
     const page = await openGuidance()
@@ -181,6 +206,8 @@ describe('three-step guidance editor', () => {
     expect(await alert.getAttribute('role')).toBe('alert')
     expect(await alert.textContent()).toContain('保存失败，内容仍保留在编辑器中。')
     expect(await readActiveEditor(page)).toBe('重要指导')
+    await page.waitForTimeout(650)
+    expect(savedPrompts).toHaveLength(1)
 
     await page.locator('[data-dismiss-save-error]').click()
     await expect.poll(() => alert.count()).toBe(0)
@@ -249,6 +276,53 @@ describe('three-step guidance editor', () => {
     await context.close()
   })
 
+  it('allows only reached progress steps and focuses the destination title after every interaction', async () => {
+    const page = await openGuidance()
+    const jump = index => page.locator(`[data-guidance-step-jump="${index}"]`)
+
+    expect(await jump(0).count()).toBe(1)
+    expect(await jump(0).getAttribute('aria-current')).toBe('step')
+    expect(await jump(0).isDisabled()).toBe(false)
+    expect(await jump(1).isDisabled()).toBe(true)
+    expect(await jump(2).isDisabled()).toBe(true)
+
+    await page.locator('[data-guidance-next]').click()
+    await expectFocusedTitle(page, '希望把这段操作变成什么能力？')
+    expect(await jump(0).isDisabled()).toBe(false)
+    expect(await jump(1).getAttribute('aria-current')).toBe('step')
+    expect(await jump(1).isDisabled()).toBe(false)
+    expect(await jump(2).isDisabled()).toBe(true)
+
+    await jump(0).click()
+    await expectFocusedTitle(page, '这次录制中，你完成了什么？')
+    await jump(1).click()
+    await expectFocusedTitle(page, '希望把这段操作变成什么能力？')
+
+    await page.locator('[data-guidance-next]').click()
+    await expectFocusedTitle(page, '怎样证明这个 skill 可以交付？')
+    expect(await jump(2).getAttribute('aria-current')).toBe('step')
+    expect(await jump(2).isDisabled()).toBe(false)
+
+    await page.locator('[data-guidance-previous]').click()
+    await expectFocusedTitle(page, '希望把这段操作变成什么能力？')
+    await jump(2).focus()
+    await page.keyboard.press('Enter')
+    await expectFocusedTitle(page, '怎样证明这个 skill 可以交付？')
+
+    await page.getByRole('button', { name: '检查并完成' }).click()
+    await expectFocusedTitle(page, '检查你的 skill 要求', true)
+    await page.getByText('使用 browser-forge skill 分析录制并生成可独立运行的 skill 与 CLI 工具。', { exact: true }).waitFor()
+    const reviewBack = page.locator('.guidance-review-actions [data-guidance-previous]')
+    expect(await reviewBack.textContent()).toBe('返回修改')
+
+    await reviewBack.click()
+    await expectFocusedTitle(page, '怎样证明这个 skill 可以交付？')
+    await page.getByRole('button', { name: '检查并完成' }).click()
+    await page.locator('[data-edit-guidance="capability"]').click()
+    await expectFocusedTitle(page, '希望把这段操作变成什么能力？')
+    await page.close()
+  })
+
   it('renders 待补充 for unanswered items on the review page', async () => {
     const page = await openGuidance()
     await page.locator('[data-guidance-next]').click()
@@ -277,6 +351,16 @@ async function expectStep(page, number, title) {
   expect(await page.locator('[data-guidance-progress]').textContent()).toContain(`${number}/3`)
   await page.getByText(title, { exact: true }).waitFor()
   expect(await activeEditorCount(page)).toBe(1)
+}
+
+async function expectFocusedTitle(page, title, review = false) {
+  const hook = review ? 'data-guidance-review-title' : 'data-guidance-step-title'
+  await expect.poll(() => page.evaluate(({ expectedTitle, expectedHook }) => {
+    const active = document.activeElement
+    return active !== document.body
+      && active?.hasAttribute(expectedHook)
+      && active.textContent.trim() === expectedTitle
+  }, { expectedTitle: title, expectedHook: hook })).toBe(true)
 }
 
 async function activeEditorCount(page) {
