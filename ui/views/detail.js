@@ -25,6 +25,7 @@ export async function renderDetail({
     }) : null
     const titleInput = container.querySelector('[data-title-input]')
     const workspace = container.querySelector('[data-analysis-workspace]')
+    const analysisMain = container.querySelector('.analysis-main')
     const pane = container.querySelector('[data-analysis-pane]')
     const backdrop = container.querySelector('[data-analysis-backdrop]')
     const togglePane = container.querySelector('[data-toggle-analysis]')
@@ -33,6 +34,11 @@ export async function renderDetail({
     let renaming = false
 
     const isPaneOpen = () => workspace.classList.contains('analysis-pane-open')
+    const setBackgroundInert = inert => {
+      analysisMain.inert = inert
+      if (inert) analysisMain.setAttribute('aria-hidden', 'true')
+      else analysisMain.removeAttribute('aria-hidden')
+    }
     const setPaneOpen = (open, { restoreFocus = true } = {}) => {
       const next = Boolean(open)
       workspace.classList.toggle('analysis-pane-open', next)
@@ -41,9 +47,14 @@ export async function renderDetail({
       backdrop.setAttribute('aria-hidden', String(!next))
       togglePane.setAttribute('aria-expanded', String(next))
       togglePane.querySelector('span').textContent = next ? '收起分析' : '去分析'
+      if (next) {
+        closePane.focus({ preventScroll: true })
+        setBackgroundInert(true)
+      } else {
+        setBackgroundInert(false)
+      }
       onAnalysisPaneChange(next)
-      if (next) closePane.focus({ preventScroll: true })
-      else if (restoreFocus) togglePane.focus({ preventScroll: true })
+      if (!next && restoreFocus) togglePane.focus({ preventScroll: true })
     }
     const onDocumentKeyDown = event => {
       if (event.key !== 'Escape' || !isPaneOpen()) return
@@ -55,6 +66,7 @@ export async function renderDetail({
     togglePane.addEventListener('click', () => setPaneOpen(!isPaneOpen()))
     closePane.addEventListener('click', () => setPaneOpen(false))
     backdrop.addEventListener('click', () => setPaneOpen(false))
+    document.addEventListener('keydown', onDocumentKeyDown)
 
     const commitTitle = async () => {
       const next = titleInput.value.trim()
@@ -83,8 +95,13 @@ export async function renderDetail({
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); titleInput.value = savedTitle; titleInput.blur() }
     })
 
-    const promptController = await renderPromptEditor({ container: container.querySelector('[data-prompt-slot]'), recordingId: recording.id, api })
-    document.addEventListener('keydown', onDocumentKeyDown)
+    let promptController
+    try {
+      promptController = await renderPromptEditor({ container: container.querySelector('[data-prompt-slot]'), recordingId: recording.id, api })
+    } catch (error) {
+      document.removeEventListener('keydown', onDocumentKeyDown)
+      throw error
+    }
 
     container.querySelector('[data-export]').addEventListener('click', async event => {
       const button = event.currentTarget
@@ -131,7 +148,7 @@ function detailMarkup(recording, analysisPaneOpen) {
   const visitedHosts = [...new Set([recording.startHost, ...(recording.visitedHosts || [])].filter(Boolean))]
   return `
     <section class="analysis-workspace${analysisPaneOpen ? ' analysis-pane-open' : ''}" data-analysis-workspace>
-      <main class="analysis-main">
+      <main class="analysis-main" ${analysisPaneOpen ? 'inert aria-hidden="true"' : ''}>
         <header class="detail-header">
           <div class="detail-heading">
             <button class="back-button" type="button" data-back>${backIcon()}<span>录制仓库</span></button>
@@ -150,7 +167,7 @@ function detailMarkup(recording, analysisPaneOpen) {
         </section>
       </main>
       <button class="analysis-backdrop" type="button" data-analysis-backdrop aria-label="关闭分析栏" aria-hidden="${!analysisPaneOpen}" tabindex="-1"></button>
-      <aside class="analysis-pane" data-analysis-pane aria-hidden="${!analysisPaneOpen}" ${analysisPaneOpen ? '' : 'inert'} aria-label="分析会话">
+      <aside class="analysis-pane" data-analysis-pane role="dialog" aria-modal="true" aria-hidden="${!analysisPaneOpen}" ${analysisPaneOpen ? '' : 'inert'} aria-label="分析会话">
         <header class="analysis-session-header"><div><p class="eyebrow">Analysis session</p><h2>分析会话</h2></div><button class="icon-button" type="button" data-close-analysis aria-label="关闭分析栏">${closeIcon()}</button></header>
         <section class="agent-unconfigured"><span>${sparkIcon()}</span><div><strong>Agent 尚未配置</strong><p>你仍可对照视频编辑说明，并把完整提示词复制到外部 Agent。</p></div></section>
         <section class="analysis-prompt" data-prompt-slot></section>

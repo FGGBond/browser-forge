@@ -403,10 +403,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px 
 .analysis-main .detail-heading p { flex-wrap:wrap; line-height:1.5; }
 .analysis-video-card { max-width:1200px; margin:0 auto; padding:10px; border:1px solid var(--line); border-radius:18px; background:var(--surface); box-shadow:var(--shadow-sm); }
 .analysis-video-card .bf-player { aspect-ratio:16/10; }
-.analysis-backdrop { position:fixed; z-index:29; inset:0; border:0; opacity:0; visibility:hidden; pointer-events:none; background:rgba(10,10,9,.28); backdrop-filter:blur(2px); transition:opacity 170ms cubic-bezier(.4,0,.2,1),visibility 0s linear 170ms; }
-.analysis-pane { position:fixed; z-index:30; top:0; right:0; bottom:0; width:min(390px,calc(100vw - 32px)); min-width:0; height:100vh; overflow:auto; border-left:1px solid var(--line); background:var(--surface-solid); box-shadow:-24px 0 70px rgba(0,0,0,.24); opacity:0; visibility:hidden; pointer-events:none; transform:translateX(calc(100% + 28px)); transition:transform 170ms cubic-bezier(.4,0,.2,1),opacity 140ms cubic-bezier(.4,0,.2,1),visibility 0s linear 170ms; will-change:transform,opacity; }
-.analysis-workspace.analysis-pane-open .analysis-backdrop { opacity:1; visibility:visible; pointer-events:auto; transition:opacity 200ms ease-out,visibility 0s; }
-.analysis-workspace.analysis-pane-open .analysis-pane { opacity:1; visibility:visible; pointer-events:auto; transform:translateX(0); transition:transform 240ms cubic-bezier(.2,.8,.2,1),opacity 180ms ease-out,visibility 0s; }
+.analysis-backdrop { position:fixed; z-index:29; inset:0; border:0; opacity:0; pointer-events:none; background:rgba(10,10,9,.28); backdrop-filter:blur(2px); transition:opacity 170ms cubic-bezier(.4,0,.2,1); }
+.analysis-pane { position:fixed; z-index:30; top:0; right:0; bottom:0; width:min(390px,calc(100vw - 32px)); min-width:0; height:100vh; overflow:auto; border-left:1px solid var(--line); background:var(--surface-solid); box-shadow:-24px 0 70px rgba(0,0,0,.24); opacity:0; pointer-events:none; transform:translateX(28px); transition:transform 170ms cubic-bezier(.4,0,.2,1),opacity 170ms cubic-bezier(.4,0,.2,1); will-change:transform,opacity; }
+.analysis-workspace.analysis-pane-open .analysis-backdrop { opacity:1; pointer-events:auto; transition:opacity 240ms cubic-bezier(.2,.8,.2,1); }
+.analysis-workspace.analysis-pane-open .analysis-pane { opacity:1; pointer-events:auto; transform:translateX(0); transition:transform 240ms cubic-bezier(.2,.8,.2,1),opacity 240ms cubic-bezier(.2,.8,.2,1); }
 .analysis-session-header { min-height:76px; padding:18px 18px 14px; display:flex; align-items:flex-start; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); }
 .analysis-session-header .eyebrow { margin-bottom:4px; }
 .analysis-session-header h2 { margin:0; font-size:16px; }
@@ -419,4 +419,4 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px 
 .analysis-prompt .prompt-textarea { min-height:300px; }
 .analysis-prompt .prompt-actions { grid-template-columns:1fr; }
 @media (max-width:700px) { .analysis-main { padding:22px 14px 40px; }.analysis-main .detail-header { align-items:stretch; }.analysis-pane { width:100vw; }.analysis-backdrop { display:none; } }
-@media (prefers-reduced-motion: reduce) { .analysis-pane,.analysis-workspace.analysis-pane-open .analysis-pane { transform:none; transition:opacity 120ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 120ms; }.analysis-workspace.analysis-pane-open .analysis-pane { transition:opacity 120ms cubic-bezier(.2,.8,.2,1),visibility 0s; }.analysis-backdrop { transition:opacity 120ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 120ms; }.analysis-workspace.analysis-pane-open .analysis-backdrop { transition:opacity 120ms cubic-bezier(.2,.8,.2,1),visibility 0s; } }
+@media (prefers-reduced-motion: reduce) { .analysis-pane,.analysis-workspace.analysis-pane-open .analysis-pane { transform:none; transition:opacity 120ms cubic-bezier(.2,.8,.2,1); }.analysis-backdrop,.analysis-workspace.analysis-pane-open .analysis-backdrop { transition:opacity 120ms cubic-bezier(.2,.8,.2,1); } }

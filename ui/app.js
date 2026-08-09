@@ -49,6 +49,10 @@ let navigating = false
 
 function renderWorkspaceSidebar(value = state.value) {
   cleanupSidebar?.()
+  const analysisModalOpen = value.route === 'detail' && value.analysisPaneOpen
+  sidebarHost.inert = analysisModalOpen
+  if (analysisModalOpen) sidebarHost.setAttribute('aria-hidden', 'true')
+  else sidebarHost.removeAttribute('aria-hidden')
   shell.classList.toggle('sidebar-collapsed', value.sidebarCollapsed)
   cleanupSidebar = renderSidebar({
     container: sidebarHost,

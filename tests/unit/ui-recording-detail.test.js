@@ -8,6 +8,7 @@ let browser
 let server
 let baseUrl
 let requests
+let promptDelayMs = 0
 const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
 const recording = { id, title: '订单查询', state: 'active', createdAt: '2026-08-08T12:15:00.000Z', durationMs: 42_000, startHost: 'example.com', videoStatus: 'complete', promptStatus: 'empty', sizeBytes: 1048576 }
 const contentTypes = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' }
@@ -18,7 +19,7 @@ beforeAll(async () => {
     const url = new URL(req.url, 'http://localhost')
     if (url.pathname === '/api/recordings' && req.method === 'GET') return json(res, { recordings: [recording] })
     if (url.pathname === `/api/recordings/${id}` && req.method === 'GET') return json(res, recording)
-    if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'GET') return json(res, { text: '', status: 'empty', updatedAt: null })
+    if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'GET') { if (promptDelayMs) await new Promise(resolve => setTimeout(resolve, promptDelayMs)); return json(res, { text: '', status: 'empty', updatedAt: null }) }
     if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'PUT') { const body = await readBody(req); requests.push({ method: req.method, path: url.pathname, body }); return json(res, { text: body.text, status: body.text ? 'draft' : 'empty', updatedAt: '2026-08-08T12:20:00.000Z' }) }
     if (url.pathname === `/api/recordings/${id}/external-agent-prompt`) return json(res, { recordingId: id, text: 'complete prompt' })
     if (url.pathname === `/api/recordings/${id}/timeline`) { requests.push({ method: 'GET', path: url.pathname }); return json(res, { events: [
@@ -46,9 +47,9 @@ afterAll(async () => { await browser.close(); await new Promise(resolve => serve
 describe('recording detail UI', () => {
   it('defines an overlay analysis sheet with asymmetric, reduced-motion-safe transitions', () => {
     const css = readFileSync(join(process.cwd(), 'ui', 'styles.css'), 'utf8')
-    expect(css).toMatch(/\.analysis-pane \{[^}]*position:fixed[^}]*transform:translateX/s)
-    expect(css).toContain('transform 170ms')
-    expect(css).toContain('transform 240ms')
+    expect(css).toMatch(/\.analysis-pane \{[^}]*position:fixed[^}]*opacity:0[^}]*transform:translateX\(28px\)[^}]*transition:transform 170ms cubic-bezier\(\.4,0,\.2,1\),opacity 170ms cubic-bezier\(\.4,0,\.2,1\)/s)
+    expect(css).toMatch(/\.analysis-workspace\.analysis-pane-open \.analysis-pane \{[^}]*opacity:1[^}]*transform:translateX\(0\)[^}]*transition:transform 240ms cubic-bezier\(\.2,\.8,\.2,1\),opacity 240ms cubic-bezier\(\.2,\.8,\.2,1\)/s)
+    expect(css).not.toMatch(/\.analysis-pane \{[^}]*transition:[^;}]*visibility/s)
     expect(css).toMatch(/prefers-reduced-motion: reduce[^}]*\.analysis-pane/s)
     expect(css).not.toContain('grid-template-columns:minmax(0,1fr) minmax(320px,380px)')
   })
@@ -75,25 +76,50 @@ describe('recording detail UI', () => {
     const toggle = page.locator('[data-toggle-analysis]')
     expect(await toggle.getByText('去分析', { exact: true }).count()).toBe(1)
     expect(await pane.getAttribute('aria-hidden')).toBe('true')
-    expect(await pane.isHidden()).toBe(true)
+    expect(await pane.evaluate(element => getComputedStyle(element).pointerEvents)).toBe('none')
+    expect(await pane.evaluate(element => getComputedStyle(element).opacity)).toBe('0')
 
     await toggle.click()
     await pane.waitFor({ state: 'visible' })
     expect(await pane.getAttribute('aria-hidden')).toBe('false')
+    expect(await pane.getAttribute('role')).toBe('dialog')
+    expect(await pane.getAttribute('aria-modal')).toBe('true')
+    expect(await page.locator('.analysis-main').getAttribute('aria-hidden')).toBe('true')
+    expect(await page.locator('[data-sidebar-host]').getAttribute('aria-hidden')).toBe('true')
     expect(await pane.getByText('Agent 尚未配置', { exact: true }).count()).toBe(1)
     expect(await page.locator('[data-prompt-textarea]').count()).toBe(1)
     await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-close-analysis]'))).toBe(true)
 
     await page.keyboard.press('Escape')
     await expect.poll(() => pane.getAttribute('aria-hidden')).toBe('true')
-    await expect.poll(() => pane.isHidden()).toBe(true)
+    await expect.poll(() => pane.evaluate(element => getComputedStyle(element).pointerEvents)).toBe('none')
+    expect(await page.locator('.analysis-main').getAttribute('aria-hidden')).toBeNull()
+    expect(await page.locator('[data-sidebar-host]').getAttribute('aria-hidden')).toBeNull()
     await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-toggle-analysis]'))).toBe(true)
 
     await toggle.click()
     await pane.waitFor({ state: 'visible' })
     await page.locator('[data-analysis-backdrop]').click({ position: { x: 10, y: 10 } })
-    await expect.poll(() => pane.isHidden()).toBe(true)
+    await expect.poll(() => pane.getAttribute('aria-hidden')).toBe('true')
     await page.close()
+  })
+
+  it('handles Escape while the prompt editor is still loading', async () => {
+    requests = []
+    promptDelayMs = 800
+    const page = await browser.newPage()
+    try {
+      await page.goto(baseUrl, { waitUntil: 'networkidle' })
+      await page.getByRole('button', { name: '去分析' }).click()
+      const pane = page.locator('[data-analysis-pane]')
+      await page.locator('[data-toggle-analysis]').click()
+      await expect.poll(() => pane.getAttribute('aria-hidden')).toBe('false')
+      await page.keyboard.press('Escape')
+      await expect.poll(() => pane.getAttribute('aria-hidden')).toBe('true')
+    } finally {
+      promptDelayMs = 0
+      await page.close()
+    }
   })
 
   it('renames, exports by ID, trashes, and offers undo restore', async () => {
