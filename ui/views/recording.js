@@ -1,5 +1,4 @@
 let inspectorSocket
-let currentSummary
 
 export async function renderNewRecording({ container, api, onBack, onStarted }) {
   container.innerHTML = `
@@ -256,17 +255,27 @@ export async function renderNewRecording({ container, api, onBack, onStarted }) 
 
 export async function renderRecording({ container, api, activeRecording, onStopped, onCancel }) {
   container.innerHTML = `
-    <section class="live-recording">
+    <section class="live-recording" aria-labelledby="live-recording-title">
       <header class="live-header">
-        <div class="live-title"><span class="recording-indicator"><i></i>正在录制</span><h1>在 Chrome 中完成你的操作</h1><p>窗口关闭或点击停止后，视频与事件会自动整理到录制库。</p></div>
-        <button class="button danger" type="button" data-stop>${stopIcon()}<span>停止录制</span></button>
+        <div class="live-title">
+          <span class="recording-indicator"><i></i>正在录制</span>
+          <h1 id="live-recording-title">在 Chrome 中完成你的操作</h1>
+          <p>Browser Forge 正在记录已打开的隔离窗口。完成后停止录制即可。</p>
+        </div>
+        <button class="button danger large live-stop" type="button" data-stop>${stopIcon()}<span>停止录制</span></button>
       </header>
-      <div class="live-metrics" data-metrics>${metricCards(emptySummary())}</div>
-      <div class="inspector-layout">
-        <aside class="browser-tabs-panel"><div class="panel-heading"><span>Browser Tabs</span><small data-tab-count>0</small></div><div data-tabs class="browser-tabs"><div class="panel-empty">等待 Chrome 页面…</div></div></aside>
-        <main class="inspector-panel"><div class="panel-heading"><span>实时 Inspector</span><small>事件与画面</small></div><div data-inspector class="inspector-content"><div class="panel-empty tall">开始在 Chrome 中操作，关键事件会出现在这里。</div></div></main>
+      <div class="recording-status-card" role="status">
+        <span class="recording-status-icon">${recordDot()}</span>
+        <div><strong>录制已开始</strong><p>保持 Browser Forge 与录制窗口开启；停止后会自动整理视频和页面信息。</p></div>
       </div>
-      <p class="live-error" data-live-error hidden></p>
+      <section class="open-pages-card" aria-labelledby="open-pages-title">
+        <div class="open-pages-heading">
+          <div><p class="eyebrow">Chrome window</p><h2 id="open-pages-title">已打开页面</h2></div>
+          <span data-tab-count>0 个页面</span>
+        </div>
+        <div class="open-pages-list" data-open-pages aria-live="polite"><div class="panel-empty">等待 Chrome 页面…</div></div>
+      </section>
+      <p class="live-error" data-live-error role="alert" aria-live="polite" hidden></p>
     </section>`
   const stop = container.querySelector('[data-stop]')
   let finished = false
@@ -304,40 +313,24 @@ export async function renderRecording({ container, api, activeRecording, onStopp
 
 export function applySummary(container, summary) {
   if (!container?.isConnected) return
-  currentSummary = summary
-  container.querySelector('[data-metrics]').innerHTML = metricCards(summary)
-  const tabs = Array.isArray(summary.tabs) ? summary.tabs : []
-  container.querySelector('[data-tab-count]').textContent = String(tabs.length)
-  container.querySelector('[data-tabs]').innerHTML = tabs.length ? tabs.map((tab, index) => `
-    <button class="browser-tab ${index === 0 ? 'active' : ''}" data-tab-index="${index}" type="button"><span class="favicon">${escapeHtml((tab.title || 'T').slice(0, 1).toUpperCase())}</span><span><strong>${escapeHtml(tab.title || 'Untitled')}</strong><small>${escapeHtml(hostname(tab.url))}</small></span><i>${tab.counts?.events || 0}</i></button>`).join('') : '<div class="panel-empty">等待 Chrome 页面…</div>'
-  const renderTab = index => renderInspector(container, tabs[index])
-  container.querySelectorAll('[data-tab-index]').forEach(button => button.addEventListener('click', () => {
-    container.querySelectorAll('[data-tab-index]').forEach(item => item.classList.toggle('active', item === button))
-    renderTab(Number(button.dataset.tabIndex))
-  }))
-  renderTab(0)
+  const tabs = Array.isArray(summary?.tabs) ? summary.tabs : []
+  const count = container.querySelector('[data-tab-count]')
+  const pages = container.querySelector('[data-open-pages]')
+  if (!count || !pages) return
+  count.textContent = `${tabs.length} 个页面`
+  pages.innerHTML = tabs.length
+    ? tabs.map(openPageSummary).join('')
+    : '<div class="panel-empty">等待 Chrome 页面…</div>'
 }
 
-function renderInspector(container, tab) {
-  const inspector = container.querySelector('[data-inspector]')
-  if (!tab) {
-    inspector.innerHTML = '<div class="panel-empty tall">开始在 Chrome 中操作，关键事件会出现在这里。</div>'
-    return
-  }
-  const events = tab.recent?.events || []
-  const artifacts = tab.recent?.artifacts || []
-  inspector.innerHTML = `
-    <section class="inspector-section"><div class="section-title"><h2>最近事件</h2><span>${events.length}</span></div><div class="event-stream">${events.length ? events.map(eventItem).join('') : '<p class="section-empty">还没有事件</p>'}</div></section>
-    <section class="inspector-section"><div class="section-title"><h2>画面物料</h2><span>${artifacts.length}</span></div><div class="screenshot-grid">${artifacts.length ? artifacts.map(artifactCard).join('') : '<p class="section-empty">关键截图会显示在这里</p>'}</div></section>`
-}
-
-function eventItem(event) {
-  return `<div class="event-item"><span class="event-icon">${event.type === 'click' ? '↖' : '↵'}</span><span><strong>${escapeHtml(event.type || 'event')}</strong><small>${escapeHtml(event.selector || event.key || '')}</small></span><time>${formatClock(event.timestamp)}</time></div>`
-}
-
-function artifactCard(artifact) {
-  if (artifact.thumbnailUrl) return `<figure class="screenshot-card"><div class="screenshot-thumb"><img src="${escapeAttribute(artifact.thumbnailUrl)}" alt="${escapeAttribute(artifact.title || '浏览器截图')}"></div><figcaption><span>${escapeHtml(artifact.title || 'Screenshot')}</span><time>${formatClock(artifact.timestamp)}</time></figcaption></figure>`
-  return `<div class="artifact-card"><strong>${escapeHtml(artifact.kind || 'Artifact')}</strong><span>${escapeHtml(artifact.title || '')}</span></div>`
+function openPageSummary(tab, index) {
+  const title = tab.title || '未命名页面'
+  return `
+    <article class="open-page-summary">
+      <span class="favicon">${escapeHtml(title.slice(0, 1).toUpperCase())}</span>
+      <div><strong>${escapeHtml(title)}</strong><small>${escapeHtml(hostname(tab.url))}</small></div>
+      ${index === 0 ? '<span class="current-page">当前</span>' : ''}
+    </article>`
 }
 
 function connectInspector(container, onCompleted) {
@@ -361,20 +354,8 @@ function disconnectInspector() {
   inspectorSocket = null
 }
 
-function metricCards(summary) {
-  const totals = summary?.totals || {}
-  return [
-    ['事件', totals.events || 0],
-    ['网络请求', totals.network || 0],
-    ['Console', totals.console || 0],
-    ['物料', totals.artifacts || 0]
-  ].map(([label, value]) => `<div class="metric"><strong>${value}</strong><span>${label}</span></div>`).join('')
-}
-function emptySummary() { return { totals: { events: 0, network: 0, console: 0, artifacts: 0 } } }
 function hostname(url) { try { return new URL(url).hostname } catch { return '新标签页' } }
-function formatClock(value) { const date = new Date(Number(value)); return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]) }
-function escapeAttribute(value) { return escapeHtml(value).replace(/'/g, '&#39;') }
 function backIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12.5 4.5-5 5 5 5"/></svg>' }
 function recordIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M3 9h18"/></svg>' }
 function shieldIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5 16 5v4.5c0 4-2.5 6.5-6 8-3.5-1.5-6-4-6-8V5l6-2.5Z"/><path d="m7.5 10 1.5 1.5 3.5-3.5"/></svg>' }

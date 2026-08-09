@@ -7,6 +7,7 @@ import { extname, join } from 'path'
 let browser
 let server
 let baseUrl
+let stopRequests
 const contentTypes = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' }
 
 beforeAll(async () => {
@@ -17,6 +18,7 @@ beforeAll(async () => {
     if (url.pathname === '/api/chrome-path') return json(res, { path: '/Applications/Google Chrome.app' })
     if (url.pathname === '/api/screen-recording-permission') return json(res, { supported: true, status: 'granted', granted: true, restartRequired: false })
     if (url.pathname === '/api/start-recording') return json(res, { ok: true, port: 9333, recordingId: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27' })
+    if (url.pathname === '/api/stop-recording') { stopRequests += 1; return json(res, { ok: true, recording: { id: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27' } }) }
     if (url.pathname === '/api/summary') return json(res, {
       type: 'summary', startedAt: Date.now(), totals: { events: 2, network: 5, console: 1, artifacts: 1 },
       tabs: [{
@@ -43,7 +45,7 @@ afterAll(async () => {
   await new Promise(resolve => server.close(resolve))
 })
 
-describe('live Inspector and responsive shell', () => {
+describe('recording status and responsive shell', () => {
   it('marks the Electron shell and uses a compact top navigation on narrow screens', async () => {
     const page = await browser.newPage({ viewport: { width: 640, height: 720 } })
     await page.goto(`${baseUrl}?shell=electron`, { waitUntil: 'networkidle' })
@@ -60,17 +62,61 @@ describe('live Inspector and responsive shell', () => {
     await page.close()
   })
 
-  it('renders live event and screenshot material after recording starts', async () => {
+  it('keeps recording status, opened-page summaries, and stop as the primary action', async () => {
     const page = await browser.newPage()
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
     await page.getByRole('button', { name: '新录制' }).first().click()
     await page.getByRole('button', { name: '开始录制' }).click()
-    await page.locator('.screenshot-card').waitFor()
+    await page.locator('[data-open-pages]').waitFor()
 
-    expect(await page.locator('.metric').first().textContent()).toContain('2')
-    expect(await page.locator('.event-item').count()).toBe(1)
-    expect(await page.locator('.screenshot-grid img').getAttribute('src')).toContain('/api/screenshots/')
-    expect(await page.getByText('Orders').count()).toBeGreaterThan(0)
+    await page.getByText('正在录制', { exact: true }).waitFor()
+    await page.getByRole('button', { name: '停止录制' }).waitFor()
+    expect(await page.locator('[data-open-pages]').textContent()).toContain('Orders')
+    expect(await page.locator('[data-open-pages]').textContent()).toContain('example.com')
+    expect(await page.locator('.metric, .event-item, .screenshot-card, .screenshot-grid').count()).toBe(0)
+    expect(await page.getByText(/录制物料|关键事件|画面物料/).count()).toBe(0)
+    await page.close()
+  })
+
+  it('stacks the recording workspace in narrow windows and exposes semantic focus', async () => {
+    stopRequests = 0
+    const page = await browser.newPage({ viewport: { width: 520, height: 720 } })
+    await page.goto(baseUrl, { waitUntil: 'networkidle' })
+    await page.getByRole('button', { name: '新录制' }).first().click()
+    await page.getByRole('button', { name: '开始录制' }).click()
+    const stop = page.getByRole('button', { name: '停止录制' })
+    await stop.waitFor()
+    await page.locator('[data-open-pages]').waitFor()
+
+    const result = await page.evaluate(() => {
+      const header = document.querySelector('.live-header')
+      const button = document.querySelector('[data-stop]')
+      const pages = document.querySelector('[data-open-pages]')
+      const style = getComputedStyle(button)
+      return {
+        headerDirection: getComputedStyle(header).flexDirection,
+        stopWidth: Math.round(button.getBoundingClientRect().width),
+        headerWidth: Math.round(header.getBoundingClientRect().width),
+        pagesColumns: getComputedStyle(pages).gridTemplateColumns,
+        focusRule: Array.from(document.styleSheets).flatMap(sheet => Array.from(sheet.cssRules)).find(rule => rule.selectorText?.includes('button:focus-visible'))?.cssText || '',
+        transitionDuration: style.transitionDuration,
+        transitionTiming: style.transitionTimingFunction,
+        unlabeledIconButtons: Array.from(document.querySelectorAll('button')).filter(item => {
+          const visible = item.getClientRects().length > 0
+          return visible && item.querySelector('svg') && !item.textContent.trim() && !item.getAttribute('aria-label')
+        }).length
+      }
+    })
+    expect(result.headerDirection).toBe('column')
+    expect(result.stopWidth).toBe(result.headerWidth)
+    expect(result.pagesColumns.split(' ').length).toBe(1)
+    expect(result.focusRule).toContain('var(--accent)')
+    expect(result.focusRule).toContain('var(--focus-ring)')
+    expect(result.unlabeledIconButtons).toBe(0)
+    expect(result.transitionDuration.split(', ').every(value => Number.parseFloat(value) >= 0.16 && Number.parseFloat(value) <= 0.22)).toBe(true)
+    expect(result.transitionTiming.split(', ').every(value => value === 'ease-out')).toBe(true)
+    await stop.press('Enter')
+    await expect.poll(() => stopRequests).toBe(1)
     await page.close()
   })
 
