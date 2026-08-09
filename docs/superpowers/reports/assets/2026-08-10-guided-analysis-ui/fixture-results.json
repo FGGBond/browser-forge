@@ -1,0 +1,771 @@
+{
+  "baseUrl": "http://127.0.0.1:50269",
+  "screenshots": [
+    {
+      "path": "/Users/zhukai.129/AiWorkspace/browser-forge-optimization/browser-forge/.worktrees/window-video-recording/docs/superpowers/reports/assets/2026-08-10-guided-analysis-ui/detail-1440-light-step-1.png",
+      "width": 1440,
+      "height": 1000,
+      "colorScheme": "light",
+      "fullPage": false,
+      "document": {
+        "viewport": [
+          1440,
+          1000
+        ],
+        "scrollWidth": 1440,
+        "clientWidth": 1440,
+        "scrollHeight": 1000
+      }
+    },
+    {
+      "path": "/Users/zhukai.129/AiWorkspace/browser-forge-optimization/browser-forge/.worktrees/window-video-recording/docs/superpowers/reports/assets/2026-08-10-guided-analysis-ui/detail-1440-dark-review.png",
+      "width": 1440,
+      "height": 1000,
+      "colorScheme": "dark",
+      "fullPage": false,
+      "document": {
+        "viewport": [
+          1440,
+          1000
+        ],
+        "scrollWidth": 1440,
+        "clientWidth": 1440,
+        "scrollHeight": 1000
+      }
+    },
+    {
+      "path": "/Users/zhukai.129/AiWorkspace/browser-forge-optimization/browser-forge/.worktrees/window-video-recording/docs/superpowers/reports/assets/2026-08-10-guided-analysis-ui/detail-900-light-step-1.png",
+      "width": 900,
+      "height": 1000,
+      "colorScheme": "light",
+      "fullPage": false,
+      "document": {
+        "viewport": [
+          900,
+          1000
+        ],
+        "scrollWidth": 900,
+        "clientWidth": 900,
+        "scrollHeight": 1161
+      }
+    },
+    {
+      "path": "/Users/zhukai.129/AiWorkspace/browser-forge-optimization/browser-forge/.worktrees/window-video-recording/docs/superpowers/reports/assets/2026-08-10-guided-analysis-ui/detail-640-light-step-1.png",
+      "width": 640,
+      "height": 1000,
+      "colorScheme": "light",
+      "fullPage": false,
+      "document": {
+        "viewport": [
+          640,
+          1000
+        ],
+        "scrollWidth": 640,
+        "clientWidth": 640,
+        "scrollHeight": 1243
+      }
+    },
+    {
+      "path": "/Users/zhukai.129/AiWorkspace/browser-forge-optimization/browser-forge/.worktrees/window-video-recording/docs/superpowers/reports/assets/2026-08-10-guided-analysis-ui/detail-520-light-step-1.png",
+      "width": 520,
+      "height": 1000,
+      "colorScheme": "light",
+      "fullPage": false,
+      "document": {
+        "viewport": [
+          520,
+          1000
+        ],
+        "scrollWidth": 520,
+        "clientWidth": 520,
+        "scrollHeight": 1168
+      }
+    },
+    {
+      "path": "/Users/zhukai.129/AiWorkspace/browser-forge-optimization/browser-forge/.worktrees/window-video-recording/docs/superpowers/reports/assets/2026-08-10-guided-analysis-ui/detail-640-light-step-1-full-page.png",
+      "width": 640,
+      "height": 1000,
+      "colorScheme": "light",
+      "fullPage": true,
+      "document": {
+        "viewport": [
+          640,
+          1000
+        ],
+        "scrollWidth": 640,
+        "clientWidth": 640,
+        "scrollHeight": 1243
+      }
+    },
+    {
+      "path": "/Users/zhukai.129/AiWorkspace/browser-forge-optimization/browser-forge/.worktrees/window-video-recording/docs/superpowers/reports/assets/2026-08-10-guided-analysis-ui/detail-520-light-step-1-full-page.png",
+      "width": 520,
+      "height": 1000,
+      "colorScheme": "light",
+      "fullPage": true,
+      "document": {
+        "viewport": [
+          520,
+          1000
+        ],
+        "scrollWidth": 520,
+        "clientWidth": 520,
+        "scrollHeight": 1168
+      }
+    },
+    {
+      "path": "/Users/zhukai.129/AiWorkspace/browser-forge-optimization/browser-forge/.worktrees/window-video-recording/docs/superpowers/reports/assets/2026-08-10-guided-analysis-ui/library-1440-light.png",
+      "width": 1440,
+      "height": 1000,
+      "colorScheme": "light",
+      "fullPage": true,
+      "document": {
+        "viewport": [
+          1440,
+          1000
+        ],
+        "scrollWidth": 1440,
+        "clientWidth": 1440,
+        "scrollHeight": 1225
+      }
+    },
+    {
+      "path": "/Users/zhukai.129/AiWorkspace/browser-forge-optimization/browser-forge/.worktrees/window-video-recording/docs/superpowers/reports/assets/2026-08-10-guided-analysis-ui/library-1440-dark.png",
+      "width": 1440,
+      "height": 1000,
+      "colorScheme": "dark",
+      "fullPage": true,
+      "document": {
+        "viewport": [
+          1440,
+          1000
+        ],
+        "scrollWidth": 1440,
+        "clientWidth": 1440,
+        "scrollHeight": 1225
+      }
+    }
+  ],
+  "checks": {
+    "keyboardOpen": true,
+    "currentStepOne": true,
+    "noModal": true,
+    "videoControlsAndEditing": true,
+    "toolbarTab": {
+      "count": 6,
+      "labels": [
+        "加粗",
+        "斜体",
+        "无序列表",
+        "有序列表",
+        "插入链接",
+        "预览"
+      ]
+    },
+    "stepTwoCurrent": true,
+    "stepButtonTab": {
+      "count": 3,
+      "labels": [
+        "1. 这次录制中，你完成了什么？",
+        "2. 希望把这段操作变成什么能力？",
+        "3. 怎样证明这个 skill 可以交付？"
+      ]
+    },
+    "keyboardClose": true,
+    "saveFailure": {
+      "alerts": 1,
+      "retained": "保存失败时必须保留的中文内容",
+      "text": "\n          保存失败，内容仍保留在编辑器中。\n          重试保存\n          \n        "
+    },
+    "reducedMotion": {
+      "transform": "none",
+      "transitionProperty": "opacity",
+      "transitionDuration": "0.12s"
+    },
+    "fallback": {
+      "visible": true,
+      "value": "EasyMDE 缺失时仍可编辑",
+      "easyMdeCount": 0
+    }
+  },
+  "geometry": {
+    "detail-1440": {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "clientWidth": 1440,
+      "scrollWidth": 1440,
+      "workspace": {
+        "x": 240,
+        "y": 0,
+        "width": 1200,
+        "height": 1000,
+        "bottom": 1000,
+        "right": 1440
+      },
+      "main": {
+        "x": 240,
+        "y": 0,
+        "width": 810,
+        "height": 1000,
+        "bottom": 1000,
+        "right": 1050
+      },
+      "video": {
+        "x": 296,
+        "y": 166.59375,
+        "width": 698,
+        "height": 444.5,
+        "bottom": 611.09375,
+        "right": 994
+      },
+      "pane": {
+        "x": 1050,
+        "y": 0,
+        "width": 390,
+        "height": 1000,
+        "bottom": 1000,
+        "right": 1440
+      },
+      "status": {
+        "x": 1067,
+        "y": 14,
+        "width": 357,
+        "height": 54.34375,
+        "bottom": 68.34375,
+        "right": 1424
+      },
+      "close": {
+        "x": 1390,
+        "y": 14,
+        "width": 28,
+        "height": 28,
+        "bottom": 42,
+        "right": 1418
+      },
+      "toolbar": [
+        {
+          "label": "加粗",
+          "x": 1073,
+          "y": 207.53125,
+          "width": 28,
+          "height": 27,
+          "bottom": 234.53125,
+          "right": 1101
+        },
+        {
+          "label": "斜体",
+          "x": 1103,
+          "y": 207.53125,
+          "width": 28,
+          "height": 27,
+          "bottom": 234.53125,
+          "right": 1131
+        },
+        {
+          "label": "无序列表",
+          "x": 1133,
+          "y": 207.53125,
+          "width": 28,
+          "height": 27,
+          "bottom": 234.53125,
+          "right": 1161
+        },
+        {
+          "label": "有序列表",
+          "x": 1163,
+          "y": 207.53125,
+          "width": 28,
+          "height": 27,
+          "bottom": 234.53125,
+          "right": 1191
+        },
+        {
+          "label": "插入链接",
+          "x": 1193,
+          "y": 207.53125,
+          "width": 28,
+          "height": 27,
+          "bottom": 234.53125,
+          "right": 1221
+        },
+        {
+          "label": "预览",
+          "x": 1223,
+          "y": 207.53125,
+          "width": 32,
+          "height": 27,
+          "bottom": 234.53125,
+          "right": 1255
+        }
+      ],
+      "editor": {
+        "x": 1067,
+        "y": 239.53125,
+        "width": 357,
+        "height": 242,
+        "bottom": 481.53125,
+        "right": 1424
+      },
+      "actions": {
+        "x": 1065,
+        "y": 499.53125,
+        "width": 361,
+        "height": 65,
+        "bottom": 564.53125,
+        "right": 1426
+      },
+      "flow": {
+        "x": 1067,
+        "y": 82.34375,
+        "width": 357,
+        "height": 482.1875,
+        "bottom": 564.53125,
+        "right": 1424
+      }
+    },
+    "detail-900": {
+      "viewport": {
+        "width": 900,
+        "height": 1000
+      },
+      "clientWidth": 900,
+      "scrollWidth": 900,
+      "workspace": {
+        "x": 240,
+        "y": 0,
+        "width": 660,
+        "height": 1161.28125,
+        "bottom": 1161.28125,
+        "right": 900
+      },
+      "main": {
+        "x": 240,
+        "y": 0,
+        "width": 660,
+        "height": 612.796875,
+        "bottom": 612.796875,
+        "right": 900
+      },
+      "video": {
+        "x": 276,
+        "y": 181.046875,
+        "width": 588,
+        "height": 375.75,
+        "bottom": 556.796875,
+        "right": 864
+      },
+      "pane": {
+        "x": 240,
+        "y": 612.796875,
+        "width": 660,
+        "height": 548.484375,
+        "bottom": 1161.28125,
+        "right": 900
+      },
+      "status": {
+        "x": 256,
+        "y": 627.796875,
+        "width": 628,
+        "height": 54.34375,
+        "bottom": 682.140625,
+        "right": 884
+      },
+      "close": {
+        "x": 850,
+        "y": 627.796875,
+        "width": 28,
+        "height": 28,
+        "bottom": 655.796875,
+        "right": 878
+      },
+      "toolbar": [
+        {
+          "label": "加粗",
+          "x": 262,
+          "y": 804.28125,
+          "width": 28,
+          "height": 27,
+          "bottom": 831.28125,
+          "right": 290
+        },
+        {
+          "label": "斜体",
+          "x": 292,
+          "y": 804.28125,
+          "width": 28,
+          "height": 27,
+          "bottom": 831.28125,
+          "right": 320
+        },
+        {
+          "label": "无序列表",
+          "x": 322,
+          "y": 804.28125,
+          "width": 28,
+          "height": 27,
+          "bottom": 831.28125,
+          "right": 350
+        },
+        {
+          "label": "有序列表",
+          "x": 352,
+          "y": 804.28125,
+          "width": 28,
+          "height": 27,
+          "bottom": 831.28125,
+          "right": 380
+        },
+        {
+          "label": "插入链接",
+          "x": 382,
+          "y": 804.28125,
+          "width": 28,
+          "height": 27,
+          "bottom": 831.28125,
+          "right": 410
+        },
+        {
+          "label": "预览",
+          "x": 412,
+          "y": 804.28125,
+          "width": 32,
+          "height": 27,
+          "bottom": 831.28125,
+          "right": 444
+        }
+      ],
+      "editor": {
+        "x": 256,
+        "y": 836.28125,
+        "width": 628,
+        "height": 242,
+        "bottom": 1078.28125,
+        "right": 884
+      },
+      "actions": {
+        "x": 254,
+        "y": 1096.28125,
+        "width": 632,
+        "height": 65,
+        "bottom": 1161.28125,
+        "right": 886
+      },
+      "flow": {
+        "x": 256,
+        "y": 696.140625,
+        "width": 628,
+        "height": 465.140625,
+        "bottom": 1161.28125,
+        "right": 884
+      }
+    },
+    "detail-640": {
+      "viewport": {
+        "width": 640,
+        "height": 1000
+      },
+      "clientWidth": 640,
+      "scrollWidth": 640,
+      "workspace": {
+        "x": 0,
+        "y": 58,
+        "width": 640,
+        "height": 1185.484375,
+        "bottom": 1243.484375,
+        "right": 640
+      },
+      "main": {
+        "x": 0,
+        "y": 58,
+        "width": 640,
+        "height": 637,
+        "bottom": 695,
+        "right": 640
+      },
+      "video": {
+        "x": 14,
+        "y": 264.25,
+        "width": 612,
+        "height": 390.75,
+        "bottom": 655,
+        "right": 626
+      },
+      "pane": {
+        "x": 0,
+        "y": 695,
+        "width": 640,
+        "height": 548.484375,
+        "bottom": 1243.484375,
+        "right": 640
+      },
+      "status": {
+        "x": 16,
+        "y": 710,
+        "width": 608,
+        "height": 54.34375,
+        "bottom": 764.34375,
+        "right": 624
+      },
+      "close": {
+        "x": 590,
+        "y": 710,
+        "width": 28,
+        "height": 28,
+        "bottom": 738,
+        "right": 618
+      },
+      "toolbar": [
+        {
+          "label": "加粗",
+          "x": 22,
+          "y": 886.484375,
+          "width": 28,
+          "height": 27,
+          "bottom": 913.484375,
+          "right": 50
+        },
+        {
+          "label": "斜体",
+          "x": 52,
+          "y": 886.484375,
+          "width": 28,
+          "height": 27,
+          "bottom": 913.484375,
+          "right": 80
+        },
+        {
+          "label": "无序列表",
+          "x": 82,
+          "y": 886.484375,
+          "width": 28,
+          "height": 27,
+          "bottom": 913.484375,
+          "right": 110
+        },
+        {
+          "label": "有序列表",
+          "x": 112,
+          "y": 886.484375,
+          "width": 28,
+          "height": 27,
+          "bottom": 913.484375,
+          "right": 140
+        },
+        {
+          "label": "插入链接",
+          "x": 142,
+          "y": 886.484375,
+          "width": 28,
+          "height": 27,
+          "bottom": 913.484375,
+          "right": 170
+        },
+        {
+          "label": "预览",
+          "x": 172,
+          "y": 886.484375,
+          "width": 32,
+          "height": 27,
+          "bottom": 913.484375,
+          "right": 204
+        }
+      ],
+      "editor": {
+        "x": 16,
+        "y": 918.484375,
+        "width": 608,
+        "height": 242,
+        "bottom": 1160.484375,
+        "right": 624
+      },
+      "actions": {
+        "x": 14,
+        "y": 1178.484375,
+        "width": 612,
+        "height": 65,
+        "bottom": 1243.484375,
+        "right": 626
+      },
+      "flow": {
+        "x": 16,
+        "y": 778.34375,
+        "width": 608,
+        "height": 465.140625,
+        "bottom": 1243.484375,
+        "right": 624
+      }
+    },
+    "detail-520": {
+      "viewport": {
+        "width": 520,
+        "height": 1000
+      },
+      "clientWidth": 520,
+      "scrollWidth": 520,
+      "workspace": {
+        "x": 0,
+        "y": 58,
+        "width": 520,
+        "height": 1110.484375,
+        "bottom": 1168.484375,
+        "right": 520
+      },
+      "main": {
+        "x": 0,
+        "y": 58,
+        "width": 520,
+        "height": 562,
+        "bottom": 620,
+        "right": 520
+      },
+      "video": {
+        "x": 14,
+        "y": 264.25,
+        "width": 492,
+        "height": 315.75,
+        "bottom": 580,
+        "right": 506
+      },
+      "pane": {
+        "x": 0,
+        "y": 620,
+        "width": 520,
+        "height": 548.484375,
+        "bottom": 1168.484375,
+        "right": 520
+      },
+      "status": {
+        "x": 16,
+        "y": 635,
+        "width": 488,
+        "height": 54.34375,
+        "bottom": 689.34375,
+        "right": 504
+      },
+      "close": {
+        "x": 470,
+        "y": 635,
+        "width": 28,
+        "height": 28,
+        "bottom": 663,
+        "right": 498
+      },
+      "toolbar": [
+        {
+          "label": "加粗",
+          "x": 22,
+          "y": 811.484375,
+          "width": 28,
+          "height": 27,
+          "bottom": 838.484375,
+          "right": 50
+        },
+        {
+          "label": "斜体",
+          "x": 52,
+          "y": 811.484375,
+          "width": 28,
+          "height": 27,
+          "bottom": 838.484375,
+          "right": 80
+        },
+        {
+          "label": "无序列表",
+          "x": 82,
+          "y": 811.484375,
+          "width": 28,
+          "height": 27,
+          "bottom": 838.484375,
+          "right": 110
+        },
+        {
+          "label": "有序列表",
+          "x": 112,
+          "y": 811.484375,
+          "width": 28,
+          "height": 27,
+          "bottom": 838.484375,
+          "right": 140
+        },
+        {
+          "label": "插入链接",
+          "x": 142,
+          "y": 811.484375,
+          "width": 28,
+          "height": 27,
+          "bottom": 838.484375,
+          "right": 170
+        },
+        {
+          "label": "预览",
+          "x": 172,
+          "y": 811.484375,
+          "width": 32,
+          "height": 27,
+          "bottom": 838.484375,
+          "right": 204
+        }
+      ],
+      "editor": {
+        "x": 16,
+        "y": 843.484375,
+        "width": 488,
+        "height": 242,
+        "bottom": 1085.484375,
+        "right": 504
+      },
+      "actions": {
+        "x": 14,
+        "y": 1103.484375,
+        "width": 492,
+        "height": 65,
+        "bottom": 1168.484375,
+        "right": 506
+      },
+      "flow": {
+        "x": 16,
+        "y": 703.34375,
+        "width": 488,
+        "height": 465.140625,
+        "bottom": 1168.484375,
+        "right": 504
+      }
+    },
+    "library": [
+      {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "row": {
+          "width": 1084.8125,
+          "height": 688.828125
+        },
+        "video": {
+          "width": 1082.8125,
+          "height": 618.828125
+        },
+        "footer": {
+          "width": 1082.8125,
+          "height": 68
+        },
+        "footerRatio": 0.10988511551571771
+      },
+      {
+        "id": "22222222-2222-4222-8222-222222222222",
+        "row": {
+          "width": 1084.8125,
+          "height": 271
+        },
+        "video": {
+          "width": 1082.8125,
+          "height": 201
+        },
+        "footer": {
+          "width": 1082.8125,
+          "height": 68
+        },
+        "footerRatio": 0.3383084577114428
+      }
+    ]
+  }
+}
