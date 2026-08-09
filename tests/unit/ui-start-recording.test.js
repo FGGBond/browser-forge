@@ -112,8 +112,15 @@ describe('managed start recording UI', () => {
 
     expect(await page.locator('#output-dir').count()).toBe(0)
     expect(await page.getByRole('heading', { name: '有什么想要完成的浏览器操作？' }).count()).toBe(1)
-    expect(await page.getByText('只会录制 Browser Forge 打开的 Chrome 窗口').count()).toBeGreaterThan(0)
+    const composer = page.locator('.goal-composer')
+    expect(await composer.locator('.goal-context-note, .advanced-settings, .permission-actions').count()).toBe(0)
+    expect(await composer.getByRole('button').count()).toBe(2)
+    expect(await composer.getByRole('button', { name: '发送目标' }).isDisabled()).toBe(true)
     await page.locator('[data-goal-text]').fill('  查询订单状态  ')
+    const send = composer.getByRole('button', { name: '发送目标' })
+    expect(await send.isDisabled()).toBe(false)
+    await send.click()
+    expect(await page.getByText('目标已记下，会随录制一起保存。').isVisible()).toBe(true)
 
     await Promise.all([
       page.waitForResponse(response => response.url().endsWith('/api/start-recording')),
@@ -137,7 +144,7 @@ describe('managed start recording UI', () => {
     reset({ check: missingPermission, request: grantedPermission })
     const page = await openNewRecording()
 
-    await page.getByRole('button', { name: '允许屏幕录制' }).click()
+    await page.getByRole('button', { name: '开始录制' }).click()
 
     await page.locator('[data-stop]').waitFor()
     expect(permissionRequestCount).toBe(1)
@@ -152,52 +159,50 @@ describe('managed start recording UI', () => {
     })
     const page = await openNewRecording()
 
-    await page.getByRole('button', { name: '允许屏幕录制' }).click()
+    await page.getByRole('button', { name: '开始录制' }).click()
 
-    await expect.poll(() => page.locator('[data-status]').textContent()).toContain('Browser Forge')
-    expect(await page.locator('[data-status]').textContent()).not.toContain('Browser Forge Recorder')
-    expect(startRequests).toEqual([])
-    expect(permissionRequestCount).toBe(1)
-    expect(await page.getByRole('button', { name: '在 Finder 中显示录制组件' }).count()).toBe(0)
-
-    await page.getByRole('button', { name: '打开系统设置' }).click()
     await expect.poll(() => settingsRequestCount).toBe(1)
-
-    await page.getByRole('button', { name: '重置并打开授权设置' }).click()
-    await expect.poll(() => permissionResetCount).toBe(1)
-    await expect.poll(() => appRevealCount).toBe(1)
-    await expect.poll(() => settingsRequestCount).toBe(2)
-    expect(permissionRequestCount).toBe(1)
-    await expect.poll(() => page.locator('[data-status]').textContent()).toContain('关闭再打开 Browser Forge 的开关')
-    await expect.poll(() => page.locator('[data-status]').textContent()).toContain('拖入')
+    const notice = page.locator('[data-notice-stack] [role="alert"]').last()
+    await expect.poll(() => notice.textContent()).toContain('屏幕录制权限')
+    expect(await notice.textContent()).not.toContain('Browser Forge Recorder')
+    expect(await notice.getByRole('button', { name: '关闭提示' }).count()).toBe(1)
     expect(startRequests).toEqual([])
+    expect(permissionRequestCount).toBe(1)
+    expect(permissionResetCount).toBe(0)
+    expect(appRevealCount).toBe(0)
 
-    await page.getByRole('button', { name: '授权后重新启动 Browser Forge' }).click()
-    await expect.poll(() => restartCount).toBe(1)
+    await notice.getByRole('button', { name: '关闭提示' }).click()
+    await expect.poll(() => notice.count()).toBe(0)
     await page.close()
   })
 
-  it('offers an App restart after the user opens System Settings from an initial not-granted state', async () => {
-    reset({ check: missingPermission })
+  it('keeps permission recovery out of the composer and opens System Settings automatically only after the user starts', async () => {
+    reset({ check: missingPermission, request: { supported: true, status: 'denied', granted: false, restartRequired: false } })
     const page = await openNewRecording()
 
-    await page.getByRole('button', { name: '打开系统设置' }).click()
+    expect(settingsRequestCount).toBe(0)
+    expect(await page.locator('.goal-composer').getByRole('button').count()).toBe(2)
+    await page.getByRole('button', { name: '开始录制' }).click()
 
     await expect.poll(() => settingsRequestCount).toBe(1)
-    await expect.poll(() => page.getByRole('button', { name: '授权后重新启动 Browser Forge' }).isVisible()).toBe(true)
+    expect(await page.getByRole('button', { name: '打开系统设置' }).count()).toBe(0)
+    expect(await page.getByRole('button', { name: '再次检查权限' }).count()).toBe(0)
     await page.close()
   })
 
-  it('enables recording only after a fresh Browser Forge preflight succeeds', async () => {
-    reset({ check: missingPermission })
+  it('rechecks permission automatically when the App regains focus', async () => {
+    reset({ check: missingPermission, request: { supported: true, status: 'denied', granted: false, restartRequired: false } })
     const page = await openNewRecording()
 
+    await page.getByRole('button', { name: '开始录制' }).click()
+    await expect.poll(() => settingsRequestCount).toBe(1)
     permissionCheckResult = grantedPermission
-    await page.getByRole('button', { name: '再次检查权限' }).click()
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
 
     await expect.poll(() => permissionCheckCount).toBe(2)
-    expect(await page.getByRole('button', { name: '开始录制' }).isDisabled()).toBe(false)
-    expect(permissionRequestCount).toBe(0)
+    await page.locator('[data-stop]').waitFor()
+    expect(startRequests).toHaveLength(1)
+    expect(permissionRequestCount).toBe(1)
     expect(permissionResetCount).toBe(0)
     expect(appRevealCount).toBe(0)
     await page.close()
@@ -210,12 +215,13 @@ describe('managed start recording UI', () => {
     })
     const page = await openNewRecording()
 
-    await page.getByRole('button', { name: '允许屏幕录制' }).click()
+    await page.getByRole('button', { name: '开始录制' }).click()
 
-    await expect.poll(() => page.locator('[data-status]').textContent()).toContain('重新启动 Browser Forge')
+    const notice = page.locator('[data-notice-stack] [role="alert"]').last()
+    await expect.poll(() => notice.textContent()).toContain('重新启动 Browser Forge')
     expect(startRequests).toEqual([])
     expect(await page.getByRole('button', { name: '授权后重新启动 Browser Forge' }).isVisible()).toBe(true)
-    expect(await page.getByRole('button', { name: '打开系统设置' }).isVisible()).toBe(true)
+    expect(await page.getByRole('button', { name: '打开系统设置' }).count()).toBe(0)
     await page.getByRole('button', { name: '授权后重新启动 Browser Forge' }).click()
     await expect.poll(() => restartCount).toBe(1)
     await page.close()

@@ -76,12 +76,12 @@ export async function navigate(route, patch = {}, { force = false } = {}) {
       return true
     }
     if (route === 'new-recording') {
-      await renderNewRecording({
+      const controller = await renderNewRecording({
         container: main,
         api,
-        onBack: () => navigate('library'),
         onStarted: result => navigate('recording', { activeRecording: result })
       })
+      cleanupView = controller?.cleanup
       return true
     }
     if (route === 'recording') {

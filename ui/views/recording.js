@@ -1,256 +1,288 @@
 let inspectorSocket
 
-export async function renderNewRecording({ container, api, onBack, onStarted }) {
+export async function renderNewRecording({ container, api, onStarted }) {
   container.innerHTML = `
-    <section class="recording-setup new-recording-view">
-      <button class="back-button" type="button" data-back>${backIcon()}<span>返回录制仓库</span></button>
+    <section class="recording-setup new-recording-view" aria-labelledby="new-recording-title">
       <div class="new-recording-hero">
-        <span class="new-recording-mark">${recordIcon()}</span>
-        <p class="eyebrow">New recording</p>
-        <h1>有什么想要完成的浏览器操作？</h1>
-        <p class="setup-lead">先写下目标，录制完成后它会成为分析说明草稿。也可以留空，直接开始录制。</p>
+        <h1 id="new-recording-title">有什么想要完成的浏览器操作？</h1>
       </div>
-      <div class="goal-composer">
-        <label class="sr-only" for="recording-goal">录制目标</label>
-        <textarea id="recording-goal" data-goal-text class="goal-textarea" rows="5" placeholder="例如：登录后台，查询指定订单并导出发票。录制完成后，希望 Agent 生成一个可复用的查询与导出 skill。"></textarea>
-        <div class="goal-context-note">${shieldIcon()}<span>只会录制 Browser Forge 打开的 Chrome 窗口；桌面、其他 App 和个人浏览器窗口不会进入视频。</span></div>
-        <details class="advanced-settings">
-          <summary>高级设置</summary>
-          <label class="field-label" for="chrome-path">Chrome 路径</label>
-          <input id="chrome-path" data-chrome-path class="text-input" placeholder="正在自动检测…" autocomplete="off">
-          <p class="field-help">通常无需修改；仅在自动检测失败时手动填写。</p>
-        </details>
-        <div class="setup-actions">
-          <button class="button primary large" type="button" data-start disabled>${recordDot()}<span data-start-label>正在检查权限…</span></button>
-          <p class="form-status" data-status>正在检查 macOS 屏幕录制权限…</p>
-          <div class="permission-actions" data-permission-actions hidden>
-            <button class="button secondary" type="button" data-check-permission>再次检查权限</button>
-            <button class="button secondary" type="button" data-reset-permission>重置并打开授权设置</button>
-            <button class="button secondary" type="button" data-open-settings>打开系统设置</button>
-            <button class="button primary" type="button" data-restart-app hidden>授权后重新启动 Browser Forge</button>
+      <div class="new-recording-stage">
+        <div class="composer-notice-stack" data-notice-stack aria-live="polite"></div>
+        <div class="goal-composer">
+          <label class="sr-only" for="recording-goal">录制目标</label>
+          <textarea id="recording-goal" data-goal-text class="goal-textarea" rows="5" placeholder="描述你想完成的浏览器操作…"></textarea>
+          <input data-chrome-path type="hidden">
+          <div class="goal-composer-toolbar">
+            <button class="record-start-action" type="button" data-start disabled>
+              ${recordIcon()}<span>开始录制</span>
+            </button>
+            <button class="send-goal-action" type="button" data-send-goal aria-label="发送目标" title="发送目标" disabled>
+              ${sendIcon()}
+            </button>
           </div>
         </div>
       </div>
     </section>`
 
-  container.querySelector('[data-back]').addEventListener('click', onBack)
   const input = container.querySelector('[data-chrome-path]')
   const goalInput = container.querySelector('[data-goal-text]')
-  const button = container.querySelector('[data-start]')
-  const buttonLabel = container.querySelector('[data-start-label]')
-  const status = container.querySelector('[data-status]')
-  const permissionActions = container.querySelector('[data-permission-actions]')
-  const checkPermissionButton = container.querySelector('[data-check-permission]')
-  const openSettings = container.querySelector('[data-open-settings]')
-  const resetPermission = container.querySelector('[data-reset-permission]')
-  const restartApp = container.querySelector('[data-restart-app]')
+  const startButton = container.querySelector('[data-start]')
+  const sendButton = container.querySelector('[data-send-goal]')
+  const noticeStack = container.querySelector('[data-notice-stack]')
+  const noticeTimers = new Map()
   let permission
   let permissionLoaded = false
   let chromeLoaded = false
   let busy = false
+  let waitingForPermission = false
+  let resumeAfterPermission = false
+  let destroyed = false
 
-  const setStatus = (message, { error = false } = {}) => {
-    status.textContent = message
-    status.classList.toggle('error', error)
+  const dismissNotice = id => {
+    clearTimeout(noticeTimers.get(id))
+    noticeTimers.delete(id)
+    noticeStack.querySelector(`[data-notice-id="${CSS.escape(id)}"]`)?.remove()
+    noticeStack.classList.toggle('has-notices', noticeStack.children.length > 0)
   }
 
-  const updateButton = () => {
+  const showNotice = ({ id = 'status', message, tone = 'neutral', action, input: noticeInput, timeout = 0 }) => {
+    dismissNotice(id)
+    const notice = document.createElement('div')
+    notice.className = `composer-notice ${tone}`
+    notice.dataset.noticeId = id
+    notice.setAttribute('role', tone === 'danger' ? 'alert' : 'status')
+
+    const icon = document.createElement('span')
+    icon.className = 'composer-notice-icon'
+    icon.innerHTML = tone === 'success' ? checkIcon() : tone === 'danger' ? alertIcon() : statusIcon()
+    const body = document.createElement('div')
+    body.className = 'composer-notice-body'
+    const copy = document.createElement('p')
+    copy.textContent = message
+    body.append(copy)
+
+    if (noticeInput) {
+      const field = document.createElement('input')
+      field.className = 'composer-notice-input'
+      field.value = noticeInput.value || ''
+      field.placeholder = noticeInput.placeholder || ''
+      field.setAttribute('aria-label', noticeInput.label || 'Chrome 路径')
+      field.addEventListener('input', () => noticeInput.onInput?.(field.value))
+      body.append(field)
+    }
+
+    if (action) {
+      const actionButton = document.createElement('button')
+      actionButton.className = 'composer-notice-action'
+      actionButton.type = 'button'
+      actionButton.textContent = action.label
+      actionButton.addEventListener('click', action.onClick)
+      body.append(actionButton)
+    }
+
+    const close = document.createElement('button')
+    close.className = 'composer-notice-close'
+    close.type = 'button'
+    close.setAttribute('aria-label', '关闭提示')
+    close.innerHTML = closeIcon()
+    close.addEventListener('click', () => dismissNotice(id))
+    notice.append(icon, body, close)
+    noticeStack.append(notice)
+    while (noticeStack.children.length > 3) noticeStack.firstElementChild?.remove()
+    noticeStack.classList.add('has-notices')
+
+    if (timeout > 0) noticeTimers.set(id, setTimeout(() => dismissNotice(id), timeout))
+    return notice
+  }
+
+  const updateActions = () => {
     const supported = permission?.supported !== false
-    const granted = permission?.granted === true
-    buttonLabel.textContent = granted ? '开始录制' : '允许屏幕录制'
-    button.disabled = busy || !permissionLoaded || !supported || (granted && (!chromeLoaded || !input.value.trim()))
+    startButton.disabled = busy || !permissionLoaded || !chromeLoaded || !input.value.trim() || !supported
+    startButton.classList.toggle('is-busy', busy)
+    sendButton.disabled = busy || !goalInput.value.trim()
   }
 
-  const showPermissionRecovery = result => {
+  const setBusy = value => {
+    busy = value
+    updateActions()
+  }
+
+  const restartApp = async () => {
+    setBusy(true)
+    showNotice({ id: 'permission', message: '正在重新启动 Browser Forge…' })
+    try {
+      await api.restartBrowserForge()
+    } catch (error) {
+      showNotice({ id: 'permission', message: `无法重新启动 Browser Forge：${error.message}`, tone: 'danger' })
+      setBusy(false)
+    }
+  }
+
+  const showPermissionRecovery = async result => {
     permission = result
     permissionLoaded = true
-    permissionActions.hidden = false
     const restartRequired = result?.status === 'restart-required' || result?.restartRequired
-    const manualAuthorizationRequired = ['manual-authorization-required', 'denied'].includes(result?.status)
-    restartApp.hidden = !(restartRequired || manualAuthorizationRequired)
-    resetPermission.hidden = restartRequired
-    if (restartRequired) {
-      setStatus('macOS 已记录 Browser Forge 的授权。请重新启动 Browser Forge，重启后会再次检查权限。', { error: true })
-    } else if (result?.status === 'unsupported') {
-      permissionActions.hidden = true
-      setStatus('当前平台尚未提供窗口视频录制能力。', { error: true })
-    } else if (manualAuthorizationRequired) {
-      setStatus('macOS 无法从 App 内弹出屏幕录制授权对话框。请点击“重置并打开授权设置”，关闭再打开 Browser Forge 的开关，完成 Touch ID/密码确认后重新启动 Browser Forge。', { error: true })
-    } else {
-      setStatus('macOS 尚未授予当前 Browser Forge 屏幕录制权限。可以先点击“允许屏幕录制”；如果系统没有弹窗，请使用“重置并打开授权设置”。', { error: true })
+    if (result?.supported === false || result?.status === 'unsupported') {
+      resumeAfterPermission = false
+      waitingForPermission = false
+      showNotice({ id: 'permission', message: '当前设备不支持窗口视频录制。', tone: 'danger' })
+      updateActions()
+      return false
     }
-    updateButton()
+    if (restartRequired) {
+      waitingForPermission = false
+      showNotice({
+        id: 'permission',
+        message: '屏幕录制权限已更新，请重新启动 Browser Forge。',
+        tone: 'danger',
+        action: { label: '授权后重新启动 Browser Forge', onClick: restartApp }
+      })
+      updateActions()
+      return false
+    }
+
+    waitingForPermission = true
+    try {
+      await api.openScreenRecordingSettings()
+      showNotice({ id: 'permission', message: '屏幕录制权限尚未开启，Browser Forge 会在你返回后自动继续。', tone: 'danger' })
+    } catch (error) {
+      showNotice({ id: 'permission', message: `无法打开屏幕录制设置：${error.message}`, tone: 'danger' })
+    }
+    updateActions()
+    return false
   }
 
-  const requestPermission = async ({ continueRecording = false } = {}) => {
-    busy = true
-    permissionActions.hidden = true
-    setStatus('正在请求 Browser Forge 的 macOS 屏幕录制权限…')
-    updateButton()
+  const startRecordingSession = async () => {
+    if (destroyed || busy) return false
+    setBusy(true)
+    showNotice({ id: 'progress', message: '正在打开录制窗口…' })
+    try {
+      const result = await api.startRecording({
+        chromePath: input.value.trim(),
+        goalText: goalInput.value.trim()
+      })
+      if (!result.ok) {
+        if (result.code === 'SCREEN_RECORDING_PERMISSION_REQUIRED' || result.code === 'SCREEN_RECORDING_UNSUPPORTED') {
+          dismissNotice('progress')
+          await showPermissionRecovery(result.permission || { supported: true, status: 'not-granted', granted: false, restartRequired: false })
+          return false
+        }
+        throw new Error(result.error || '无法开始录制')
+      }
+      dismissNotice('progress')
+      resumeAfterPermission = false
+      onStarted(result)
+      return true
+    } catch (error) {
+      dismissNotice('progress')
+      showNotice({ id: 'recording-error', message: error.message, tone: 'danger' })
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const requestPermission = async () => {
+    setBusy(true)
+    showNotice({ id: 'permission', message: '正在请求屏幕录制权限…' })
     try {
       const result = await api.requestScreenRecordingPermission()
       permission = result
       permissionLoaded = true
-      if (!result.granted) {
-        showPermissionRecovery(result)
-        return false
-      }
-      setStatus(continueRecording ? '权限已允许，正在启动隔离的 Chrome 窗口…' : 'Browser Forge 屏幕录制权限已就绪。')
+      if (!result.granted) return await showPermissionRecovery(result)
+      waitingForPermission = false
+      dismissNotice('permission')
       return true
     } catch (error) {
-      showPermissionRecovery({ supported: true, status: 'denied', granted: false, restartRequired: false })
-      setStatus(`权限请求失败：${error.message}`, { error: true })
-      return false
+      return await showPermissionRecovery({ supported: true, status: 'denied', granted: false, restartRequired: false, error: error.message })
     } finally {
-      busy = false
-      updateButton()
+      setBusy(false)
     }
   }
 
-  const checkPermission = async () => {
-    busy = true
-    setStatus('正在检查 Browser Forge 屏幕录制权限…')
-    updateButton()
+  const beginRecording = async () => {
+    if (busy || destroyed) return
+    resumeAfterPermission = true
+    if (!permission?.granted) {
+      const granted = await requestPermission()
+      if (!granted) return
+    }
+    await startRecordingSession()
+  }
+
+  const checkPermissionOnFocus = async () => {
+    if (!waitingForPermission || busy || destroyed) return
+    setBusy(true)
     try {
       const result = await api.getScreenRecordingPermission()
       permission = result
       permissionLoaded = true
       if (!result.granted) {
-        showPermissionRecovery(result)
-        return false
+        if (result?.status === 'restart-required' || result?.restartRequired) await showPermissionRecovery(result)
+        return
       }
-      permissionActions.hidden = true
-      setStatus('Browser Forge 屏幕录制权限已就绪。')
-      return true
+      waitingForPermission = false
+      dismissNotice('permission')
     } catch (error) {
-      setStatus(`权限检查失败：${error.message}`, { error: true })
-      return false
+      showNotice({ id: 'permission', message: `权限检查失败：${error.message}`, tone: 'danger' })
+      return
     } finally {
-      busy = false
-      updateButton()
+      setBusy(false)
     }
+    if (resumeAfterPermission) await startRecordingSession()
   }
 
-  input.addEventListener('input', updateButton)
-  checkPermissionButton.addEventListener('click', checkPermission)
-  resetPermission.addEventListener('click', async () => {
-    busy = true
-    permissionActions.hidden = true
-    setStatus('正在清除旧版本 Browser Forge 的屏幕录制授权…')
-    updateButton()
-    try {
-      await api.resetScreenRecordingPermission()
-      setStatus('旧授权已清除，正在打开 Browser Forge 所在位置和系统授权设置…')
-      await api.revealBrowserForgeApp()
-      await api.openScreenRecordingSettings()
-      permission = { supported: true, status: 'manual-authorization-required', granted: false, restartRequired: false }
-      permissionLoaded = true
-      permissionActions.hidden = false
-      resetPermission.hidden = false
-      restartApp.hidden = false
-      setStatus('已重置旧授权。请在系统设置中找到 Browser Forge；如果列表中没有它，请把 Finder 中已选中的 Browser Forge 拖入设置页。如果开关仍显示开启，请关闭再打开 Browser Forge 的开关。完成 Touch ID/密码确认后，返回并点击“授权后重新启动 Browser Forge”。', { error: true })
-    } catch (error) {
-      showPermissionRecovery({ supported: true, status: 'manual-authorization-required', granted: false, restartRequired: false })
-      setStatus(`无法重置或打开屏幕录制授权设置：${error.message}`, { error: true })
-    } finally {
-      busy = false
-      updateButton()
-    }
+  goalInput.addEventListener('input', updateActions)
+  sendButton.addEventListener('click', () => {
+    const goal = goalInput.value.trim()
+    if (!goal) return
+    showNotice({ id: 'goal', message: '目标已记下，会随录制一起保存。', tone: 'success', timeout: 2400 })
   })
-
-  openSettings.addEventListener('click', async () => {
-    openSettings.disabled = true
-    try {
-      await api.openScreenRecordingSettings()
-      restartApp.hidden = false
-      setStatus('已打开系统设置。请找到 Browser Forge；如果开关仍显示开启，请关闭再打开，并完成 Touch ID/密码确认。然后返回并点击“授权后重新启动 Browser Forge”。')
-    } catch (error) {
-      setStatus(`无法打开系统设置：${error.message}`, { error: true })
-    } finally {
-      openSettings.disabled = false
-    }
-  })
-  restartApp.addEventListener('click', async () => {
-    restartApp.disabled = true
-    setStatus('正在重新启动 Browser Forge…')
-    try {
-      await api.restartBrowserForge()
-    } catch (error) {
-      restartApp.disabled = false
-      setStatus(`无法重新启动 Browser Forge：${error.message}`, { error: true })
-    }
-  })
+  startButton.addEventListener('click', beginRecording)
+  window.addEventListener('focus', checkPermissionOnFocus)
 
   try {
     permission = await api.getScreenRecordingPermission()
     permissionLoaded = true
-    if (permission.supported === false) {
-      showPermissionRecovery(permission)
-    } else if (permission.granted) {
-      setStatus('屏幕录制权限已就绪，正在查找 Chrome…')
-    } else {
-      showPermissionRecovery(permission)
-    }
+    if (permission.supported === false) await showPermissionRecovery(permission)
   } catch (error) {
     permissionLoaded = true
     permission = { supported: true, status: 'not-granted', granted: false, restartRequired: false }
-    setStatus(`权限检查失败：${error.message}`, { error: true })
+    showNotice({ id: 'permission-check', message: `权限检查失败：${error.message}`, tone: 'danger' })
   }
-  updateButton()
+  updateActions()
 
   try {
     const result = await api.getChromePath()
     input.value = result.path || ''
     chromeLoaded = true
     if (!input.value) {
-      container.querySelector('details').open = true
-      setStatus('未找到 Chrome，请展开高级设置填写路径。', { error: true })
-    } else if (permission?.granted) {
-      setStatus('Chrome 与屏幕录制权限已就绪。')
+      showNotice({
+        id: 'chrome',
+        message: '未找到 Chrome。',
+        tone: 'danger',
+        input: {
+          value: '',
+          placeholder: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+          label: 'Chrome 路径',
+          onInput: value => { input.value = value; updateActions() }
+        }
+      })
     }
   } catch (error) {
     chromeLoaded = true
-    setStatus(`自动检测失败：${error.message}`, { error: true })
-    container.querySelector('details').open = true
+    showNotice({ id: 'chrome', message: `无法检测 Chrome：${error.message}`, tone: 'danger' })
   }
-  updateButton()
+  updateActions()
 
-  button.addEventListener('click', async () => {
-    busy = true
-    button.classList.add('is-busy')
-    permissionActions.hidden = true
-    updateButton()
-    try {
-      if (!permission?.granted) {
-        busy = false
-        const granted = await requestPermission({ continueRecording: true })
-        if (!granted) return
-        busy = true
-        updateButton()
-      } else {
-        setStatus('正在启动隔离的 Chrome 窗口…')
-      }
-      const chromePath = input.value.trim()
-      const goalText = goalInput.value.trim()
-      const result = await api.startRecording({ chromePath, goalText })
-      if (!result.ok) {
-        if (result.code === 'SCREEN_RECORDING_PERMISSION_REQUIRED' || result.code === 'SCREEN_RECORDING_UNSUPPORTED') {
-          showPermissionRecovery(result.permission || { supported: true, status: 'not-granted', granted: false, restartRequired: false })
-          return
-        }
-        const error = new Error(result.error || '无法开始录制')
-        error.code = result.code
-        throw error
-      }
-      onStarted(result)
-    } catch (error) {
-      setStatus(error.message, { error: true })
-    } finally {
-      busy = false
-      button.classList.remove('is-busy')
-      updateButton()
+  return {
+    cleanup() {
+      destroyed = true
+      window.removeEventListener('focus', checkPermissionOnFocus)
+      for (const timer of noticeTimers.values()) clearTimeout(timer)
+      noticeTimers.clear()
     }
-  })
+  }
 }
 
 export async function renderRecording({ container, api, activeRecording, onStopped, onCancel }) {
@@ -358,8 +390,11 @@ function disconnectInspector() {
 
 function hostname(url) { try { return new URL(url).hostname } catch { return '新标签页' } }
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]) }
-function backIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12.5 4.5-5 5 5 5"/></svg>' }
 function recordIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M3 9h18"/></svg>' }
-function shieldIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5 16 5v4.5c0 4-2.5 6.5-6 8-3.5-1.5-6-4-6-8V5l6-2.5Z"/><path d="m7.5 10 1.5 1.5 3.5-3.5"/></svg>' }
+function sendIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V5m0 0L6.5 8.5M10 5l3.5 3.5"/></svg>' }
+function closeIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 6 8 8m0-8-8 8"/></svg>' }
+function checkIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.5 10 3 3 6-6"/></svg>' }
+function alertIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 6.5v4M10 13.5h.01"/></svg>' }
+function statusIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 9v4M10 6.5h.01"/></svg>' }
 function recordDot() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="4" fill="currentColor" stroke="none"/></svg>' }
 function stopIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="8" height="8" rx="1"/></svg>' }

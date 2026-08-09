@@ -27,9 +27,15 @@ describe('recording workspace product boundaries', () => {
     expect(readUi('views/video-player.js')).not.toContain('data-player-download')
   })
 
-  it('exposes one primary new-recording entry and an explicit unconfigured Agent state', () => {
+  it('keeps new recording focused on two composer actions and exposes an explicit unconfigured Agent state', () => {
+    const recording = readUi('views/recording.js')
     expect(readUi('views/sidebar.js')).toContain('data-new-recording')
     expect(readUi('views/library.js')).not.toContain('data-new-recording')
+    expect(recording).toContain('data-send-goal')
+    expect(recording).toContain('data-notice-stack')
+    expect(recording).not.toContain('goal-context-note')
+    expect(recording).not.toContain('permission-actions')
+    expect(recording).not.toContain('advanced-settings')
     expect(readUi('views/detail.js')).toContain('Agent 尚未配置')
     expect(readUi('views/detail.js')).toContain('data-analysis-pane')
   })
