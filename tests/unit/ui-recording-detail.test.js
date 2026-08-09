@@ -53,6 +53,9 @@ describe('recording detail UI', () => {
     await video.waitFor()
     expect(await video.getAttribute('src')).toBe(`/api/recordings/${id}/video`)
     expect(await video.getAttribute('poster')).toBe(`/api/recordings/${id}/poster`)
+    expect(await video.getAttribute('controls')).toBeNull()
+    expect(await video.getAttribute('disablepictureinpicture')).not.toBeNull()
+    expect(await page.getByRole('button', { name: '后退 10 秒' }).count()).toBe(1)
     await page.evaluate(() => {
       const player = document.querySelector('video')
       Object.defineProperty(player, 'duration', { configurable: true, value: 42 })

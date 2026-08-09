@@ -1,12 +1,21 @@
 import { renderPromptEditor } from './prompt-editor.js'
 import { formatDuration } from './library.js'
+import { mountVideoPlayer } from './video-player.js'
 
 export async function renderDetail({ container, api, recordingId, onBack, onTrashed }) {
   container.innerHTML = `<section class="detail-loading"><div class="loading-ring"></div><span>正在读取录制…</span></section>`
   try {
     const [recording, timeline] = await Promise.all([api.getRecording(recordingId), api.getTimeline(recordingId)])
     container.innerHTML = detailMarkup(recording, timeline)
-    const video = container.querySelector('video')
+    const playable = ['complete', 'partial'].includes(recording.videoStatus)
+    const playerController = playable ? mountVideoPlayer({
+      container: container.querySelector('[data-video-player-slot]'),
+      src: `/api/recordings/${encodeURIComponent(recording.id)}/video`,
+      poster: `/api/recordings/${encodeURIComponent(recording.id)}/poster`,
+      durationMs: recording.durationMs,
+      title: recording.title
+    }) : null
+    const video = playerController?.element
     const titleInput = container.querySelector('[data-title-input]')
     let savedTitle = recording.title
     let renaming = false
@@ -83,7 +92,7 @@ export async function renderDetail({ container, api, recordingId, onBack, onTras
         showNotice(container, error.message, 'error')
       }
     })
-    return { recording, beforeNavigate: promptController.beforeNavigate, cleanup: () => promptController.destroy() }
+    return { recording, beforeNavigate: promptController.beforeNavigate, cleanup: () => { playerController?.destroy(); promptController.destroy() } }
   } catch (error) {
     container.innerHTML = `<section class="narrow-view"><button class="back-button" data-back>返回录制库</button><div class="inline-error"><strong>无法打开录制</strong><span>${escapeHtml(error.message)}</span></div></section>`
     container.querySelector('[data-back]').addEventListener('click', onBack)
@@ -126,8 +135,8 @@ function detailMarkup(recording, timeline) {
       <div class="detail-grid">
         <main class="detail-primary">
           <section class="video-card">
-            ${playable ? `<video controls preload="metadata" tabindex="0" src="/api/recordings/${encodeURIComponent(recording.id)}/video" poster="/api/recordings/${encodeURIComponent(recording.id)}/poster"></video>` : videoUnavailable(recording.videoStatus)}
-            <div class="video-caption"><span>${playable ? 'Chrome 窗口视频' : '视频不可用'}</span><small>${recording.videoStatus === 'partial' ? '视频为部分录制，时间轴超出部分不可跳转' : '使用 ← / → 前后跳转 5 秒'}</small></div>
+            ${playable ? '<div data-video-player-slot></div>' : videoUnavailable(recording.videoStatus)}
+            <div class="video-caption"><span>${playable ? 'Chrome 窗口视频' : '视频不可用'}</span><small>${recording.videoStatus === 'partial' ? '视频为部分录制，时间轴超出部分不可跳转' : '支持前后跳转、倍速和全屏'}</small></div>
           </section>
           <section class="timeline-card">
             <div class="section-heading"><div><p class="eyebrow">Event timeline</p><h2>关键事件</h2></div><span>${timeline.length}</span></div>
