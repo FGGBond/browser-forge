@@ -29,6 +29,63 @@ describe('guidance Markdown format', () => {
     })
   })
 
+  it('uses an explicit version sentinel while keeping stable readable headings', () => {
+    const markdown = serializeGuidanceMarkdown({ actions: '打开订单详情' })
+
+    expect(markdown).toMatch(/^<!-- browser-forge-guidance:v1 -->\n/)
+    for (const heading of Object.values(GUIDANCE_HEADINGS)) {
+      expect(markdown).toContain(`## ${heading}`)
+    }
+  })
+
+  it('round-trips Markdown headings, fenced code blocks, and lists inside every answer', () => {
+    const fields = {
+      actions: [
+        '先读取页面。',
+        '',
+        '## 普通动作标题',
+        '',
+        '## 本次录制中的动作与意图',
+        '',
+        '- 点击搜索',
+        '- 打开详情',
+        '',
+        '```markdown',
+        '## 希望提取的 skill 能力',
+        '- 这只是代码块内容',
+        '```'
+      ].join('\n'),
+      capability: [
+        '生成查询能力。',
+        '',
+        '## 希望提取的 skill 能力',
+        '',
+        '1. 接收订单号',
+        '2. 返回物流状态',
+        '',
+        '```js',
+        "return { heading: '## Skill 验收标准' }",
+        '```'
+      ].join('\n'),
+      acceptance: [
+        '执行真实验收。',
+        '',
+        '## Skill 验收标准',
+        '',
+        '- [ ] 结果与详情页一致',
+        '',
+        '## 补充说明',
+        '',
+        '标题后的正文也必须保留。'
+      ].join('\n')
+    }
+
+    expect(parseGuidanceMarkdown(serializeGuidanceMarkdown(fields))).toEqual({
+      ...fields,
+      legacy: false
+    })
+  })
+
   it('keeps legacy free-form guidance losslessly in actions', () => {
     const legacy = '旧版自由文本\n\n- 保留 Markdown\n- 保留换行'
 
@@ -37,6 +94,59 @@ describe('guidance Markdown format', () => {
       capability: '',
       acceptance: '',
       legacy: true
+    })
+  })
+
+  it('keeps all legacy text when it happens to contain one or more fixed headings', () => {
+    const legacy = [
+      '标题前的旧版说明不能丢失。',
+      '',
+      '## 本次录制中的动作与意图',
+      '',
+      '这仍然只是旧自由文本。',
+      '',
+      '## 希望提取的 skill 能力',
+      '',
+      '- 标题后的列表也必须保留',
+      '',
+      '最后一段同样不能丢失。'
+    ].join('\n')
+
+    expect(parseGuidanceMarkdown(legacy)).toEqual({
+      actions: legacy,
+      capability: '',
+      acceptance: '',
+      legacy: true
+    })
+  })
+
+  it('treats a sentinel with an incomplete structure as lossless legacy text', () => {
+    const legacy = [
+      '<!-- browser-forge-guidance:v1 -->',
+      '这是碰巧出现 sentinel 的旧文本。',
+      '## 本次录制中的动作与意图',
+      '仍需全文保留。'
+    ].join('\n')
+
+    expect(parseGuidanceMarkdown(legacy)).toEqual({
+      actions: legacy,
+      capability: '',
+      acceptance: '',
+      legacy: true
+    })
+  })
+
+  it('parses a complete structured document with CRLF line endings', () => {
+    const fields = {
+      actions: '打开订单详情\n\n- 读取订单号',
+      capability: '## 查询能力\n\n返回物流状态',
+      acceptance: '```text\n物流状态一致\n```'
+    }
+    const crlf = serializeGuidanceMarkdown(fields).replace(/\n/g, '\r\n')
+
+    expect(parseGuidanceMarkdown(crlf)).toEqual({
+      ...fields,
+      legacy: false
     })
   })
 
@@ -52,26 +162,16 @@ describe('guidance Markdown format', () => {
     expect(serializeGuidanceMarkdown(parsedEmpty)).toBe('')
   })
 
-  it('ignores unknown headings without overwriting known fields', () => {
-    const markdown = [
-      '## 本次录制中的动作与意图',
-      '',
-      '打开订单详情',
-      '',
-      '## 未知字段',
-      '',
-      '不应进入已知字段',
-      '',
-      '## 希望提取的 skill 能力',
-      '',
-      '查询物流'
-    ].join('\n')
+  it('does not identify heading-only Markdown as the structured format', () => {
+    const markdown = Object.values(GUIDANCE_HEADINGS)
+      .map(heading => `## ${heading}\n\n旧自由文本中的内容`)
+      .join('\n\n')
 
     expect(parseGuidanceMarkdown(markdown)).toEqual({
-      actions: '打开订单详情',
-      capability: '查询物流',
+      actions: markdown,
+      capability: '',
       acceptance: '',
-      legacy: false
+      legacy: true
     })
   })
 })
