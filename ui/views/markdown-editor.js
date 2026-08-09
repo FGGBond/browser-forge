@@ -31,6 +31,7 @@ function mountTextareaFallback({ textarea, onChange }) {
     focus: () => {
       if (!destroyed) textarea.focus()
     },
+    refresh: () => {},
     destroy: () => {
       if (destroyed) return
       destroyed = true
@@ -101,6 +102,9 @@ export function mountMarkdownEditor({
       },
       focus: () => {
         if (!destroyed) instance.codemirror.focus()
+      },
+      refresh: () => {
+        if (!destroyed) instance.codemirror.refresh()
       },
       destroy: () => {
         if (destroyed) return

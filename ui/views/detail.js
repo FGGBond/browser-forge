@@ -55,6 +55,15 @@ export async function renderDetail({
       if (destroyed || !paneOpen || sequence !== paneOpenSequence || !canMoveFocusToGuidance()) return
       pane.querySelector('[data-guidance-step-title]')?.focus({ preventScroll: true })
     }
+    const refreshPromptLayout = sequence => {
+      const refresh = () => {
+        if (destroyed || !paneOpen || sequence !== paneOpenSequence) return
+        promptController.refresh()
+        focusGuidanceStep(sequence)
+      }
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(refresh)
+      else refresh()
+    }
     const cancelPendingClose = () => {
       closeSequence += 1
       if (closeTimer !== null) clearTimeout(closeTimer)
@@ -83,7 +92,7 @@ export async function renderDetail({
         workspace.classList.add('analysis-pane-open')
         togglePane.setAttribute('aria-expanded', 'true')
         onAnalysisPaneChange(true)
-        if (promptReady) focusGuidanceStep(paneOpenSequence)
+        if (promptReady) refreshPromptLayout(paneOpenSequence)
         return
       }
       if (!paneOpen) return
@@ -147,7 +156,7 @@ export async function renderDetail({
         }
         if (!promptController.attach(controller)) return
         promptReady = true
-        if (pendingFocusSequence !== null) focusGuidanceStep(pendingFocusSequence)
+        if (pendingFocusSequence !== null) refreshPromptLayout(pendingFocusSequence)
       })
       .catch(error => {
         if (!promptLoadToken.active || destroyed) return
@@ -216,6 +225,7 @@ function createPromptControllerProxy() {
     },
     flush: () => target?.flush() ?? proceed(),
     beforeNavigate: () => target?.beforeNavigate() ?? proceed(),
+    refresh: () => target?.refresh?.(),
     destroy() {
       if (destroyed) return
       destroyed = true

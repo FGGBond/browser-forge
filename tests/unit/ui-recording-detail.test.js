@@ -3,6 +3,7 @@ import { chromium } from 'playwright'
 import { createServer } from 'http'
 import { readFileSync, statSync } from 'fs'
 import { extname, join } from 'path'
+import { serializeGuidanceMarkdown } from '../../ui/guidance-format.js'
 
 let browser
 let server
@@ -10,6 +11,7 @@ let baseUrl
 let requests
 let promptDelayMs = 0
 let promptShouldFail = false
+let promptText = ''
 const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
 const recording = { id, title: '订单查询', state: 'active', createdAt: '2026-08-08T12:15:00.000Z', durationMs: 42_000, startHost: 'example.com', videoStatus: 'complete', promptStatus: 'empty', sizeBytes: 1048576 }
 const contentTypes = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' }
@@ -23,7 +25,7 @@ beforeAll(async () => {
     if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'GET') {
       if (promptDelayMs) await new Promise(resolve => setTimeout(resolve, promptDelayMs))
       if (promptShouldFail) { res.statusCode = 500; return json(res, { error: { message: 'prompt failed' } }) }
-      return json(res, { text: '', status: 'empty', updatedAt: null })
+      return json(res, { text: promptText, status: promptText ? 'draft' : 'empty', updatedAt: promptText ? '2026-08-08T12:20:00.000Z' : null })
     }
     if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'PUT') { const body = await readBody(req); requests.push({ method: req.method, path: url.pathname, body }); return json(res, { text: body.text, status: body.text ? 'draft' : 'empty', updatedAt: '2026-08-08T12:20:00.000Z' }) }
     if (url.pathname === `/api/recordings/${id}/external-agent-prompt`) return json(res, { recordingId: id, text: 'complete prompt' })
@@ -51,6 +53,7 @@ beforeEach(() => {
   requests = []
   promptDelayMs = 0
   promptShouldFail = false
+  promptText = ''
 })
 
 afterAll(async () => { await browser.close(); await new Promise(resolve => server.close(resolve)) })
@@ -115,6 +118,11 @@ describe('recording detail UI', () => {
     await page.locator('[data-guidance-step-title]').waitFor({ state: 'attached' })
     await toggle.click()
     await pane.waitFor({ state: 'visible' })
+    const focusedTitleStyle = await page.locator('[data-guidance-step-title]').evaluate(element => {
+      const style = getComputedStyle(element)
+      return { outlineOffset: style.outlineOffset, borderRadius: style.borderRadius }
+    })
+    expect(focusedTitleStyle).toEqual({ outlineOffset: '3px', borderRadius: '4px' })
     expect(await toggle.getAttribute('aria-expanded')).toBe('true')
     expect(await toggle.getByText('去分析', { exact: true }).count()).toBe(1)
     expect(await pane.getAttribute('hidden')).toBeNull()
@@ -150,6 +158,31 @@ describe('recording detail UI', () => {
     await expect.poll(() => pane.getAttribute('hidden')).not.toBeNull()
     expect(await page.locator('[data-analysis-workspace]').getAttribute('class')).not.toContain('analysis-pane-open')
     await page.close()
+  })
+
+  it('refreshes a preloaded EasyMDE value when the hidden guidance pane becomes visible', async () => {
+    promptText = serializeGuidanceMarkdown({ actions: '打开订单并读取物流状态', capability: '', acceptance: '' })
+    const page = await browser.newPage()
+    try {
+      await openDetail(page)
+      await page.locator('[data-toggle-analysis]').click()
+      await page.locator('[data-analysis-pane]').waitFor({ state: 'visible' })
+      const readRendering = () => page.locator('.CodeMirror').evaluate(element => {
+        const line = element.querySelector('.CodeMirror-line')
+        const editor = element.getBoundingClientRect()
+        const content = line?.getBoundingClientRect()
+        return {
+          value: element.CodeMirror?.getValue(),
+          text: line?.textContent || '',
+          visibleHeight: content ? Math.min(content.bottom, editor.bottom) - Math.max(content.top, editor.top) : 0
+        }
+      })
+      expect((await readRendering()).value).toBe('打开订单并读取物流状态')
+      await expect.poll(async () => (await readRendering()).text).toContain('打开订单并读取物流状态')
+      expect((await readRendering()).visibleHeight).toBeGreaterThan(0)
+    } finally {
+      await page.close()
+    }
   })
 
   it('returns the detail controller before delayed guidance loads so the first navigation click succeeds', async () => {

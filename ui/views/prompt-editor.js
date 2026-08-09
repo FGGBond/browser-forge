@@ -273,6 +273,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   return {
     flush: saveNow,
     beforeNavigate: saveNow,
+    refresh() { activeEditor?.refresh?.() },
     destroy() {
       destroyed = true
       clearTimeout(timer)

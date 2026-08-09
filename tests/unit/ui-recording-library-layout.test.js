@@ -208,6 +208,24 @@ describe('recording repository video-first layout', () => {
     expect(await failedVideo.locator('[data-video-player]').count()).toBe(0)
     expect(await failedVideo.locator('.repository-video-placeholder').count()).toBe(1)
     expect(await failedVideo.textContent()).toContain('视频录制失败')
+    await page.emulateMedia({ colorScheme: 'dark' })
+    const darkTextColors = await page.evaluate(failedId => {
+      const probe = document.createElement('span')
+      probe.style.color = 'var(--muted)'
+      document.body.append(probe)
+      const muted = getComputedStyle(probe).color
+      probe.remove()
+      return {
+        muted,
+        time: getComputedStyle(document.querySelector(`[data-recording-id="${failedId}"] time`)).color,
+        placeholder: getComputedStyle(document.querySelector(`[data-recording-id="${failedId}"] .repository-video-placeholder span`)).color
+      }
+    }, recordings[2].id)
+    expect(darkTextColors.time).toBe(darkTextColors.muted)
+    expect(darkTextColors.placeholder).toBe(darkTextColors.muted)
+    const playableVideoBox = await page.locator(`[data-recording-id="${recordings[0].id}"] .repository-video`).boundingBox()
+    const failedVideoBox = await failedVideo.boundingBox()
+    expect(failedVideoBox.height).toBeLessThan(playableVideoBox.height * .55)
 
     await page.locator(`[data-recording-id="${recordings[1].id}"] [data-analyze]`).click()
     await expect.poll(() => page.locator('[data-title-input]').inputValue()).toBe(recordings[1].title)
