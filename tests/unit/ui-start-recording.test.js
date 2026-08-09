@@ -100,7 +100,7 @@ function reset({ check = grantedPermission, request = grantedPermission, failSta
 async function openNewRecording() {
   const page = await browser.newPage()
   await page.goto(baseUrl, { waitUntil: 'networkidle' })
-  await page.getByRole('button', { name: '新建录制' }).first().click()
+  await page.getByRole('button', { name: '新录制', exact: true }).first().click()
   await expect.poll(() => page.locator('[data-chrome-path]').inputValue()).toContain('Google Chrome')
   return page
 }
@@ -121,13 +121,13 @@ describe('managed start recording UI', () => {
     expect(startRequests).toEqual([{ chromePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' }])
     expect(permissionRequestCount).toBe(0)
     await page.locator('[data-stop]').waitFor()
-    expect(await page.getByRole('button', { name: '全部录制' }).isDisabled()).toBe(true)
+    expect(await page.getByRole('button', { name: '录制仓库', exact: true }).isDisabled()).toBe(true)
     expect(await page.getByRole('button', { name: '回收站', exact: true }).isDisabled()).toBe(true)
-    expect(await page.getByRole('button', { name: '新建录制' }).first().isDisabled()).toBe(true)
+    expect(await page.getByRole('button', { name: '新录制', exact: true }).first().isDisabled()).toBe(true)
     await expect.poll(() => wss.clients.size).toBe(1)
     for (const client of wss.clients) client.send(JSON.stringify({ type: 'recording-completed', recordingId: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27', recording: { id: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27' } }))
     await expect.poll(() => page.locator('[data-title-input]').inputValue()).toBe('自动完成的录制')
-    expect(await page.getByRole('button', { name: '全部录制' }).isDisabled()).toBe(false)
+    expect(await page.getByRole('button', { name: '录制仓库', exact: true }).isDisabled()).toBe(false)
     await page.close()
   }, 15_000)
 
