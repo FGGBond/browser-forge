@@ -1,0 +1,84 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { chromium } from 'playwright'
+import { createServer } from 'http'
+import { readFileSync, statSync } from 'fs'
+import { extname, join } from 'path'
+
+let browser
+let server
+let baseUrl
+
+const contentTypes = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' }
+const recording = {
+  id: 'f4bf0a25-a468-45dc-a006-0f607ade0240',
+  title: '查询订单并导出发票',
+  state: 'active',
+  createdAt: '2026-08-09T09:32:00.000Z',
+  durationMs: 163000,
+  startHost: 'dongdev.jd.com',
+  visitedHosts: ['dongdev.jd.com', 'invoice.jd.com'],
+  videoStatus: 'complete',
+  promptStatus: 'draft',
+  sizeBytes: 1024
+}
+
+beforeAll(async () => {
+  browser = await chromium.launch()
+  server = createServer((req, res) => {
+    const url = new URL(req.url, 'http://localhost')
+    if (url.pathname === '/api/recordings') return json(res, { recordings: [recording] })
+    if (url.pathname.endsWith('/poster') || url.pathname.endsWith('/video')) {
+      res.statusCode = 404
+      return res.end()
+    }
+    serveUi(url.pathname, res)
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  baseUrl = `http://127.0.0.1:${server.address().port}`
+})
+
+afterAll(async () => {
+  await browser.close()
+  await new Promise(resolve => server.close(resolve))
+})
+
+describe('recording repository video-first layout', () => {
+  it.each([
+    { width: 1280, height: 800 },
+    { width: 900, height: 700 }
+  ])('keeps the $width px card video dominant with compact metadata below it', async viewport => {
+    const page = await browser.newPage({ viewport })
+    await page.goto(baseUrl, { waitUntil: 'networkidle' })
+    const row = page.locator('.recording-row').first()
+    await row.waitFor()
+
+    const rowBox = await row.boundingBox()
+    const videoBox = await row.locator('.repository-video').boundingBox()
+    const contentBox = await row.locator('.recording-row-content').boundingBox()
+
+    expect(videoBox.width / rowBox.width).toBeGreaterThan(.95)
+    expect(videoBox.y).toBeLessThan(contentBox.y)
+    expect(contentBox.height / videoBox.height).toBeLessThan(.35)
+    expect(await row.locator('.recording-row-meta').count()).toBe(0)
+    expect(await row.getByRole('button', { name: '去分析' }).count()).toBe(1)
+    await page.close()
+  })
+})
+
+function json(res, value) {
+  res.setHeader('content-type', 'application/json')
+  res.end(JSON.stringify(value))
+}
+
+function serveUi(pathname, res) {
+  const relative = pathname === '/' ? 'index.html' : pathname.slice(1)
+  const path = join(process.cwd(), 'ui', relative)
+  try {
+    if (!statSync(path).isFile()) throw new Error('not file')
+    res.setHeader('content-type', contentTypes[extname(path)] || 'application/octet-stream')
+    res.end(readFileSync(path))
+  } catch {
+    res.statusCode = 404
+    res.end('not found')
+  }
+}

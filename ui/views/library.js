@@ -114,15 +114,22 @@ function recordingRow(recording) {
       </div>
       <div class="recording-row-content">
         <div class="recording-row-heading">
-          <div class="recording-row-title"><h2>${escapeHtml(recording.title)}</h2><p>${escapeHtml(hosts.join(' · ') || '未知网站')}</p></div>
-          <span class="status-pill ${tone}"><i></i>${videoText}</span>
+          <div class="recording-row-title">
+            <h2>${escapeHtml(recording.title)}</h2>
+            <p>${escapeHtml(hosts.join(' · ') || '未知网站')}</p>
+            <div class="recording-row-summary" aria-label="录制信息">
+              <time datetime="${escapeAttribute(recording.createdAt)}">${formatDate(recording.createdAt)}</time>
+              <span aria-hidden="true">·</span>
+              <span>${formatDuration(recording.durationMs)}</span>
+              <span aria-hidden="true">·</span>
+              <span>${recording.promptStatus === 'draft' ? '已有分析说明' : '分析说明待补充'}</span>
+            </div>
+          </div>
         </div>
-        <dl class="recording-row-meta">
-          <div><dt>录制时间</dt><dd><time datetime="${escapeAttribute(recording.createdAt)}">${formatDate(recording.createdAt)}</time></dd></div>
-          <div><dt>时长</dt><dd>${formatDuration(recording.durationMs)}</dd></div>
-          <div><dt>分析说明</dt><dd>${recording.promptStatus === 'draft' ? '已有草稿' : '待补充'}</dd></div>
-        </dl>
-        <div class="recording-row-actions"><button class="button primary" type="button" data-analyze="${escapeAttribute(recording.id)}">去分析</button></div>
+        <div class="recording-row-actions">
+          <span class="status-pill ${tone}"><i></i>${videoText}</span>
+          <button class="button primary" type="button" data-analyze="${escapeAttribute(recording.id)}">去分析</button>
+        </div>
       </div>
     </article>`
 }
@@ -138,7 +145,7 @@ function formatDate(value) {
   return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
 }
 function emptyLibrary(query) { return `<div class="empty-list">${searchIcon()}<strong>${query ? '没有匹配的录制' : '还没有录制'}</strong><span>${query ? '试试录制名称、主站点或访问过的网站。' : '点击左上角“新录制”开始第一段浏览器操作。'}</span></div>` }
-function skeletonRows(count) { return Array.from({ length: count }, () => '<div class="recording-row skeleton"><div class="repository-video"></div><div class="recording-row-content"><i></i><i></i><i></i></div></div>').join('') }
+function skeletonRows(count) { return Array.from({ length: count }, () => '<div class="recording-row skeleton"><div class="repository-video"></div><div class="recording-row-content"><div><i></i><i></i></div><i></i></div></div>').join('') }
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]) }
 function escapeAttribute(value) { return escapeHtml(value) }
 function searchIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="4.5"/><path d="m12 12 4 4"/></svg>' }

@@ -26,12 +26,17 @@ describe('managed recording library UI foundation', () => {
     expect(source).toContain('formatDuration')
     expect(source).toContain('videoStatus')
     expect(source).toContain('startHost')
+    expect(source).toContain('recording-row-summary')
+    expect(source).not.toContain('<dl class="recording-row-meta">')
   })
 
   it('uses responsive repository rows without the old card/detail split', () => {
     const css = readUi('styles.css')
     expect(css).toContain('@media (max-width: 840px)')
     expect(css).toContain('.recording-row')
+    expect(css).toMatch(/\.recording-row\s*\{[^}]*grid-template-columns:\s*1fr/s)
+    expect(css).toMatch(/\.repository-video\s*\{[^}]*border-bottom:/s)
+    expect(css).not.toMatch(/\.recording-row-meta div\s*\{[^}]*background:/s)
     expect(css).toContain('prefers-reduced-motion: reduce')
   })
 })
