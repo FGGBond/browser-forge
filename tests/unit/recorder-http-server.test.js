@@ -763,7 +763,7 @@ describe('window video lifecycle', () => {
     expect(sessionOptions[0]).not.toHaveProperty('outputDir')
 
     const stopped = await fetch(`${url}/api/stop-recording`, { method: 'POST' }).then(response => response.json())
-    expect(generatePoster).toHaveBeenCalledWith(expect.objectContaining({ recordingDir: stagingPath }))
+    expect(generatePoster).toHaveBeenCalledWith(expect.objectContaining({ recordingDir: stagingPath, timeline: expect.any(Array) }))
     expect(recordingLibrary.promote).toHaveBeenCalledWith({ id, sessionDir: stagingPath, promptText: '查询订单状态' })
     expect(stopped).toEqual({ ok: true, recordingId: id, recording })
   })

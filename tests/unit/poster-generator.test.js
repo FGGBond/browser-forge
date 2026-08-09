@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { generatePoster } from '../../src/main/recorder/poster-generator.js'
+import { generatePoster, selectPosterOffset } from '../../src/main/recorder/poster-generator.js'
 
 let root
 let recordingDir
@@ -24,21 +24,49 @@ function successfulSpawn() {
 }
 
 describe('generatePoster', () => {
+
+  it('selects the first stable frame after an external navigation', () => {
+    expect(selectPosterOffset({
+      durationMs: 12_000,
+      timeline: [
+        { type: 'navigation', url: 'http://127.0.0.1:43123/recording-start.html', videoOffsetMs: 120 },
+        { type: 'click', videoOffsetMs: 900 },
+        { type: 'navigation', url: 'https://example.com/orders', videoOffsetMs: 3_000 },
+        { type: 'navigation', url: 'https://later.example/dashboard', videoOffsetMs: 5_000 }
+      ]
+    })).toBe(3_750)
+  })
+
+  it('ignores invalid navigation offsets and clamps the settled frame before video end', () => {
+    expect(selectPosterOffset({
+      durationMs: 4_000,
+      timeline: [
+        { type: 'navigation', url: 'https://invalid.example', videoOffsetMs: 'bad' },
+        { type: 'navigation', url: 'https://example.com', videoOffsetMs: 3_700 }
+      ]
+    })).toBe(3_900)
+  })
+
+  it('falls back to the early frame strategy without an external navigation', () => {
+    expect(selectPosterOffset({ durationMs: 3_000, timeline: [] })).toBe(600)
+    expect(selectPosterOffset({ durationMs: 42_000, timeline: [{ type: 'navigation', url: 'chrome://newtab/', videoOffsetMs: 0 }] })).toBe(1_000)
+  })
   it('uses the bundled frame tool at min(1000ms, 20% duration)', async () => {
     const spawn = vi.fn(successfulSpawn)
     const result = await generatePoster({
       recordingDir,
-      durationMs: 3000,
+      durationMs: 12_000,
+      timeline: [{ type: 'navigation', url: 'https://example.com/orders', videoOffsetMs: 3_000 }],
       nativeToolPathOptions: { platform: 'darwin', arch: 'arm64', packaged: true, resourcesPath: '/bundle' },
       spawn
     })
 
     expect(spawn).toHaveBeenCalledWith('/bundle/native-tools/bf-video-frame', [
       '--input', join(recordingDir, 'video', 'recording.mp4'),
-      '--offset-ms', '600',
+      '--offset-ms', '3750',
       '--output', join(recordingDir, 'video', 'poster.png')
     ], expect.objectContaining({ stdio: ['ignore', 'ignore', 'pipe'] }))
-    expect(result).toEqual({ status: 'complete', path: join(recordingDir, 'video', 'poster.png'), offsetMs: 600 })
+    expect(result).toEqual({ status: 'complete', path: join(recordingDir, 'video', 'poster.png'), offsetMs: 3750 })
   })
 
   it('caps poster extraction at 1000ms', async () => {

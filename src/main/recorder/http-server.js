@@ -4,7 +4,7 @@ import { createServer } from 'http'
 import { createReadStream } from 'fs'
 import { dirname, join } from 'path'
 import { homedir, tmpdir } from 'os'
-import { appendFile, mkdir, rm, writeFile } from 'fs/promises'
+import { appendFile, mkdir, readFile, rm, writeFile } from 'fs/promises'
 import open from 'open'
 import { findAvailablePort as defaultFindAvailablePort, findChromePath as defaultFindChromePath, launchChrome as defaultLaunchChrome, waitForChromeDebugEndpoint as defaultWaitForChromeDebugEndpoint } from '../chrome-launcher.js'
 import { RecordingSession as DefaultRecordingSession } from './index.js'
@@ -145,9 +145,14 @@ export function createRecorderHttpServer({
         let recording = null
         if (recordingLibrary && recordingId) {
           if (['complete', 'partial'].includes(video?.state)) {
+            const timeline = await readFile(join(sessionDir, 'timeline.json'), 'utf8')
+              .then(value => JSON.parse(value))
+              .then(value => Array.isArray(value) ? value : [])
+              .catch(() => [])
             await generatePoster({
               recordingDir: sessionDir,
               durationMs: video.durationMs ?? summary.duration_ms ?? 0,
+              timeline,
               nativeToolPathOptions
             }).catch(error => appendStartupLog(`posterGeneration=failed message=${error.message}`))
           }
