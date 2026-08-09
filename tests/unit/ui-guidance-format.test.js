@@ -32,7 +32,9 @@ describe('guidance Markdown format', () => {
   it('uses an explicit version sentinel while keeping stable readable headings', () => {
     const markdown = serializeGuidanceMarkdown({ actions: '打开订单详情' })
 
-    expect(markdown).toMatch(/^<!-- browser-forge-guidance:v1 -->\n/)
+    expect(markdown).toMatch(
+      /^<!-- browser-forge-guidance:v2 actions=6 capability=0 acceptance=0 -->\n/
+    )
     for (const heading of Object.values(GUIDANCE_HEADINGS)) {
       expect(markdown).toContain(`## ${heading}`)
     }
@@ -86,6 +88,83 @@ describe('guidance Markdown format', () => {
     })
   })
 
+  it('round-trips a complete previous marker frame inside a fenced Markdown example', () => {
+    const embeddedFrame = [
+      '下面是需要原样保留的格式示例：',
+      '',
+      '```markdown',
+      '<!-- browser-forge-guidance:v1 -->',
+      '',
+      '<!-- browser-forge-guidance:actions:start -->',
+      '## 本次录制中的动作与意图',
+      '',
+      '示例动作',
+      '<!-- browser-forge-guidance:actions:end -->',
+      '',
+      '<!-- browser-forge-guidance:capability:start -->',
+      '## 希望提取的 skill 能力',
+      '',
+      '示例能力',
+      '<!-- browser-forge-guidance:capability:end -->',
+      '',
+      '<!-- browser-forge-guidance:acceptance:start -->',
+      '## Skill 验收标准',
+      '',
+      '示例验收',
+      '<!-- browser-forge-guidance:acceptance:end -->',
+      '',
+      '<!-- /browser-forge-guidance -->',
+      '```',
+      '',
+      '示例后的正文也必须保留。'
+    ].join('\n')
+    const fields = {
+      actions: embeddedFrame,
+      capability: '真实能力',
+      acceptance: '真实验收标准'
+    }
+
+    expect(parseGuidanceMarkdown(serializeGuidanceMarkdown(fields))).toEqual({
+      ...fields,
+      legacy: false
+    })
+  })
+
+  it('preserves leading indented code and trailing Markdown whitespace exactly', () => {
+    const fields = {
+      actions: '    const order = await findOrder()\n    return order.status',
+      capability: '\n先保留开头空行，再描述能力。\n',
+      acceptance: '第一行使用 Markdown hard break。  \n\n尾部空白也属于正文。\t  \n'
+    }
+
+    expect(parseGuidanceMarkdown(serializeGuidanceMarkdown(fields))).toEqual({
+      ...fields,
+      legacy: false
+    })
+  })
+
+  it('uses normalized LF JavaScript string lengths for multibyte and emoji content', () => {
+    const input = {
+      actions: '😀',
+      capability: '汉\r\n字',
+      acceptance: 'é🚀'
+    }
+    const normalized = {
+      actions: '😀',
+      capability: '汉\n字',
+      acceptance: 'é🚀'
+    }
+    const markdown = serializeGuidanceMarkdown(input)
+
+    expect(markdown).toMatch(
+      /^<!-- browser-forge-guidance:v2 actions=2 capability=3 acceptance=3 -->\n/
+    )
+    expect(parseGuidanceMarkdown(markdown)).toEqual({
+      ...normalized,
+      legacy: false
+    })
+  })
+
   it('keeps legacy free-form guidance losslessly in actions', () => {
     const legacy = '旧版自由文本\n\n- 保留 Markdown\n- 保留换行'
 
@@ -120,13 +199,12 @@ describe('guidance Markdown format', () => {
     })
   })
 
-  it('treats a sentinel with an incomplete structure as lossless legacy text', () => {
-    const legacy = [
-      '<!-- browser-forge-guidance:v1 -->',
-      '这是碰巧出现 sentinel 的旧文本。',
-      '## 本次录制中的动作与意图',
-      '仍需全文保留。'
-    ].join('\n')
+  it('treats a length-prefixed sentinel with an invalid structure as lossless legacy text', () => {
+    const legacy = serializeGuidanceMarkdown({
+      actions: '必须全文保留',
+      capability: '不能错分',
+      acceptance: '不能截断'
+    }).replace('actions=6', 'actions=5')
 
     expect(parseGuidanceMarkdown(legacy)).toEqual({
       actions: legacy,
