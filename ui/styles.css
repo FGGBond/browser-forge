@@ -397,17 +397,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px 
 @media (max-width:600px) { .recording-repository { gap:16px; }.repository-video { padding:7px; }.recording-row-content { min-height:0; padding:13px; grid-template-columns:1fr; gap:12px; }.recording-row-actions { width:100%; justify-content:space-between; }.recording-row-actions .button { min-width:96px; }.recording-row-title h2 { font-size:15px; }.recording-row-summary { gap:3px 6px; } }
 
 /* Recording analysis workspace */
-
-.analysis-workspace { min-height:100vh; display:grid; grid-template-columns:minmax(0,1fr) 0; background:var(--bg); transition:grid-template-columns .2s ease-out; }
-.analysis-workspace.analysis-pane-open { grid-template-columns:minmax(0,1fr) minmax(320px,380px); }
+.analysis-workspace { min-height:100vh; position:relative; background:var(--bg); }
 .analysis-main { min-width:0; padding:34px clamp(24px,4vw,56px) 56px; }
 .analysis-main .detail-header { max-width:1200px; margin:0 auto 24px; }
+.analysis-main .detail-heading { width:100%; }
+.analysis-main .detail-heading p { flex-wrap:wrap; line-height:1.5; }
 .analysis-video-card { max-width:1200px; margin:0 auto; padding:10px; border:1px solid var(--line); border-radius:18px; background:var(--surface); box-shadow:var(--shadow-sm); }
 .analysis-video-card .bf-player { aspect-ratio:16/10; }
-.analysis-video-card footer { padding:10px 5px 2px; display:flex; align-items:center; justify-content:space-between; gap:18px; color:var(--muted); font-size:11px; }
-.analysis-video-card footer span { color:var(--text); font-weight:600; }
-.analysis-pane { min-width:0; height:100vh; position:sticky; top:0; overflow:auto; border-left:1px solid var(--line); background:var(--surface-solid); }
-.analysis-pane[hidden] { display:none; }
+.analysis-backdrop { position:fixed; z-index:29; inset:0; border:0; opacity:0; visibility:hidden; pointer-events:none; background:rgba(10,10,9,.28); backdrop-filter:blur(2px); transition:opacity 170ms cubic-bezier(.4,0,.2,1),visibility 0s linear 170ms; }
+.analysis-pane { position:fixed; z-index:30; top:0; right:0; bottom:0; width:min(390px,calc(100vw - 32px)); min-width:0; height:100vh; overflow:auto; border-left:1px solid var(--line); background:var(--surface-solid); box-shadow:-24px 0 70px rgba(0,0,0,.24); opacity:0; visibility:hidden; pointer-events:none; transform:translateX(calc(100% + 28px)); transition:transform 170ms cubic-bezier(.4,0,.2,1),opacity 140ms cubic-bezier(.4,0,.2,1),visibility 0s linear 170ms; will-change:transform,opacity; }
+.analysis-workspace.analysis-pane-open .analysis-backdrop { opacity:1; visibility:visible; pointer-events:auto; transition:opacity 200ms ease-out,visibility 0s; }
+.analysis-workspace.analysis-pane-open .analysis-pane { opacity:1; visibility:visible; pointer-events:auto; transform:translateX(0); transition:transform 240ms cubic-bezier(.2,.8,.2,1),opacity 180ms ease-out,visibility 0s; }
 .analysis-session-header { min-height:76px; padding:18px 18px 14px; display:flex; align-items:flex-start; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); }
 .analysis-session-header .eyebrow { margin-bottom:4px; }
 .analysis-session-header h2 { margin:0; font-size:16px; }
@@ -419,15 +419,5 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px 
 .analysis-prompt { padding:4px 16px 24px; }
 .analysis-prompt .prompt-textarea { min-height:300px; }
 .analysis-prompt .prompt-actions { grid-template-columns:1fr; }
-@media (max-width:1050px) {
-  .analysis-workspace.analysis-pane-open { grid-template-columns:minmax(0,1fr); }
-  .analysis-pane { position:fixed; z-index:30; top:0; right:0; bottom:0; width:min(390px,calc(100vw - 32px)); height:100vh; box-shadow:-24px 0 70px rgba(0,0,0,.24); }
-}
-@media (max-width:700px) { .analysis-main { padding:22px 14px 40px; }.analysis-main .detail-header { align-items:stretch; }.analysis-video-card footer { align-items:flex-start; flex-direction:column; gap:4px; }.analysis-pane { width:100vw; } }
-
-/* Keep the detail header readable while the analysis pane is open. */
-.analysis-main .detail-heading { width:100%; }
-.analysis-main .detail-heading p { flex-wrap:wrap; line-height:1.5; }
-.analysis-workspace.analysis-pane-open .detail-header { align-items:flex-start; flex-direction:column; }
-.analysis-workspace.analysis-pane-open .detail-actions { width:100%; flex-wrap:wrap; }
-.analysis-workspace.analysis-pane-open .detail-actions .button { flex:1 1 auto; }
+@media (max-width:700px) { .analysis-main { padding:22px 14px 40px; }.analysis-main .detail-header { align-items:stretch; }.analysis-pane { width:100vw; }.analysis-backdrop { display:none; } }
+@media (prefers-reduced-motion: reduce) { .analysis-pane,.analysis-workspace.analysis-pane-open .analysis-pane { transform:none; transition:opacity 120ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 120ms; }.analysis-workspace.analysis-pane-open .analysis-pane { transition:opacity 120ms cubic-bezier(.2,.8,.2,1),visibility 0s; }.analysis-backdrop { transition:opacity 120ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 120ms; }.analysis-workspace.analysis-pane-open .analysis-backdrop { transition:opacity 120ms cubic-bezier(.2,.8,.2,1),visibility 0s; } }

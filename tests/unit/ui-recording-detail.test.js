@@ -44,10 +44,13 @@ beforeAll(async () => {
 afterAll(async () => { await browser.close(); await new Promise(resolve => server.close(resolve)) })
 
 describe('recording detail UI', () => {
-  it('stacks detail actions when the analysis pane narrows the main workspace', () => {
+  it('defines an overlay analysis sheet with asymmetric, reduced-motion-safe transitions', () => {
     const css = readFileSync(join(process.cwd(), 'ui', 'styles.css'), 'utf8')
-    expect(css).toContain('.analysis-workspace.analysis-pane-open .detail-header')
-    expect(css).toContain('.analysis-main .detail-heading { width:100%; }')
+    expect(css).toMatch(/\.analysis-pane \{[^}]*position:fixed[^}]*transform:translateX/s)
+    expect(css).toContain('transform 170ms')
+    expect(css).toContain('transform 240ms')
+    expect(css).toMatch(/prefers-reduced-motion: reduce[^}]*\.analysis-pane/s)
+    expect(css).not.toContain('grid-template-columns:minmax(0,1fr) minmax(320px,380px)')
   })
 
   it('shows a private video workspace and collapsible Agent-ready analysis pane without internal materials', async () => {
@@ -63,14 +66,33 @@ describe('recording detail UI', () => {
     expect(await page.getByText('录制物料', { exact: true }).count()).toBe(0)
     expect(await page.getByText('关键事件', { exact: true }).count()).toBe(0)
     expect(requests.some(item => item.path.endsWith('/timeline'))).toBe(false)
+    expect(await page.getByText('Chrome 窗口视频', { exact: true }).count()).toBe(0)
+    expect(await page.getByText('支持前后跳转、倍速和全屏。', { exact: true }).count()).toBe(0)
+    expect(await page.getByText('视频完整', { exact: true }).count()).toBe(0)
+    expect(await page.getByText('00:42', { exact: true }).count()).toBe(0)
+
     const pane = page.locator('[data-analysis-pane]')
-    await pane.waitFor()
+    const toggle = page.locator('[data-toggle-analysis]')
+    expect(await toggle.getByText('去分析', { exact: true }).count()).toBe(1)
+    expect(await pane.getAttribute('aria-hidden')).toBe('true')
+    expect(await pane.isHidden()).toBe(true)
+
+    await toggle.click()
+    await pane.waitFor({ state: 'visible' })
+    expect(await pane.getAttribute('aria-hidden')).toBe('false')
     expect(await pane.getByText('Agent 尚未配置', { exact: true }).count()).toBe(1)
     expect(await page.locator('[data-prompt-textarea]').count()).toBe(1)
-    await page.locator('[data-close-analysis]').click()
-    expect(await pane.isHidden()).toBe(true)
-    await page.locator('[data-toggle-analysis]').click()
-    expect(await pane.isVisible()).toBe(true)
+    await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-close-analysis]'))).toBe(true)
+
+    await page.keyboard.press('Escape')
+    await expect.poll(() => pane.getAttribute('aria-hidden')).toBe('true')
+    await expect.poll(() => pane.isHidden()).toBe(true)
+    await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-toggle-analysis]'))).toBe(true)
+
+    await toggle.click()
+    await pane.waitFor({ state: 'visible' })
+    await page.locator('[data-analysis-backdrop]').click({ position: { x: 10, y: 10 } })
+    await expect.poll(() => pane.isHidden()).toBe(true)
     await page.close()
   })
 

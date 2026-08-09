@@ -14,7 +14,7 @@ const state = createState({
   selectedId: null,
   activeRecording: null,
   sidebarCollapsed: readSidebarCollapsed(),
-  analysisPaneOpen: true
+  analysisPaneOpen: false
 })
 
 const root = document.getElementById('app')

@@ -1,5 +1,4 @@
 import { renderPromptEditor } from './prompt-editor.js'
-import { formatDuration } from './library.js'
 import { mountVideoPlayer } from './video-player.js'
 
 export async function renderDetail({
@@ -8,7 +7,7 @@ export async function renderDetail({
   recordingId,
   onBack,
   onTrashed,
-  analysisPaneOpen = true,
+  analysisPaneOpen = false,
   onAnalysisPaneChange = () => {}
 }) {
   container.innerHTML = `<section class="detail-loading"><div class="loading-ring"></div><span>正在读取录制…</span></section>`
@@ -26,22 +25,35 @@ export async function renderDetail({
     const titleInput = container.querySelector('[data-title-input]')
     const workspace = container.querySelector('[data-analysis-workspace]')
     const pane = container.querySelector('[data-analysis-pane]')
+    const backdrop = container.querySelector('[data-analysis-backdrop]')
     const togglePane = container.querySelector('[data-toggle-analysis]')
+    const closePane = container.querySelector('[data-close-analysis]')
     let savedTitle = recording.title
     let renaming = false
 
-    const setPaneOpen = open => {
+    const isPaneOpen = () => workspace.classList.contains('analysis-pane-open')
+    const setPaneOpen = (open, { restoreFocus = true } = {}) => {
       const next = Boolean(open)
-      pane.hidden = !next
       workspace.classList.toggle('analysis-pane-open', next)
+      pane.setAttribute('aria-hidden', String(!next))
+      pane.inert = !next
+      backdrop.setAttribute('aria-hidden', String(!next))
       togglePane.setAttribute('aria-expanded', String(next))
-      togglePane.querySelector('span').textContent = next ? '收起分析' : '打开分析'
+      togglePane.querySelector('span').textContent = next ? '收起分析' : '去分析'
       onAnalysisPaneChange(next)
+      if (next) closePane.focus({ preventScroll: true })
+      else if (restoreFocus) togglePane.focus({ preventScroll: true })
+    }
+    const onDocumentKeyDown = event => {
+      if (event.key !== 'Escape' || !isPaneOpen()) return
+      event.preventDefault()
+      setPaneOpen(false)
     }
 
     container.querySelector('[data-back]').addEventListener('click', onBack)
-    togglePane.addEventListener('click', () => setPaneOpen(pane.hidden))
-    container.querySelector('[data-close-analysis]').addEventListener('click', () => setPaneOpen(false))
+    togglePane.addEventListener('click', () => setPaneOpen(!isPaneOpen()))
+    closePane.addEventListener('click', () => setPaneOpen(false))
+    backdrop.addEventListener('click', () => setPaneOpen(false))
 
     const commitTitle = async () => {
       const next = titleInput.value.trim()
@@ -66,10 +78,11 @@ export async function renderDetail({
     titleInput.addEventListener('blur', commitTitle)
     titleInput.addEventListener('keydown', event => {
       if (event.key === 'Enter') { event.preventDefault(); commitTitle() }
-      if (event.key === 'Escape') { event.preventDefault(); titleInput.value = savedTitle; titleInput.blur() }
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); titleInput.value = savedTitle; titleInput.blur() }
     })
 
     const promptController = await renderPromptEditor({ container: container.querySelector('[data-prompt-slot]'), recordingId: recording.id, api })
+    document.addEventListener('keydown', onDocumentKeyDown)
 
     container.querySelector('[data-export]').addEventListener('click', async event => {
       const button = event.currentTarget
@@ -102,7 +115,7 @@ export async function renderDetail({
     return {
       recording,
       beforeNavigate: promptController.beforeNavigate,
-      cleanup: () => { playerController?.destroy(); promptController.destroy() }
+      cleanup: () => { document.removeEventListener('keydown', onDocumentKeyDown); playerController?.destroy(); promptController.destroy() }
     }
   } catch (error) {
     container.innerHTML = `<section class="narrow-view"><button class="back-button" data-back>返回录制仓库</button><div class="inline-error"><strong>无法打开录制</strong><span>${escapeHtml(error.message)}</span></div></section>`
@@ -121,10 +134,10 @@ function detailMarkup(recording, analysisPaneOpen) {
           <div class="detail-heading">
             <button class="back-button" type="button" data-back>${backIcon()}<span>录制仓库</span></button>
             <input class="detail-title-input" data-title-input value="${escapeAttribute(recording.title)}" maxlength="120" aria-label="录制名称">
-            <p><span>${escapeHtml(visitedHosts.join(' · ') || '未知网站')}</span><span>·</span><time>${formatDate(recording.createdAt)}</time><span>·</span><span>${formatDuration(recording.durationMs)}</span><span>·</span><span>${videoStatusLabel(recording.videoStatus)}</span></p>
+            <p><span>${escapeHtml(visitedHosts.join(' · ') || '未知网站')}</span><span>·</span><time>${formatDate(recording.createdAt)}</time></p>
           </div>
           <div class="detail-actions">
-            <button class="button" type="button" data-toggle-analysis aria-expanded="${analysisPaneOpen}">${analysisIcon()}<span>${analysisPaneOpen ? '收起分析' : '打开分析'}</span></button>
+            <button class="button" type="button" data-toggle-analysis aria-expanded="${analysisPaneOpen}">${analysisIcon()}<span>${analysisPaneOpen ? '收起分析' : '去分析'}</span></button>
             <button class="button" type="button" data-export>${exportIcon()}<span>导出</span></button>
             <button class="button danger quiet" type="button" data-trash>${trashIcon()}<span>移入回收站</span></button>
           </div>
@@ -132,10 +145,10 @@ function detailMarkup(recording, analysisPaneOpen) {
         <div class="notice-stack" data-notices></div>
         <section class="analysis-video-card">
           ${playable ? '<div data-video-player-slot></div>' : videoUnavailable(recording.videoStatus)}
-          <footer><span>${playable ? 'Chrome 窗口视频' : '视频不可用'}</span><small>${recording.videoStatus === 'partial' ? '这是部分录制，播放器会显示实际可用范围。' : '支持前后跳转、倍速和全屏。'}</small></footer>
         </section>
       </main>
-      <aside class="analysis-pane" data-analysis-pane ${analysisPaneOpen ? '' : 'hidden'} aria-label="分析会话">
+      <button class="analysis-backdrop" type="button" data-analysis-backdrop aria-label="关闭分析栏" aria-hidden="${!analysisPaneOpen}" tabindex="-1"></button>
+      <aside class="analysis-pane" data-analysis-pane aria-hidden="${!analysisPaneOpen}" ${analysisPaneOpen ? '' : 'inert'} aria-label="分析会话">
         <header class="analysis-session-header"><div><p class="eyebrow">Analysis session</p><h2>分析会话</h2></div><button class="icon-button" type="button" data-close-analysis aria-label="关闭分析栏">${closeIcon()}</button></header>
         <section class="agent-unconfigured"><span>${sparkIcon()}</span><div><strong>Agent 尚未配置</strong><p>你仍可对照视频编辑说明，并把完整提示词复制到外部 Agent。</p></div></section>
         <section class="analysis-prompt" data-prompt-slot></section>
@@ -145,7 +158,6 @@ function detailMarkup(recording, analysisPaneOpen) {
 
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '时间未知' : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date) }
 export function formatBytes(value) { const bytes = Number(value); if (!Number.isFinite(bytes) || bytes < 0) return '计算中'; if (bytes < 1024) return `${bytes} B`; if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`; if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`; return `${(bytes / 1024 ** 3).toFixed(1)} GB` }
-function videoStatusLabel(status) { return ({ complete: '视频完整', partial: '视频部分可用', failed: '视频录制失败', unavailable: '未生成视频' })[status] || status }
 function videoUnavailable(status) { return `<div class="video-unavailable">${videoOffIcon()}<strong>${status === 'failed' ? '视频录制失败' : '没有可播放视频'}</strong><span>可以保留这段录制，稍后补充分析说明或重新录制。</span></div>` }
 function showNotice(container, message, tone) { const stack = container.querySelector('[data-notices]'); const notice = document.createElement('div'); notice.className = `notice ${tone}`; notice.textContent = message; stack.append(notice); setTimeout(() => notice.remove(), 5000) }
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]) }
