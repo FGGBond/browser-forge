@@ -1,3 +1,5 @@
+import { renderSafeMarkdown } from '../safe-markdown.js'
+
 const TOOLBAR = ['bold', 'italic', 'unordered-list', 'ordered-list', 'link', 'preview']
 
 const TOOLBAR_PRESENTATION = [
@@ -14,15 +16,26 @@ function mountTextareaFallback({ textarea, onChange }) {
   textarea.removeAttribute?.('hidden')
   if (textarea.style) textarea.style.display = ''
 
-  const handleInput = () => onChange(textarea.value)
+  let destroyed = false
+  const handleInput = () => {
+    if (!destroyed) onChange(textarea.value)
+  }
   textarea.addEventListener('input', handleInput)
 
   return {
     kind: 'textarea',
     getValue: () => textarea.value,
-    setValue: value => { textarea.value = value },
-    focus: () => textarea.focus(),
-    destroy: () => textarea.removeEventListener('input', handleInput)
+    setValue: value => {
+      if (!destroyed) textarea.value = value
+    },
+    focus: () => {
+      if (!destroyed) textarea.focus()
+    },
+    destroy: () => {
+      if (destroyed) return
+      destroyed = true
+      textarea.removeEventListener('input', handleInput)
+    }
   }
 }
 
@@ -34,6 +47,7 @@ function labelToolbar(instance) {
     button.textContent = presentation.mark
     button.setAttribute('aria-label', presentation.label)
     button.setAttribute('title', presentation.label)
+    button.tabIndex = 0
   })
 }
 
@@ -61,17 +75,39 @@ export function mountMarkdownEditor({
       status: false,
       toolbar: TOOLBAR,
       autoDownloadFontAwesome: false,
-      minHeight: '220px'
+      minHeight: '220px',
+      previewRender: renderSafeMarkdown
     })
     labelToolbar(instance)
-    instance.codemirror.on('change', () => onChange(instance.value()))
+
+    let destroyed = false
+    let silentUpdate = false
+    const handleChange = () => {
+      if (!destroyed && !silentUpdate) onChange(instance.value())
+    }
+    instance.codemirror.on('change', handleChange)
 
     return {
       kind: 'easymde',
       getValue: () => instance.value(),
-      setValue: value => instance.value(value),
-      focus: () => instance.codemirror.focus(),
-      destroy: () => instance.toTextArea()
+      setValue: value => {
+        if (destroyed) return
+        silentUpdate = true
+        try {
+          instance.value(value)
+        } finally {
+          silentUpdate = false
+        }
+      },
+      focus: () => {
+        if (!destroyed) instance.codemirror.focus()
+      },
+      destroy: () => {
+        if (destroyed) return
+        destroyed = true
+        instance.codemirror.off('change', handleChange)
+        instance.toTextArea()
+      }
     }
   } catch {
     return mountTextareaFallback({ textarea, onChange })

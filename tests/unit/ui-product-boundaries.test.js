@@ -39,4 +39,27 @@ describe('recording workspace product boundaries', () => {
     expect(readUi('views/detail.js')).toContain('Agent 尚未配置')
     expect(readUi('views/detail.js')).toContain('data-analysis-pane')
   })
+
+  it('locks the local UI to same-origin resources with a strict CSP', () => {
+    const index = readUi('index.html')
+    const csp = index.match(/<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"/i)?.[1]
+
+    expect(csp).toBeTruthy()
+    expect(csp).toContain("default-src 'none'")
+    expect(csp).toContain("script-src 'self'")
+    expect(csp).not.toMatch(/script-src[^;]*'unsafe-(?:inline|eval)'/)
+    expect(csp).toContain("connect-src 'self'")
+    expect(csp).toContain("img-src 'self'")
+    expect(csp).toContain("media-src 'self' blob:")
+    expect(csp).toContain("object-src 'none'")
+    expect(csp).toContain("frame-src 'none'")
+    expect(csp).toContain("base-uri 'none'")
+
+    const resourceUrls = [...index.matchAll(/(?:src|href)=["']([^"']+)["']/gi)].map(match => match[1])
+    expect(resourceUrls.length).toBeGreaterThan(0)
+    expect(resourceUrls.every(url => url.startsWith('/') && !url.startsWith('//'))).toBe(true)
+    expect(index).not.toMatch(/<(?:script|link)[^>]+(?:https?:|data:|file:|\/\/)/i)
+    expect(index).not.toMatch(/<script(?![^>]+\bsrc=)[^>]*>\s*[^<]/i)
+  })
+
 })
