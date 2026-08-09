@@ -44,6 +44,23 @@ afterAll(async () => {
 
 describe('recording repository video-first layout', () => {
   it.each([
+    { width: 640, height: 760, collapsed: false },
+    { width: 640, height: 760, collapsed: true },
+    { width: 520, height: 760, collapsed: false },
+    { width: 520, height: 760, collapsed: true }
+  ])('keeps $width px library and new-recording views inside the viewport when collapsed=$collapsed', async ({ width, height, collapsed }) => {
+    const page = await browser.newPage({ viewport: { width, height } })
+    await page.addInitScript(value => localStorage.setItem('browser-forge.sidebar-collapsed', String(value)), collapsed)
+    await page.goto(baseUrl, { waitUntil: 'networkidle' })
+
+    await expectMobileShell(page, width)
+    await page.getByRole('button', { name: '新录制', exact: true }).first().click()
+    await page.locator('.goal-composer').waitFor()
+    await expectMobileShell(page, width)
+    await page.close()
+  })
+
+  it.each([
     { width: 1280, height: 800 },
     { width: 900, height: 700 }
   ])('keeps the $width px card video dominant with compact metadata below it', async viewport => {
@@ -64,6 +81,29 @@ describe('recording repository video-first layout', () => {
     await page.close()
   })
 })
+
+async function expectMobileShell(page, width) {
+  const metrics = await page.evaluate(() => {
+    const shell = document.querySelector('.app-shell')
+    const sidebar = document.querySelector('.app-sidebar')
+    const recent = document.querySelector('.sidebar-recording-section')
+    const toggle = document.querySelector('.sidebar-toggle')
+    return {
+      viewportWidth: window.innerWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+      shellColumns: getComputedStyle(shell).gridTemplateColumns,
+      sidebarWidth: sidebar.getBoundingClientRect().width,
+      recentDisplay: getComputedStyle(recent).display,
+      toggleWidth: toggle.getBoundingClientRect().width
+    }
+  })
+  expect(metrics.viewportWidth).toBe(width)
+  expect(metrics.scrollWidth).toBeLessThanOrEqual(width)
+  expect(metrics.shellColumns.split(' ')).toHaveLength(1)
+  expect(metrics.sidebarWidth).toBeLessThanOrEqual(width)
+  expect(metrics.recentDisplay).toBe('none')
+  expect(metrics.toggleWidth).toBeLessThanOrEqual(40)
+}
 
 function json(res, value) {
   res.setHeader('content-type', 'application/json')
