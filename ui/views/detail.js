@@ -7,6 +7,7 @@ export async function renderDetail({
   recordingId,
   onBack,
   onTrashed,
+  onRecordingUpdated = () => {},
   analysisPaneOpen = false,
   onAnalysisPaneChange = () => {}
 }) {
@@ -67,6 +68,7 @@ export async function renderDetail({
         const updated = await api.renameRecording(recording.id, next)
         savedTitle = updated.title
         titleInput.value = savedTitle
+        onRecordingUpdated(updated)
       } catch (error) {
         titleInput.value = savedTitle
         showNotice(container, error.message, 'error')

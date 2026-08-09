@@ -17,6 +17,20 @@ const state = createState({
   analysisPaneOpen: false
 })
 
+export function upsertRecording(recordings = [], recording) {
+  if (!recording?.id) return recordings
+  const previous = recordings.find(item => item.id === recording.id)
+  const next = { ...previous, ...recording }
+  const remaining = recordings.filter(item => item.id !== recording.id)
+  if (next.state && next.state !== 'active') return remaining
+  return [next, ...remaining].sort((left, right) => recordingTime(right) - recordingTime(left))
+}
+
+function recordingTime(recording) {
+  const value = Date.parse(recording?.createdAt || '')
+  return Number.isNaN(value) ? 0 : value
+}
+
 const root = document.getElementById('app')
 const isElectron = new URLSearchParams(location.search).get('shell') === 'electron'
 document.body.classList.toggle('shell-electron', isElectron)
@@ -89,9 +103,16 @@ export async function navigate(route, patch = {}, { force = false } = {}) {
         container: main,
         api,
         activeRecording: state.value.activeRecording,
-        onStopped: result => result.recordingId
-          ? navigate('detail', { selectedId: result.recordingId }, { force: true })
-          : navigate('library', {}, { force: true }),
+        onStopped: async result => {
+          let recording = result.recording
+          if (!recording?.title && result.recordingId) {
+            try { recording = await api.getRecording(result.recordingId) } catch {}
+          }
+          if (recording?.id) state.update(value => ({ recordings: upsertRecording(value.recordings, recording) }))
+          return result.recordingId
+            ? navigate('detail', { selectedId: result.recordingId }, { force: true })
+            : navigate('library', {}, { force: true })
+        },
         onCancel: () => navigate('library', {}, { force: true })
       })
       cleanupView = controller.cleanup
@@ -105,6 +126,7 @@ export async function navigate(route, patch = {}, { force = false } = {}) {
         recordingId: state.value.selectedId,
         analysisPaneOpen: state.value.analysisPaneOpen,
         onAnalysisPaneChange: analysisPaneOpen => state.update({ analysisPaneOpen }),
+        onRecordingUpdated: recording => state.update(value => ({ recordings: upsertRecording(value.recordings, recording) })),
         onBack: () => navigate('library'),
         onTrashed: async recording => { showUndoToast(recording); await navigate('library', {}, { force: true }) }
       })

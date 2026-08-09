@@ -11,7 +11,7 @@ const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
 const createdAt = '2026-08-08T12:15:00.000Z'
 
 describe('recording metadata', () => {
-  it('derives the first meaningful website host and ignores Browser Forge pages', () => {
+  it('uses a stable date-and-time title while ignoring website hosts', () => {
     expect(deriveDefaultTitle({
       timeline: [
         { type: 'navigation', url: 'http://127.0.0.1:43123/?shell=electron' },
@@ -21,11 +21,11 @@ describe('recording metadata', () => {
       createdAt,
       locale: 'zh-CN',
       timeZone: 'Asia/Shanghai'
-    })).toMatch(/^example\.com · 8月8日 20:15$/)
+    })).toBe('Recording-8月8日20:15')
   })
 
-  it('uses 未命名录制 when no meaningful host exists', () => {
-    expect(deriveDefaultTitle({ timeline: [], createdAt, locale: 'zh-CN', timeZone: 'Asia/Shanghai' })).toMatch(/^未命名录制 · /)
+  it('uses the same date title when no meaningful host exists', () => {
+    expect(deriveDefaultTitle({ timeline: [], createdAt, locale: 'zh-CN', timeZone: 'Asia/Shanghai' })).toBe('Recording-8月8日20:15')
   })
 
   it('creates portable schema v1 metadata and a list-only projection', () => {
@@ -48,7 +48,7 @@ describe('recording metadata', () => {
     expect(metadata).toMatchObject({
       schemaVersion: 1,
       id,
-      title: 'example.com · 8月8日 20:15',
+      title: 'Recording-8月8日20:15',
       state: 'active',
       trashedAt: null,
       capture: { status: 'complete', durationMs: 42_000, visitedHosts: ['example.com', 'admin.example.net'] },

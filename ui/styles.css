@@ -281,11 +281,10 @@ h1, h2, p { margin-top: 0; }
 .sidebar-recording, .sidebar-toggle { width:100%; border:0; border-radius:9px; background:transparent; color:var(--muted); cursor:pointer; }
 .sidebar-recording { min-width:0; padding:7px 9px; display:flex; align-items:center; gap:9px; text-align:left; }
 .sidebar-recording.active { color:var(--text); background:var(--surface); }
-.recording-glyph { width:24px; height:24px; display:grid; flex:none; place-items:center; border:1px solid var(--line); border-radius:7px; background:var(--surface-solid); color:var(--muted); font-size:10px; font-weight:700; }
+.recording-folder { width:20px; height:20px; display:grid; flex:none; place-items:center; color:var(--muted); }.recording-folder svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.45; stroke-linecap:round; stroke-linejoin:round; }.sidebar-recording.active .recording-folder { color:var(--accent); }
 .recording-nav-copy { min-width:0; }
-.recording-nav-copy strong, .recording-nav-copy small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.recording-nav-copy strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .recording-nav-copy strong { color:inherit; font-size:11px; font-weight:600; }
-.recording-nav-copy small { margin-top:2px; color:var(--subtle); font-size:9px; }
 .sidebar-empty { margin:3px 10px; color:var(--subtle); font-size:10px; line-height:1.5; }
 .secondary-nav { margin-top:12px; }
 .sidebar-toggle { min-height:34px; padding:7px 9px; display:flex; align-items:center; gap:10px; text-align:left; }

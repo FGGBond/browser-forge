@@ -194,7 +194,7 @@ describe('RecordingLibrary reads and mutations', () => {
 
     const detail = await library.promote({ id: stagedId, sessionDir: staging.path, promptText: '  查询订单状态  ' })
 
-    expect(detail).toMatchObject({ id: stagedId, state: 'active', title: expect.stringContaining('example.com') })
+    expect(detail).toMatchObject({ id: stagedId, state: 'active', title: 'Recording-8月8日20:15' })
     expect(detail.metadata.capture).toMatchObject({ status: 'complete', durationMs: 12_345 })
     expect(detail.metadata.video.status).toBe('partial')
     expect(detail.promptStatus).toBe('draft')

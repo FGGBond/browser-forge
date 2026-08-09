@@ -47,12 +47,12 @@ function localizedTimestamp(createdAt, locale, timeZone) {
     timeZone
   }).formatToParts(new Date(createdAt))
   const values = Object.fromEntries(parts.map(part => [part.type, part.value]))
-  return `${Number(values.month)}月${Number(values.day)}日 ${values.hour}:${values.minute}`
+  return `${Number(values.month)}月${Number(values.day)}日${values.hour}:${values.minute}`
 }
 
-export function deriveDefaultTitle({ timeline = [], createdAt, locale = 'zh-CN', timeZone } = {}) {
+export function deriveDefaultTitle({ createdAt, locale = 'zh-CN', timeZone } = {}) {
   const timestamp = localizedTimestamp(asIsoDate(createdAt, 'createdAt'), locale, timeZone)
-  return `${deriveStartHost(timeline) || '未命名录制'} · ${timestamp}`
+  return `Recording-${timestamp}`
 }
 
 export function createRecordingMetadata({

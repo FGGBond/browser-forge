@@ -31,6 +31,10 @@ describe('recording workspace shell', () => {
     expect(source).toContain('data-sidebar-toggle')
     expect(source).toContain('browser-forge.sidebar-collapsed')
     expect(source).toContain('data-recording-nav')
+    expect(source).toContain('data-recording-folder')
+    expect(source).toContain("active ? 'open' : 'closed'")
+    expect(source).not.toContain('site.slice(0, 1)')
+    expect(source).not.toContain('<small>${escapeHtml(site)}</small>')
   })
 
   it('collapses nonessential sidebar content into a clean mobile toolbar', () => {

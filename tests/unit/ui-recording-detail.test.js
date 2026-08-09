@@ -105,6 +105,7 @@ describe('recording detail UI', () => {
     await input.fill('新名称')
     await input.press('Enter')
     await expect.poll(() => requests.some(item => item.method === 'PATCH' && item.body.title === '新名称')).toBe(true)
+    await expect.poll(() => page.locator(`[data-recording-nav="${id}"] strong`).textContent()).toBe('新名称')
     await input.fill('不保存')
     await input.press('Escape')
     expect(await input.inputValue()).toBe('新名称')

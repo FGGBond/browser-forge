@@ -73,11 +73,10 @@ export function renderSidebar({
 function recordingItem(recording, selectedId, route, locked) {
   const active = route === 'detail' && recording.id === selectedId
   const label = String(recording.title || '未命名录制')
-  const site = String(recording.startHost || '本地录制')
   return `
     <button type="button" class="sidebar-recording${active ? ' active' : ''}" data-recording-nav="${escapeAttribute(recording.id)}" ${locked ? 'disabled' : ''} title="${escapeAttribute(label)}">
-      <span class="recording-glyph" aria-hidden="true">${escapeHtml(site.slice(0, 1).toUpperCase())}</span>
-      <span class="sidebar-label recording-nav-copy"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(site)}</small></span>
+      <span class="recording-folder" data-recording-folder="${active ? 'open' : 'closed'}" aria-hidden="true">${folderIcon(active)}</span>
+      <span class="sidebar-label recording-nav-copy"><strong>${escapeHtml(label)}</strong></span>
     </button>`
 }
 
@@ -86,6 +85,9 @@ function escapeHtml(value) {
 }
 
 function escapeAttribute(value) { return escapeHtml(value) }
+function folderIcon(open) { return open
+  ? '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 7V5.5h5l1.5 2h6.5v2"/><path d="M3 9.5h14l-1.5 6H4.5l-1.5-6Z"/></svg>'
+  : '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 5.5h5l1.5 2h6.5v8h-13v-10Z"/></svg>' }
 function brandIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="4"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01M8 14h8M12 11v6"/></svg>' }
 function libraryIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="3"/><path d="M3 8h14M7 3v14"/></svg>' }
 function trashIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 3h4l1 3H7l1-3ZM6 6l1 11h6l1-11"/></svg>' }
