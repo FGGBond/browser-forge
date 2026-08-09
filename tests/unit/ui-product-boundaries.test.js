@@ -36,7 +36,7 @@ describe('recording workspace product boundaries', () => {
     expect(recording).not.toContain('goal-context-note')
     expect(recording).not.toContain('permission-actions')
     expect(recording).not.toContain('advanced-settings')
-    expect(readUi('views/detail.js')).toContain('Agent 尚未配置')
+    expect(readUi('views/prompt-editor.js')).toContain('尚未配置 Agent')
     expect(readUi('views/detail.js')).toContain('data-analysis-pane')
   })
 

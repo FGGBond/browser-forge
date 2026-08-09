@@ -27,6 +27,8 @@ beforeAll(async () => {
   server = createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost')
     if (url.pathname === '/api/recordings') return json(res, { recordings: [recording] })
+    if (url.pathname === `/api/recordings/${recording.id}`) return json(res, recording)
+    if (url.pathname === `/api/recordings/${recording.id}/prompt`) return json(res, { text: '', status: 'empty', updatedAt: null })
     if (url.pathname.endsWith('/poster') || url.pathname.endsWith('/video')) {
       res.statusCode = 404
       return res.end()
@@ -57,6 +59,49 @@ describe('recording repository video-first layout', () => {
     await page.getByRole('button', { name: '新录制', exact: true }).first().click()
     await page.locator('.goal-composer').waitFor()
     await expectMobileShell(page, width)
+    await page.close()
+  })
+
+  it.each([
+    { width: 1280, height: 800, stacked: false },
+    { width: 900, height: 760, stacked: true },
+    { width: 640, height: 760, stacked: true },
+    { width: 520, height: 760, stacked: true }
+  ])('keeps the $width px guidance pane beside or below the video without overlap', async ({ width, height, stacked }) => {
+    const page = await browser.newPage({ viewport: { width, height } })
+    await page.goto(baseUrl, { waitUntil: 'networkidle' })
+    await page.getByRole('button', { name: '去分析', exact: true }).click()
+    await page.locator('[data-toggle-analysis]').click()
+    await page.locator('[data-analysis-pane]').waitFor({ state: 'visible' })
+
+    const metrics = await page.evaluate(() => {
+      const main = document.querySelector('.analysis-main').getBoundingClientRect()
+      const pane = document.querySelector('[data-analysis-pane]').getBoundingClientRect()
+      const workspace = document.querySelector('[data-analysis-workspace]')
+      return {
+        viewportWidth: window.innerWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+        main: { x: main.x, y: main.y, right: main.right, bottom: main.bottom, width: main.width },
+        pane: { x: pane.x, y: pane.y, right: pane.right, bottom: pane.bottom, width: pane.width },
+        columns: getComputedStyle(workspace).gridTemplateColumns,
+        panePosition: getComputedStyle(document.querySelector('[data-analysis-pane]')).position
+      }
+    })
+
+    expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.viewportWidth)
+    expect(metrics.pane.right).toBeLessThanOrEqual(metrics.viewportWidth + 1)
+    if (stacked) {
+      expect(metrics.columns.split(' ')).toHaveLength(1)
+      expect(metrics.pane.y).toBeGreaterThanOrEqual(metrics.main.bottom - 1)
+      expect(['relative', 'static']).toContain(metrics.panePosition)
+    } else {
+      expect(metrics.columns.split(' ')).toHaveLength(2)
+      expect(metrics.main.width).toBeGreaterThanOrEqual(520)
+      expect(metrics.pane.width).toBeGreaterThanOrEqual(360)
+      expect(metrics.pane.width).toBeLessThanOrEqual(390)
+      expect(metrics.pane.x).toBeGreaterThanOrEqual(metrics.main.right - 1)
+      expect(metrics.panePosition).toBe('sticky')
+    }
     await page.close()
   })
 

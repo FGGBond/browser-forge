@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { chromium } from 'playwright'
 import { createServer } from 'http'
 import { readFileSync, statSync } from 'fs'
@@ -9,6 +9,7 @@ let server
 let baseUrl
 let requests
 let promptDelayMs = 0
+let promptShouldFail = false
 const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
 const recording = { id, title: '订单查询', state: 'active', createdAt: '2026-08-08T12:15:00.000Z', durationMs: 42_000, startHost: 'example.com', videoStatus: 'complete', promptStatus: 'empty', sizeBytes: 1048576 }
 const contentTypes = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' }
@@ -19,7 +20,11 @@ beforeAll(async () => {
     const url = new URL(req.url, 'http://localhost')
     if (url.pathname === '/api/recordings' && req.method === 'GET') return json(res, { recordings: [recording] })
     if (url.pathname === `/api/recordings/${id}` && req.method === 'GET') return json(res, recording)
-    if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'GET') { if (promptDelayMs) await new Promise(resolve => setTimeout(resolve, promptDelayMs)); return json(res, { text: '', status: 'empty', updatedAt: null }) }
+    if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'GET') {
+      if (promptDelayMs) await new Promise(resolve => setTimeout(resolve, promptDelayMs))
+      if (promptShouldFail) { res.statusCode = 500; return json(res, { error: { message: 'prompt failed' } }) }
+      return json(res, { text: '', status: 'empty', updatedAt: null })
+    }
     if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'PUT') { const body = await readBody(req); requests.push({ method: req.method, path: url.pathname, body }); return json(res, { text: body.text, status: body.text ? 'draft' : 'empty', updatedAt: '2026-08-08T12:20:00.000Z' }) }
     if (url.pathname === `/api/recordings/${id}/external-agent-prompt`) return json(res, { recordingId: id, text: 'complete prompt' })
     if (url.pathname === `/api/recordings/${id}/timeline`) { requests.push({ method: 'GET', path: url.pathname }); return json(res, { events: [
@@ -42,25 +47,40 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${server.address().port}`
 })
 
+beforeEach(() => {
+  requests = []
+  promptDelayMs = 0
+  promptShouldFail = false
+})
+
 afterAll(async () => { await browser.close(); await new Promise(resolve => server.close(resolve)) })
 
 describe('recording detail UI', () => {
-  it('defines an overlay analysis sheet with asymmetric, reduced-motion-safe transitions', () => {
+  it('defines a responsive workspace column with restrained, reduced-motion-safe content motion', () => {
     const css = readFileSync(join(process.cwd(), 'ui', 'styles.css'), 'utf8')
-    expect(css).toMatch(/\.analysis-pane \{[^}]*position:fixed[^}]*opacity:0[^}]*transform:translateX\(28px\)[^}]*transition:transform 170ms cubic-bezier\(\.4,0,\.2,1\),opacity 170ms cubic-bezier\(\.4,0,\.2,1\)/s)
-    expect(css).toMatch(/\.analysis-workspace\.analysis-pane-open \.analysis-pane \{[^}]*opacity:1[^}]*transform:translateX\(0\)[^}]*transition:transform 240ms cubic-bezier\(\.2,\.8,\.2,1\),opacity 240ms cubic-bezier\(\.2,\.8,\.2,1\)/s)
-    expect(css).not.toMatch(/\.analysis-pane \{[^}]*transition:[^;}]*visibility/s)
-    expect(css).toMatch(/prefers-reduced-motion: reduce[^}]*\.analysis-pane/s)
-    expect(css).not.toContain('grid-template-columns:minmax(0,1fr) minmax(320px,380px)')
+    const detailSource = readFileSync(join(process.cwd(), 'ui', 'views', 'detail.js'), 'utf8')
+
+    expect(css).toMatch(/\.analysis-workspace\s*\{[^}]*display:grid[^}]*grid-template-columns:minmax\(0,\s*1fr\)\s+0/s)
+    expect(css).toMatch(/\.analysis-workspace\.analysis-pane-open\s*\{[^}]*grid-template-columns:minmax\(520px,\s*1fr\)\s+minmax\(360px,\s*390px\)/s)
+    expect(css).toMatch(/\.analysis-pane\s*\{[^}]*position:sticky[^}]*top:0[^}]*height:100vh[^}]*overflow:auto/s)
+    expect(css).not.toMatch(/\.analysis-pane\s*\{[^}]*(?:position:fixed|position:absolute)/s)
+    expect(css).toMatch(/\.analysis-pane-inner\s*\{[^}]*opacity:0[^}]*transform:translateX\(10px\)/s)
+    expect(css).toMatch(/\.analysis-workspace\.analysis-pane-open \.analysis-pane-inner\s*\{[^}]*opacity:1[^}]*transform:none[^}]*transition:transform 180ms cubic-bezier\(\.2,\.8,\.2,1\),opacity 180ms cubic-bezier\(\.2,\.8,\.2,1\)/s)
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[^{]*\{[^}]*\.analysis-pane-inner[^}]*transform:none[^}]*transition-property:opacity[^}]*transition-duration:120ms/s)
+    expect(css).not.toContain('.analysis-backdrop')
+    expect(css).not.toContain('transition:all')
+    expect(detailSource).not.toContain('data-analysis-backdrop')
+    expect(detailSource).not.toContain('aria-modal')
+    expect(detailSource).not.toContain('role="dialog"')
+    expect(detailSource).not.toContain('setBackgroundInert')
+    expect(detailSource).not.toContain("document.addEventListener('keydown'")
   })
 
-  it('shows a private video workspace and collapsible Agent-ready analysis pane without internal materials', async () => {
-    requests = []
+  it('keeps video controls and guidance editing operable together without modal semantics', async () => {
     const page = await browser.newPage()
-    await page.goto(baseUrl, { waitUntil: 'networkidle' })
-    await page.getByRole('button', { name: '去分析' }).click()
+    await openDetail(page)
+
     const video = page.locator('video')
-    await video.waitFor()
     expect(await video.getAttribute('src')).toBe(`/api/recordings/${id}/video`)
     expect(await video.getAttribute('poster')).toBe(`/api/recordings/${id}/poster`)
     expect(await video.getAttribute('controls')).toBeNull()
@@ -74,59 +94,91 @@ describe('recording detail UI', () => {
 
     const pane = page.locator('[data-analysis-pane]')
     const toggle = page.locator('[data-toggle-analysis]')
+    expect(await toggle.getAttribute('aria-controls')).toBe('recording-analysis-guidance')
+    expect(await toggle.getAttribute('aria-expanded')).toBe('false')
     expect(await toggle.getByText('去分析', { exact: true }).count()).toBe(1)
-    expect(await pane.getAttribute('aria-hidden')).toBe('true')
-    expect(await pane.evaluate(element => getComputedStyle(element).pointerEvents)).toBe('none')
-    expect(await pane.evaluate(element => getComputedStyle(element).opacity)).toBe('0')
+    expect(await pane.getAttribute('id')).toBe('recording-analysis-guidance')
+    expect(await pane.getAttribute('hidden')).not.toBeNull()
+    expect(await pane.getAttribute('role')).toBeNull()
+    expect(await pane.getAttribute('aria-modal')).toBeNull()
+    expect(await page.locator('[data-analysis-backdrop]').count()).toBe(0)
 
+    await page.locator('[data-guidance-step-title]').waitFor({ state: 'attached' })
     await toggle.click()
     await pane.waitFor({ state: 'visible' })
-    expect(await pane.getAttribute('aria-hidden')).toBe('false')
-    expect(await pane.getAttribute('role')).toBe('dialog')
-    expect(await pane.getAttribute('aria-modal')).toBe('true')
-    expect(await page.locator('.analysis-main').getAttribute('aria-hidden')).toBe('true')
-    expect(await page.locator('[data-sidebar-host]').getAttribute('aria-hidden')).toBe('true')
-    expect(await pane.getByText('Agent 尚未配置', { exact: true }).count()).toBe(1)
-    expect(await page.locator('[data-prompt-textarea]').count()).toBe(1)
-    await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-close-analysis]'))).toBe(true)
-
-    await page.keyboard.press('Escape')
-    await expect.poll(() => pane.getAttribute('aria-hidden')).toBe('true')
-    await expect.poll(() => pane.evaluate(element => getComputedStyle(element).pointerEvents)).toBe('none')
+    expect(await toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(await toggle.getByText('去分析', { exact: true }).count()).toBe(1)
+    expect(await pane.getAttribute('hidden')).toBeNull()
     expect(await page.locator('.analysis-main').getAttribute('aria-hidden')).toBeNull()
     expect(await page.locator('[data-sidebar-host]').getAttribute('aria-hidden')).toBeNull()
-    await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-toggle-analysis]'))).toBe(true)
+    expect(await page.locator('.analysis-main').evaluate(element => element.inert)).toBe(false)
+    expect(await page.locator('[data-sidebar-host]').evaluate(element => element.inert)).toBe(false)
+    expect(await pane.getByText('尚未配置 Agent', { exact: true }).count()).toBe(1)
+    expect(await pane.getByText('Analysis session', { exact: true }).count()).toBe(0)
+    expect(await pane.getByText('分析会话', { exact: true }).count()).toBe(0)
+    await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-guidance-step-title]'))).toBe(true)
 
-    await toggle.click()
-    await pane.waitFor({ state: 'visible' })
-    await page.locator('[data-analysis-backdrop]').click({ position: { x: 10, y: 10 } })
-    await expect.poll(() => pane.getAttribute('aria-hidden')).toBe('true')
+    const rateButton = page.locator('[data-player-rate]')
+    await expect.poll(() => rateButton.isVisible()).toBe(true)
+    expect(await rateButton.isEnabled()).toBe(true)
+    await rateButton.click()
+    expect(await rateButton.textContent()).toBe('1.5×')
+    await fillActiveEditor(page, '边看视频边补充分析指导')
+    expect(await readActiveEditor(page)).toBe('边看视频边补充分析指导')
+
+    await page.keyboard.press('Escape')
+    expect(await toggle.getAttribute('aria-expanded')).toBe('true')
+    await page.locator('[data-close-analysis]').click()
+    await expect.poll(() => toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(await pane.getAttribute('hidden')).not.toBeNull()
+    await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-toggle-analysis]'))).toBe(true)
     await page.close()
   })
 
-  it('handles Escape while the prompt editor is still loading', async () => {
-    requests = []
+  it('does not reopen or steal focus when guidance finishes loading after a quick close', async () => {
     promptDelayMs = 800
     const page = await browser.newPage()
     try {
       await page.goto(baseUrl, { waitUntil: 'networkidle' })
-      await page.getByRole('button', { name: '去分析' }).click()
+      await page.getByRole('button', { name: '去分析', exact: true }).click()
       const pane = page.locator('[data-analysis-pane]')
-      await page.locator('[data-toggle-analysis]').click()
-      await expect.poll(() => pane.getAttribute('aria-hidden')).toBe('false')
-      await page.keyboard.press('Escape')
-      await expect.poll(() => pane.getAttribute('aria-hidden')).toBe('true')
+      const toggle = page.locator('[data-toggle-analysis]')
+      await toggle.waitFor()
+      await toggle.click()
+      expect(await toggle.getAttribute('aria-expanded')).toBe('true')
+      await page.locator('[data-close-analysis]').click()
+      await expect.poll(() => toggle.getAttribute('aria-expanded')).toBe('false')
+      await page.locator('[data-guidance-step-title]').waitFor({ state: 'attached', timeout: 2_000 })
+      expect(await pane.getAttribute('hidden')).not.toBeNull()
+      await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-toggle-analysis]'))).toBe(true)
     } finally {
-      promptDelayMs = 0
+      await page.close()
+    }
+  })
+
+  it('keeps the video workspace usable when guidance loading fails', async () => {
+    promptShouldFail = true
+    const page = await browser.newPage()
+    try {
+      await page.goto(baseUrl, { waitUntil: 'networkidle' })
+      await page.getByRole('button', { name: '去分析', exact: true }).click()
+      const toggle = page.locator('[data-toggle-analysis]')
+      await toggle.waitFor()
+      await toggle.click()
+      await page.locator('[data-prompt-load-error]').waitFor()
+      expect(await page.locator('video').isVisible()).toBe(true)
+      expect(await page.locator('[data-player-rate]').isEnabled()).toBe(true)
+      expect(await page.locator('[data-prompt-load-error]').textContent()).toContain('无法读取分析指导')
+      await page.locator('[data-close-analysis]').click()
+      await expect.poll(() => toggle.getAttribute('aria-expanded')).toBe('false')
+    } finally {
       await page.close()
     }
   })
 
   it('renames, exports by ID, trashes, and offers undo restore', async () => {
-    requests = []
     const page = await browser.newPage()
-    await page.goto(baseUrl, { waitUntil: 'networkidle' })
-    await page.getByRole('button', { name: '去分析' }).click()
+    await openDetail(page)
     const input = page.locator('[data-title-input]')
     await input.fill('新名称')
     await input.press('Enter')
@@ -146,6 +198,30 @@ describe('recording detail UI', () => {
     await page.close()
   })
 })
+
+async function openDetail(page) {
+  await page.goto(baseUrl, { waitUntil: 'networkidle' })
+  await page.getByRole('button', { name: '去分析', exact: true }).click()
+  await page.locator('[data-analysis-workspace]').waitFor()
+}
+
+async function fillActiveEditor(page, value) {
+  await page.evaluate(nextValue => {
+    const wrapper = document.querySelector('[data-guidance-step] .CodeMirror')
+    if (wrapper?.CodeMirror) return wrapper.CodeMirror.setValue(nextValue)
+    const textarea = document.querySelector('[data-guidance-step] [data-prompt-textarea]')
+    textarea.value = nextValue
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  }, value)
+}
+
+async function readActiveEditor(page) {
+  return page.evaluate(() => {
+    const wrapper = document.querySelector('[data-guidance-step] .CodeMirror')
+    if (wrapper?.CodeMirror) return wrapper.CodeMirror.getValue()
+    return document.querySelector('[data-guidance-step] [data-prompt-textarea]')?.value ?? ''
+  })
+}
 
 function json(res, value) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(value)) }
 function readBody(req) { return new Promise(resolve => { let body = ''; req.on('data', chunk => { body += chunk }); req.on('end', () => resolve(body ? JSON.parse(body) : {})) }) }

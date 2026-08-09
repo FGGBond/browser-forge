@@ -25,48 +25,34 @@ export async function renderDetail({
     }) : null
     const titleInput = container.querySelector('[data-title-input]')
     const workspace = container.querySelector('[data-analysis-workspace]')
-    const analysisMain = container.querySelector('.analysis-main')
     const pane = container.querySelector('[data-analysis-pane]')
-    const backdrop = container.querySelector('[data-analysis-backdrop]')
     const togglePane = container.querySelector('[data-toggle-analysis]')
     const closePane = container.querySelector('[data-close-analysis]')
     let savedTitle = recording.title
     let renaming = false
 
     const isPaneOpen = () => workspace.classList.contains('analysis-pane-open')
-    const setBackgroundInert = inert => {
-      analysisMain.inert = inert
-      if (inert) analysisMain.setAttribute('aria-hidden', 'true')
-      else analysisMain.removeAttribute('aria-hidden')
+    const focusGuidanceStep = () => {
+      if (!isPaneOpen()) return
+      pane.querySelector('[data-guidance-step-title]')?.focus({ preventScroll: true })
     }
     const setPaneOpen = (open, { restoreFocus = true } = {}) => {
       const next = Boolean(open)
-      workspace.classList.toggle('analysis-pane-open', next)
-      pane.setAttribute('aria-hidden', String(!next))
-      pane.inert = !next
-      backdrop.setAttribute('aria-hidden', String(!next))
-      togglePane.setAttribute('aria-expanded', String(next))
-      togglePane.querySelector('span').textContent = next ? '收起分析' : '去分析'
       if (next) {
-        closePane.focus({ preventScroll: true })
-        setBackgroundInert(true)
-      } else {
-        setBackgroundInert(false)
+        pane.hidden = false
+        void pane.offsetWidth
       }
+      workspace.classList.toggle('analysis-pane-open', next)
+      if (!next) pane.hidden = true
+      togglePane.setAttribute('aria-expanded', String(next))
       onAnalysisPaneChange(next)
-      if (!next && restoreFocus) togglePane.focus({ preventScroll: true })
-    }
-    const onDocumentKeyDown = event => {
-      if (event.key !== 'Escape' || !isPaneOpen()) return
-      event.preventDefault()
-      setPaneOpen(false)
+      if (next) focusGuidanceStep()
+      else if (restoreFocus) togglePane.focus({ preventScroll: true })
     }
 
     container.querySelector('[data-back]').addEventListener('click', onBack)
     togglePane.addEventListener('click', () => setPaneOpen(!isPaneOpen()))
     closePane.addEventListener('click', () => setPaneOpen(false))
-    backdrop.addEventListener('click', () => setPaneOpen(false))
-    document.addEventListener('keydown', onDocumentKeyDown)
 
     const commitTitle = async () => {
       const next = titleInput.value.trim()
@@ -95,13 +81,14 @@ export async function renderDetail({
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); titleInput.value = savedTitle; titleInput.blur() }
     })
 
+    const promptSlot = container.querySelector('[data-prompt-slot]')
     let promptController
     try {
-      promptController = await renderPromptEditor({ container: container.querySelector('[data-prompt-slot]'), recordingId: recording.id, api })
+      promptController = await renderPromptEditor({ container: promptSlot, recordingId: recording.id, api })
     } catch (error) {
-      document.removeEventListener('keydown', onDocumentKeyDown)
-      throw error
+      promptController = renderPromptLoadError(promptSlot, error)
     }
+    focusGuidanceStep()
 
     container.querySelector('[data-export]').addEventListener('click', async event => {
       const button = event.currentTarget
@@ -134,7 +121,7 @@ export async function renderDetail({
     return {
       recording,
       beforeNavigate: promptController.beforeNavigate,
-      cleanup: () => { document.removeEventListener('keydown', onDocumentKeyDown); playerController?.destroy(); promptController.destroy() }
+      cleanup: () => { playerController?.destroy(); promptController.destroy() }
     }
   } catch (error) {
     container.innerHTML = `<section class="narrow-view"><button class="back-button" data-back>返回录制仓库</button><div class="inline-error"><strong>无法打开录制</strong><span>${escapeHtml(error.message)}</span></div></section>`
@@ -148,7 +135,7 @@ function detailMarkup(recording, analysisPaneOpen) {
   const visitedHosts = [...new Set([recording.startHost, ...(recording.visitedHosts || [])].filter(Boolean))]
   return `
     <section class="analysis-workspace${analysisPaneOpen ? ' analysis-pane-open' : ''}" data-analysis-workspace>
-      <main class="analysis-main" ${analysisPaneOpen ? 'inert aria-hidden="true"' : ''}>
+      <main class="analysis-main">
         <header class="detail-header">
           <div class="detail-heading">
             <button class="back-button" type="button" data-back>${backIcon()}<span>录制仓库</span></button>
@@ -156,7 +143,7 @@ function detailMarkup(recording, analysisPaneOpen) {
             <p><span>${escapeHtml(visitedHosts.join(' · ') || '未知网站')}</span><span>·</span><time>${formatDate(recording.createdAt)}</time></p>
           </div>
           <div class="detail-actions">
-            <button class="button" type="button" data-toggle-analysis aria-expanded="${analysisPaneOpen}">${analysisIcon()}<span>${analysisPaneOpen ? '收起分析' : '去分析'}</span></button>
+            <button class="button" type="button" data-toggle-analysis aria-controls="recording-analysis-guidance" aria-expanded="${analysisPaneOpen}">${analysisIcon()}<span>去分析</span></button>
             <button class="button" type="button" data-export>${exportIcon()}<span>导出</span></button>
             <button class="button danger quiet" type="button" data-trash>${trashIcon()}<span>移入回收站</span></button>
           </div>
@@ -166,11 +153,11 @@ function detailMarkup(recording, analysisPaneOpen) {
           ${playable ? '<div data-video-player-slot></div>' : videoUnavailable(recording.videoStatus)}
         </section>
       </main>
-      <button class="analysis-backdrop" type="button" data-analysis-backdrop aria-label="关闭分析栏" aria-hidden="${!analysisPaneOpen}" tabindex="-1"></button>
-      <aside class="analysis-pane" data-analysis-pane role="dialog" aria-modal="true" aria-hidden="${!analysisPaneOpen}" ${analysisPaneOpen ? '' : 'inert'} aria-label="分析会话">
-        <header class="analysis-session-header"><div><p class="eyebrow">Analysis session</p><h2>分析会话</h2></div><button class="icon-button" type="button" data-close-analysis aria-label="关闭分析栏">${closeIcon()}</button></header>
-        <section class="agent-unconfigured"><span>${sparkIcon()}</span><div><strong>Agent 尚未配置</strong><p>你仍可对照视频编辑说明，并把完整提示词复制到外部 Agent。</p></div></section>
-        <section class="analysis-prompt" data-prompt-slot></section>
+      <aside class="analysis-pane" id="recording-analysis-guidance" data-analysis-pane aria-labelledby="recording-analysis-guidance-title" ${analysisPaneOpen ? '' : 'hidden'}>
+        <div class="analysis-pane-inner">
+          <header class="analysis-pane-header"><h2 id="recording-analysis-guidance-title">分析指导</h2><button class="icon-button" type="button" data-close-analysis aria-label="关闭分析栏">${closeIcon()}</button></header>
+          <section class="analysis-prompt" data-prompt-slot></section>
+        </div>
       </aside>
     </section>`
 }
@@ -179,6 +166,11 @@ function formatDate(value) { const date = new Date(value); return Number.isNaN(d
 export function formatBytes(value) { const bytes = Number(value); if (!Number.isFinite(bytes) || bytes < 0) return '计算中'; if (bytes < 1024) return `${bytes} B`; if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`; if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`; return `${(bytes / 1024 ** 3).toFixed(1)} GB` }
 function videoUnavailable(status) { return `<div class="video-unavailable">${videoOffIcon()}<strong>${status === 'failed' ? '视频录制失败' : '没有可播放视频'}</strong><span>可以保留这段录制，稍后补充分析说明或重新录制。</span></div>` }
 function showNotice(container, message, tone) { const stack = container.querySelector('[data-notices]'); const notice = document.createElement('div'); notice.className = `notice ${tone}`; notice.textContent = message; stack.append(notice); setTimeout(() => notice.remove(), 5000) }
+function renderPromptLoadError(container, error) {
+  container.innerHTML = `<div class="inline-error" data-prompt-load-error role="alert"><strong>无法读取分析指导</strong><span>${escapeHtml(error.message)}</span></div>`
+  const proceed = async () => true
+  return { flush: proceed, beforeNavigate: proceed, destroy() {} }
+}
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]) }
 function escapeAttribute(value) { return escapeHtml(value) }
 function backIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12.5 4.5-5 5 5 5"/></svg>' }
@@ -186,5 +178,4 @@ function exportIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><pat
 function trashIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 3h4l1 3H7l1-3ZM6 6l1 11h6l1-11"/></svg>' }
 function analysisIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 4h12v12H4zM12 4v12M7 8h2M7 11h2"/></svg>' }
 function closeIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 6 8 8M14 6l-8 8"/></svg>' }
-function sparkIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m10 2 1.4 4.6L16 8l-4.6 1.4L10 14l-1.4-4.6L4 8l4.6-1.4L10 2Z"/></svg>' }
 function videoOffIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="14" height="12" rx="2"/><path d="m17 10 4-2v8l-4-2M4 4l16 16"/></svg>' }
