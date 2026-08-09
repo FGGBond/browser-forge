@@ -62,6 +62,27 @@ describe('recording repository video-first layout', () => {
     await page.close()
   })
 
+  it('does not animate shell or analysis grid column changes', async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+    await page.goto(baseUrl, { waitUntil: 'networkidle' })
+    const shellTransitions = await page.evaluate(() => {
+      const shell = document.querySelector('.app-shell')
+      document.querySelector('[data-sidebar-toggle]').click()
+      return shell.getAnimations({ subtree: false }).map(animation => animation.transitionProperty)
+    })
+    expect(shellTransitions).not.toContain('grid-template-columns')
+
+    await page.getByRole('button', { name: '去分析', exact: true }).click()
+    await page.locator('[data-toggle-analysis]').waitFor()
+    const workspaceTransitions = await page.evaluate(() => {
+      const workspace = document.querySelector('[data-analysis-workspace]')
+      document.querySelector('[data-toggle-analysis]').click()
+      return workspace.getAnimations({ subtree: false }).map(animation => animation.transitionProperty)
+    })
+    expect(workspaceTransitions).not.toContain('grid-template-columns')
+    await page.close()
+  })
+
   it.each([
     { width: 1280, height: 800, stacked: false },
     { width: 900, height: 760, stacked: true },

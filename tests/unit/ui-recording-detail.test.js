@@ -65,7 +65,8 @@ describe('recording detail UI', () => {
     expect(css).toMatch(/\.analysis-pane\s*\{[^}]*position:sticky[^}]*top:0[^}]*height:100vh[^}]*overflow:auto/s)
     expect(css).not.toMatch(/\.analysis-pane\s*\{[^}]*(?:position:fixed|position:absolute)/s)
     expect(css).toMatch(/\.analysis-pane-inner\s*\{[^}]*opacity:0[^}]*transform:translateX\(10px\)/s)
-    expect(css).toMatch(/\.analysis-workspace\.analysis-pane-open \.analysis-pane-inner\s*\{[^}]*opacity:1[^}]*transform:none[^}]*transition:transform 180ms cubic-bezier\(\.2,\.8,\.2,1\),opacity 180ms cubic-bezier\(\.2,\.8,\.2,1\)/s)
+    expect(css).toMatch(/\.analysis-workspace\.analysis-pane-open:not\(\.analysis-pane-closing\) \.analysis-pane-inner\s*\{[^}]*opacity:1[^}]*transform:none[^}]*transition:transform 180ms cubic-bezier\(\.2,\.8,\.2,1\),opacity 180ms cubic-bezier\(\.2,\.8,\.2,1\)/s)
+    expect(css).toMatch(/\.analysis-workspace\.analysis-pane-closing \.analysis-pane-inner\s*\{[^}]*opacity:0[^}]*transform:translateX\(10px\)[^}]*transition:transform 140ms cubic-bezier\(\.4,0,\.2,1\),opacity 140ms cubic-bezier\(\.4,0,\.2,1\)/s)
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[^{]*\{[^}]*\.analysis-pane-inner[^}]*transform:none[^}]*transition-property:opacity[^}]*transition-duration:120ms/s)
     expect(css).not.toContain('.analysis-backdrop')
     expect(css).not.toContain('transition:all')
@@ -74,6 +75,13 @@ describe('recording detail UI', () => {
     expect(detailSource).not.toContain('role="dialog"')
     expect(detailSource).not.toContain('setBackgroundInert')
     expect(detailSource).not.toContain("document.addEventListener('keydown'")
+    expect(detailSource).not.toContain('analysis-pane-header')
+    expect(detailSource).not.toContain('recording-analysis-guidance-title')
+    expect(detailSource).toContain('aria-label="分析指导"')
+    expect(detailSource).toContain('analysis-pane-closing')
+    expect(detailSource).toContain('clearTimeout(closeTimer)')
+    expect(detailSource).toContain('createPromptControllerProxy')
+    expect(detailSource).not.toMatch(/promptController\s*=\s*await renderPromptEditor/)
   })
 
   it('keeps video controls and guidance editing operable together without modal semantics', async () => {
@@ -98,6 +106,7 @@ describe('recording detail UI', () => {
     expect(await toggle.getAttribute('aria-expanded')).toBe('false')
     expect(await toggle.getByText('去分析', { exact: true }).count()).toBe(1)
     expect(await pane.getAttribute('id')).toBe('recording-analysis-guidance')
+    expect(await pane.getAttribute('aria-label')).toBe('分析指导')
     expect(await pane.getAttribute('hidden')).not.toBeNull()
     expect(await pane.getAttribute('role')).toBeNull()
     expect(await pane.getAttribute('aria-modal')).toBeNull()
@@ -116,6 +125,11 @@ describe('recording detail UI', () => {
     expect(await pane.getByText('尚未配置 Agent', { exact: true }).count()).toBe(1)
     expect(await pane.getByText('Analysis session', { exact: true }).count()).toBe(0)
     expect(await pane.getByText('分析会话', { exact: true }).count()).toBe(0)
+    expect(await pane.getByText('分析指导', { exact: true }).count()).toBe(0)
+    const statusBox = await pane.locator('.guidance-agent-status').boundingBox()
+    const closeBox = await pane.locator('[data-close-analysis]').boundingBox()
+    expect(Math.abs(closeBox.y - statusBox.y)).toBeLessThanOrEqual(2)
+    expect(closeBox.x + closeBox.width).toBeLessThanOrEqual(statusBox.x + statusBox.width)
     await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-guidance-step-title]'))).toBe(true)
 
     const rateButton = page.locator('[data-player-rate]')
@@ -130,9 +144,91 @@ describe('recording detail UI', () => {
     expect(await toggle.getAttribute('aria-expanded')).toBe('true')
     await page.locator('[data-close-analysis]').click()
     await expect.poll(() => toggle.getAttribute('aria-expanded')).toBe('false')
-    expect(await pane.getAttribute('hidden')).not.toBeNull()
+    expect(await pane.getAttribute('hidden')).toBeNull()
+    expect(await page.locator('[data-analysis-workspace]').getAttribute('class')).toContain('analysis-pane-closing')
     await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-toggle-analysis]'))).toBe(true)
+    await expect.poll(() => pane.getAttribute('hidden')).not.toBeNull()
+    expect(await page.locator('[data-analysis-workspace]').getAttribute('class')).not.toContain('analysis-pane-open')
     await page.close()
+  })
+
+  it('returns the detail controller before delayed guidance loads so the first navigation click succeeds', async () => {
+    promptDelayMs = 900
+    const page = await browser.newPage()
+    try {
+      await page.goto(baseUrl, { waitUntil: 'networkidle' })
+      await page.getByRole('button', { name: '去分析', exact: true }).click()
+      await page.locator('[data-analysis-workspace]').waitFor()
+      await page.locator('[data-back]').click()
+      await page.locator('.library-view').waitFor({ timeout: 350 })
+      await page.waitForTimeout(950)
+      expect(await page.locator('.library-view').count()).toBe(1)
+      expect(await page.locator('[data-analysis-workspace]').count()).toBe(0)
+      expect(await page.locator('[data-guidance-step-title]').count()).toBe(0)
+    } finally {
+      await page.close()
+    }
+  })
+
+  it('allows export and trash actions while guidance initialization is still pending', async () => {
+    promptDelayMs = 900
+    const page = await browser.newPage()
+    try {
+      await page.goto(baseUrl, { waitUntil: 'networkidle' })
+      await page.getByRole('button', { name: '去分析', exact: true }).click()
+      await page.locator('[data-analysis-workspace]').waitFor()
+      await page.locator('[data-export]').click()
+      await expect.poll(() => requests.some(item => item.path.endsWith('/export')), { timeout: 350 }).toBe(true)
+      await page.locator('[data-trash]').click()
+      await expect.poll(() => requests.some(item => item.path.endsWith('/trash')), { timeout: 350 }).toBe(true)
+      await page.locator('[data-undo-trash]').waitFor()
+    } finally {
+      await page.close()
+    }
+  })
+
+  it('does not steal focus when delayed guidance resolves after the user operates video controls', async () => {
+    promptDelayMs = 700
+    const page = await browser.newPage()
+    try {
+      await page.goto(baseUrl, { waitUntil: 'networkidle' })
+      await page.getByRole('button', { name: '去分析', exact: true }).click()
+      const toggle = page.locator('[data-toggle-analysis]')
+      await toggle.waitFor()
+      await toggle.click()
+      const rateButton = page.locator('[data-player-rate]')
+      await rateButton.click()
+      expect(await rateButton.textContent()).toBe('1.5×')
+      await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-player-rate]'))).toBe(true)
+      await page.locator('[data-guidance-step-title]').waitFor({ state: 'attached', timeout: 2_000 })
+      await page.waitForTimeout(50)
+      expect(await page.evaluate(() => document.activeElement?.matches('[data-player-rate]'))).toBe(true)
+    } finally {
+      await page.close()
+    }
+  })
+
+  it('cancels a pending close when the pane is quickly reopened', async () => {
+    const page = await browser.newPage()
+    try {
+      await openDetail(page)
+      await page.locator('[data-guidance-step-title]').waitFor({ state: 'attached' })
+      const pane = page.locator('[data-analysis-pane]')
+      const toggle = page.locator('[data-toggle-analysis]')
+      await toggle.click()
+      await page.locator('[data-close-analysis]').click()
+      expect(await pane.getAttribute('hidden')).toBeNull()
+      expect(await page.locator('[data-analysis-workspace]').getAttribute('class')).toContain('analysis-pane-closing')
+      await toggle.click()
+      await page.waitForTimeout(220)
+      expect(await toggle.getAttribute('aria-expanded')).toBe('true')
+      expect(await pane.getAttribute('hidden')).toBeNull()
+      const workspaceClass = await page.locator('[data-analysis-workspace]').getAttribute('class')
+      expect(workspaceClass).toContain('analysis-pane-open')
+      expect(workspaceClass).not.toContain('analysis-pane-closing')
+    } finally {
+      await page.close()
+    }
   })
 
   it('does not reopen or steal focus when guidance finishes loading after a quick close', async () => {

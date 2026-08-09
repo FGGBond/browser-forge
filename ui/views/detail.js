@@ -1,6 +1,9 @@
 import { renderPromptEditor } from './prompt-editor.js'
 import { mountVideoPlayer } from './video-player.js'
 
+const PANE_EXIT_DURATION_MS = 140
+const REDUCED_MOTION_EXIT_DURATION_MS = 120
+
 export async function renderDetail({
   container,
   api,
@@ -28,30 +31,77 @@ export async function renderDetail({
     const pane = container.querySelector('[data-analysis-pane]')
     const togglePane = container.querySelector('[data-toggle-analysis]')
     const closePane = container.querySelector('[data-close-analysis]')
+    const promptSlot = container.querySelector('[data-prompt-slot]')
+    const promptController = createPromptControllerProxy()
+    const promptLoadToken = { active: true }
+    const paneExitDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      ? REDUCED_MOTION_EXIT_DURATION_MS
+      : PANE_EXIT_DURATION_MS
     let savedTitle = recording.title
     let renaming = false
+    let destroyed = false
+    let promptReady = false
+    let paneOpen = Boolean(analysisPaneOpen)
+    let paneOpenSequence = paneOpen ? 1 : 0
+    let pendingFocusSequence = paneOpen ? paneOpenSequence : null
+    let closeSequence = 0
+    let closeTimer = null
 
-    const isPaneOpen = () => workspace.classList.contains('analysis-pane-open')
-    const focusGuidanceStep = () => {
-      if (!isPaneOpen()) return
+    const canMoveFocusToGuidance = () => {
+      const active = document.activeElement
+      return !active || active === document.body || active === togglePane
+    }
+    const focusGuidanceStep = sequence => {
+      if (destroyed || !paneOpen || sequence !== paneOpenSequence || !canMoveFocusToGuidance()) return
       pane.querySelector('[data-guidance-step-title]')?.focus({ preventScroll: true })
+    }
+    const cancelPendingClose = () => {
+      closeSequence += 1
+      if (closeTimer !== null) clearTimeout(closeTimer)
+      closeTimer = null
+      workspace.classList.remove('analysis-pane-closing')
+    }
+    const finishPaneClose = sequence => {
+      if (destroyed || paneOpen || sequence !== closeSequence) return
+      workspace.classList.remove('analysis-pane-closing', 'analysis-pane-open')
+      pane.hidden = true
+      closeTimer = null
     }
     const setPaneOpen = (open, { restoreFocus = true } = {}) => {
       const next = Boolean(open)
       if (next) {
+        const wasHidden = pane.hidden
+        cancelPendingClose()
+        paneOpen = true
+        paneOpenSequence += 1
+        pendingFocusSequence = paneOpenSequence
         pane.hidden = false
-        void pane.offsetWidth
+        if (wasHidden) {
+          workspace.classList.remove('analysis-pane-open')
+          void pane.offsetWidth
+        }
+        workspace.classList.add('analysis-pane-open')
+        togglePane.setAttribute('aria-expanded', 'true')
+        onAnalysisPaneChange(true)
+        if (promptReady) focusGuidanceStep(paneOpenSequence)
+        return
       }
-      workspace.classList.toggle('analysis-pane-open', next)
-      if (!next) pane.hidden = true
-      togglePane.setAttribute('aria-expanded', String(next))
-      onAnalysisPaneChange(next)
-      if (next) focusGuidanceStep()
-      else if (restoreFocus) togglePane.focus({ preventScroll: true })
+      if (!paneOpen) return
+      paneOpen = false
+      paneOpenSequence += 1
+      pendingFocusSequence = null
+      closeSequence += 1
+      const sequence = closeSequence
+      if (closeTimer !== null) clearTimeout(closeTimer)
+      workspace.classList.add('analysis-pane-open', 'analysis-pane-closing')
+      togglePane.setAttribute('aria-expanded', 'false')
+      onAnalysisPaneChange(false)
+      if (restoreFocus) togglePane.focus({ preventScroll: true })
+      closeTimer = setTimeout(() => finishPaneClose(sequence), paneExitDuration)
     }
 
     container.querySelector('[data-back]').addEventListener('click', onBack)
-    togglePane.addEventListener('click', () => setPaneOpen(!isPaneOpen()))
+    togglePane.addEventListener('click', () => setPaneOpen(!paneOpen))
     closePane.addEventListener('click', () => setPaneOpen(false))
 
     const commitTitle = async () => {
@@ -81,14 +131,28 @@ export async function renderDetail({
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); titleInput.value = savedTitle; titleInput.blur() }
     })
 
-    const promptSlot = container.querySelector('[data-prompt-slot]')
-    let promptController
-    try {
-      promptController = await renderPromptEditor({ container: promptSlot, recordingId: recording.id, api })
-    } catch (error) {
-      promptController = renderPromptLoadError(promptSlot, error)
+    const guardedPromptApi = {
+      ...api,
+      async getPrompt(id) {
+        const prompt = await api.getPrompt(id)
+        if (!promptLoadToken.active || destroyed || !promptSlot.isConnected) throw new Error('Prompt initialization canceled')
+        return prompt
+      }
     }
-    focusGuidanceStep()
+    void renderPromptEditor({ container: promptSlot, recordingId: recording.id, api: guardedPromptApi })
+      .then(controller => {
+        if (!promptLoadToken.active || destroyed) {
+          controller.destroy()
+          return
+        }
+        if (!promptController.attach(controller)) return
+        promptReady = true
+        if (pendingFocusSequence !== null) focusGuidanceStep(pendingFocusSequence)
+      })
+      .catch(error => {
+        if (!promptLoadToken.active || destroyed) return
+        promptController.attach(renderPromptLoadError(promptSlot, error))
+      })
 
     container.querySelector('[data-export]').addEventListener('click', async event => {
       const button = event.currentTarget
@@ -121,12 +185,43 @@ export async function renderDetail({
     return {
       recording,
       beforeNavigate: promptController.beforeNavigate,
-      cleanup: () => { playerController?.destroy(); promptController.destroy() }
+      cleanup: () => {
+        destroyed = true
+        promptLoadToken.active = false
+        closeSequence += 1
+        if (closeTimer !== null) clearTimeout(closeTimer)
+        playerController?.destroy()
+        promptController.destroy()
+      }
     }
   } catch (error) {
     container.innerHTML = `<section class="narrow-view"><button class="back-button" data-back>返回录制仓库</button><div class="inline-error"><strong>无法打开录制</strong><span>${escapeHtml(error.message)}</span></div></section>`
     container.querySelector('[data-back]').addEventListener('click', onBack)
     return null
+  }
+}
+
+function createPromptControllerProxy() {
+  let target = null
+  let destroyed = false
+  const proceed = async () => true
+  return {
+    attach(controller) {
+      if (destroyed) {
+        controller.destroy()
+        return false
+      }
+      target = controller
+      return true
+    },
+    flush: () => target?.flush() ?? proceed(),
+    beforeNavigate: () => target?.beforeNavigate() ?? proceed(),
+    destroy() {
+      if (destroyed) return
+      destroyed = true
+      target?.destroy()
+      target = null
+    }
   }
 }
 
@@ -153,9 +248,9 @@ function detailMarkup(recording, analysisPaneOpen) {
           ${playable ? '<div data-video-player-slot></div>' : videoUnavailable(recording.videoStatus)}
         </section>
       </main>
-      <aside class="analysis-pane" id="recording-analysis-guidance" data-analysis-pane aria-labelledby="recording-analysis-guidance-title" ${analysisPaneOpen ? '' : 'hidden'}>
+      <aside class="analysis-pane" id="recording-analysis-guidance" data-analysis-pane aria-label="分析指导" ${analysisPaneOpen ? '' : 'hidden'}>
         <div class="analysis-pane-inner">
-          <header class="analysis-pane-header"><h2 id="recording-analysis-guidance-title">分析指导</h2><button class="icon-button" type="button" data-close-analysis aria-label="关闭分析栏">${closeIcon()}</button></header>
+          <button class="icon-button analysis-pane-close" type="button" data-close-analysis aria-label="关闭分析栏">${closeIcon()}</button>
           <section class="analysis-prompt" data-prompt-slot></section>
         </div>
       </aside>
