@@ -1,7 +1,7 @@
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createHeadlessTelemetry } from '../../src/main/telemetry/headless.js'
 
 const SLS_ENV = {
@@ -27,8 +27,11 @@ describe('headless telemetry (skill-generation CLI)', () => {
 
   it('queues generation events with erp and skill id when built and configured', async () => {
     const home = await mkdtemp(join(tmpdir(), 'browser-forge-headless-on-'))
+    const sendBatchLogs = vi.fn(async () => {})
+    const slsTrackerFactory = vi.fn(() => ({ sendBatchLogs }))
     const telemetry = createHeadlessTelemetry({
-      env: { ...SLS_ENV, BROWSER_FORGE_TELEMETRY_HOME: home, JD_ERP: 'analyst01' }
+      env: { ...SLS_ENV, BROWSER_FORGE_TELEMETRY_HOME: home, JD_ERP: 'analyst01' },
+      slsTrackerFactory
     })
 
     expect(telemetry.enabled).toBe(true)
@@ -55,6 +58,8 @@ describe('headless telemetry (skill-generation CLI)', () => {
       expect(event.skill_id).toBe('browser_forge.demo')
     }
     await telemetry.close()
+    expect(slsTrackerFactory).toHaveBeenCalledOnce()
+    expect(sendBatchLogs).toHaveBeenCalledOnce()
   })
 
   it('honors the runtime opt-out even in a telemetry build', async () => {

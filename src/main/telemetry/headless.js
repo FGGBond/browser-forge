@@ -25,6 +25,6 @@ function headlessApp(env = process.env) {
 // Build a telemetry instance suitable for a short-lived CLI invocation. Returns
 // the shared noop when telemetry is disabled (default), so callers can always
 // `await telemetry.track(...)` and `await telemetry.close()` unconditionally.
-export function createHeadlessTelemetry({ env = process.env, logger = console } = {}) {
-  return createTelemetry({ app: headlessApp(env), env, logger })
+export function createHeadlessTelemetry({ env = process.env, logger = console, ...telemetryOptions } = {}) {
+  return createTelemetry({ app: headlessApp(env), env, logger, ...telemetryOptions })
 }
