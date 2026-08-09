@@ -33,6 +33,13 @@ describe('recording workspace shell', () => {
     expect(source).toContain('data-recording-nav')
   })
 
+  it('collapses nonessential sidebar content into a clean mobile toolbar', () => {
+    const css = readUi('styles.css')
+    expect(css).toMatch(/@media \(max-width: 840px\)[\s\S]*?\.sidebar-recording-section \{ display: none;/)
+    expect(css).toContain('.brand small, .primary-nav span, .secondary-nav span, .sidebar-toggle span, .sidebar-note { display: none; }')
+    expect(css).toMatch(/@media \(max-width: 620px\)[\s\S]*?\.brand-copy \{ display: none;/)
+  })
+
   it('stores shell collapse state separately from recording data', () => {
     const app = readUi('app.js')
     expect(app).toContain("sidebarCollapsed: readSidebarCollapsed()")

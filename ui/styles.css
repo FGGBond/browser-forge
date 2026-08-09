@@ -168,9 +168,39 @@ h1, h2, p { margin-top: 0; }
 .button:active:not(:disabled), .recording-card:active { transform: scale(.985); }
 @media (max-width: 1040px) { .library-grid { grid-template-columns: 1fr; }.detail-welcome { min-height: 310px; }.recording-list { grid-template-columns: repeat(2,minmax(0,1fr)); }.recording-card { grid-template-columns: 1fr; }.recording-poster { aspect-ratio: 16/9; border-right: 0; border-bottom: 1px solid var(--line); } }
 @media (max-width: 840px) {
-  .app-shell { grid-template-columns: 1fr; }.app-sidebar { position: sticky; z-index: 5; width: 100%; height: 58px; padding: 8px 14px; flex-direction: row; align-items: center; border-right: 0; border-bottom: 1px solid var(--line); }.brand { padding: 0; }.brand small,.primary-nav span,.sidebar-note { display: none; }.primary-nav { margin-left: auto; display: flex; }.primary-nav button, .secondary-nav button { padding: 9px; }.sidebar-new { width: 36px; min-height: 36px; margin: 0 0 0 5px; padding: 0; }.sidebar-new span { display: none; }.library-view { padding: 26px 18px 40px; }.library-grid { display: block; }.detail-welcome { display: none; }.view-header { align-items: flex-start; }.view-header > .button { display: none; }.live-recording { padding: 24px 16px 40px; }.open-pages-list { grid-template-columns: 1fr; }
+  .app-shell { grid-template-columns: 1fr; }
+  .app-sidebar { position: sticky; z-index: 5; width: 100%; height: 58px; padding: 8px 14px; flex-direction: row; align-items: center; gap: 4px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .brand { padding: 0; }
+  .brand small, .primary-nav span, .secondary-nav span, .sidebar-toggle span, .sidebar-note { display: none; }
+  .sidebar-recording-section { display: none; }
+  .primary-nav { margin-left: auto; display: flex; }
+  .secondary-nav { margin-top: 0; display: flex; }
+  .primary-nav button, .secondary-nav button { padding: 9px; }
+  .sidebar-new, .sidebar-toggle { width: 36px; min-height: 36px; margin: 0; padding: 0; flex: none; justify-content: center; }
+  .sidebar-new { margin-left: 5px; }
+  .sidebar-new span { display: none; }
+  .library-view { padding: 26px 18px 40px; }
+  .library-grid { display: block; }
+  .detail-welcome { display: none; }
+  .view-header { align-items: flex-start; }
+  .view-header > .button { display: none; }
+  .live-recording { padding: 24px 16px 40px; }
+  .open-pages-list { grid-template-columns: 1fr; }
 }
-@media (max-width: 620px) { .recording-list { grid-template-columns: 1fr; }.recording-card { grid-template-columns: 118px minmax(0,1fr); }.recording-poster { aspect-ratio: auto; border-right: 1px solid var(--line); border-bottom: 0; }.view-subtitle { display: none; }.library-toolbar { align-items: flex-end; }.result-count { white-space: nowrap; }.setup-card { padding: 28px 22px; }.setup-actions { align-items: stretch; flex-direction: column; }.live-header { align-items: stretch; flex-direction: column; }.live-stop { width: 100%; }.open-pages-heading { align-items: flex-start; flex-direction: column; gap: 8px; } }
+@media (max-width: 620px) {
+  .brand-copy { display: none; }
+  .recording-list { grid-template-columns: 1fr; }
+  .recording-card { grid-template-columns: 118px minmax(0,1fr); }
+  .recording-poster { aspect-ratio: auto; border-right: 1px solid var(--line); border-bottom: 0; }
+  .view-subtitle { display: none; }
+  .library-toolbar { align-items: flex-end; }
+  .result-count { white-space: nowrap; }
+  .setup-card { padding: 28px 22px; }
+  .setup-actions { align-items: stretch; flex-direction: column; }
+  .live-header { align-items: stretch; flex-direction: column; }
+  .live-stop { width: 100%; }
+  .open-pages-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
+}
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-property: opacity, background-color, border-color !important; transition-duration: .16s !important; }.recording-card,.button,.screenshot-thumb img { transform: none !important; } }
 @media (prefers-color-scheme: dark) {
   :root {
