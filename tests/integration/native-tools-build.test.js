@@ -1,22 +1,56 @@
 import { execFileSync } from 'child_process'
-import { existsSync, readFileSync, statSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 describe.runIf(process.platform === 'darwin')('macOS native video tools', () => {
-  it('compiles bundled ScreenCaptureKit and AVFoundation executables with swiftc', () => {
-    execFileSync('node', ['scripts/build-native-tools.mjs'], { encoding: 'utf8' })
-    for (const tool of ['bf-window-recorder', 'bf-video-frame']) {
-      const path = join(process.cwd(), 'native-tools', tool)
-      expect(existsSync(path)).toBe(true)
-      expect(statSync(path).mode & 0o111).not.toBe(0)
-      expect(execFileSync('lipo', ['-info', path], { encoding: 'utf8' })).toContain('architecture: arm64')
-      expect(execFileSync('otool', ['-l', path], { encoding: 'utf8' })).toMatch(/\bminos 14\.2\b/)
-    }
+  let isolatedBuildRoot
+  let nativeToolsDir
+  let helperApp
+
+  beforeAll(() => {
+    isolatedBuildRoot = mkdtempSync(join(tmpdir(), 'browser-forge-native-tools-test-'))
+    nativeToolsDir = join(isolatedBuildRoot, 'native-tools')
+    helperApp = join(nativeToolsDir, 'Browser Forge Recorder.app')
+    const skillVideoToolsDir = join(isolatedBuildRoot, 'skill-video-tools')
+    execFileSync('node', ['scripts/build-native-tools.mjs'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        BROWSER_FORGE_NATIVE_TOOLS_OUTPUT_DIR: nativeToolsDir,
+        BROWSER_FORGE_SKILL_VIDEO_TOOLS_DIR: skillVideoToolsDir
+      }
+    })
   }, 120_000)
 
-  it('exposes a non-interactive screen-recording permission check protocol', () => {
-    const tool = join(process.cwd(), 'native-tools', 'bf-window-recorder')
+  afterAll(() => {
+    rmSync(isolatedBuildRoot, { recursive: true, force: true })
+  })
+
+  it('builds the recorder as a signed macOS Helper App and keeps frame extraction standalone', () => {
+    const recorder = join(helperApp, 'Contents', 'MacOS', 'Browser Forge Recorder')
+    const infoPlist = join(helperApp, 'Contents', 'Info.plist')
+    const icon = join(helperApp, 'Contents', 'Resources', 'BrowserForgeRecorder.icns')
+    const frame = join(nativeToolsDir, 'bf-video-frame')
+
+    for (const tool of [recorder, frame]) {
+      expect(existsSync(tool)).toBe(true)
+      expect(statSync(tool).mode & 0o111).not.toBe(0)
+      expect(execFileSync('lipo', ['-info', tool], { encoding: 'utf8' })).toContain('architecture: arm64')
+      expect(execFileSync('otool', ['-l', tool], { encoding: 'utf8' })).toMatch(/\bminos 14\.2\b/)
+    }
+    expect(existsSync(infoPlist)).toBe(true)
+    expect(existsSync(icon)).toBe(true)
+    expect(execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleIdentifier', infoPlist], { encoding: 'utf8' }).trim()).toBe('com.browserforge.app.recorder')
+    expect(execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleExecutable', infoPlist], { encoding: 'utf8' }).trim()).toBe('Browser Forge Recorder')
+    expect(execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundlePackageType', infoPlist], { encoding: 'utf8' }).trim()).toBe('APPL')
+    expect(() => execFileSync('codesign', ['--verify', '--deep', '--strict', helperApp], { encoding: 'utf8', stdio: 'pipe' })).not.toThrow()
+    expect(existsSync(join(nativeToolsDir, 'bf-window-recorder'))).toBe(false)
+  }, 120_000)
+
+  it('exposes a non-interactive screen-recording permission check protocol from the Helper App identity', () => {
+    const tool = join(helperApp, 'Contents', 'MacOS', 'Browser Forge Recorder')
     const result = JSON.parse(execFileSync(tool, ['--check-permission'], { encoding: 'utf8' }).trim())
 
     expect(result).toEqual(expect.objectContaining({

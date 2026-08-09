@@ -21,8 +21,9 @@ export async function renderNewRecording({ container, api, onBack, onStarted }) 
           <button class="button primary large" type="button" data-start disabled>${recordDot()}<span data-start-label>正在检查权限…</span></button>
           <p class="form-status" data-status>正在检查 macOS 屏幕录制权限…</p>
           <div class="permission-actions" data-permission-actions hidden>
-            <button class="button secondary" type="button" data-request-permission>重新请求权限</button>
+            <button class="button secondary" type="button" data-check-permission>再次检查权限</button>
             <button class="button secondary" type="button" data-open-settings>打开系统设置</button>
+            <button class="button quiet" type="button" data-reveal-helper>在 Finder 中显示录制组件</button>
           </div>
         </div>
       </div>
@@ -34,8 +35,9 @@ export async function renderNewRecording({ container, api, onBack, onStarted }) 
   const buttonLabel = container.querySelector('[data-start-label]')
   const status = container.querySelector('[data-status]')
   const permissionActions = container.querySelector('[data-permission-actions]')
-  const retryPermission = container.querySelector('[data-request-permission]')
+  const checkPermissionButton = container.querySelector('[data-check-permission]')
   const openSettings = container.querySelector('[data-open-settings]')
+  const revealHelper = container.querySelector('[data-reveal-helper]')
   let permission
   let permissionLoaded = false
   let chromeLoaded = false
@@ -58,12 +60,12 @@ export async function renderNewRecording({ container, api, onBack, onStarted }) 
     permissionLoaded = true
     permissionActions.hidden = false
     if (result?.status === 'restart-required' || result?.restartRequired) {
-      setStatus('macOS 已记录授权，但需要重新启动 Browser Forge 后才能开始录制。', { error: true })
+      setStatus('macOS 已记录 Browser Forge Recorder 的授权，但需要重新启动 Browser Forge 后才能开始录制。', { error: true })
     } else if (result?.status === 'unsupported') {
       permissionActions.hidden = true
       setStatus('当前平台尚未提供窗口视频录制能力。', { error: true })
     } else {
-      setStatus('macOS 未授予权限。请在“系统设置 → 隐私与安全性 → 屏幕与系统音频录制”中允许 Browser Forge，然后重新打开 App。', { error: true })
+      setStatus('macOS 未授予 Browser Forge Recorder 权限。请在“系统设置 → 隐私与安全性 → 屏幕与系统音频录制”中打开它的开关，然后返回这里再次检查。', { error: true })
     }
     updateButton()
   }
@@ -93,17 +95,52 @@ export async function renderNewRecording({ container, api, onBack, onStarted }) 
     }
   }
 
+  const checkPermission = async () => {
+    busy = true
+    setStatus('正在检查 Browser Forge Recorder 权限…')
+    updateButton()
+    try {
+      const result = await api.getScreenRecordingPermission()
+      permission = result
+      permissionLoaded = true
+      if (!result.granted) {
+        showPermissionRecovery(result)
+        return false
+      }
+      permissionActions.hidden = true
+      setStatus('Browser Forge Recorder 屏幕录制权限已就绪。')
+      return true
+    } catch (error) {
+      setStatus(`权限检查失败：${error.message}`, { error: true })
+      return false
+    } finally {
+      busy = false
+      updateButton()
+    }
+  }
+
   input.addEventListener('input', updateButton)
-  retryPermission.addEventListener('click', () => requestPermission())
+  checkPermissionButton.addEventListener('click', checkPermission)
   openSettings.addEventListener('click', async () => {
     openSettings.disabled = true
     try {
       await api.openScreenRecordingSettings()
-      setStatus('已打开系统设置。允许 Browser Forge 后，请重新启动 App。')
+      setStatus('已打开系统设置。请打开 Browser Forge Recorder 的开关，然后返回这里点击“再次检查权限”。')
     } catch (error) {
       setStatus(`无法打开系统设置：${error.message}`, { error: true })
     } finally {
       openSettings.disabled = false
+    }
+  })
+  revealHelper.addEventListener('click', async () => {
+    revealHelper.disabled = true
+    try {
+      await api.revealScreenRecordingHelper()
+      setStatus('已在 Finder 中显示 Browser Forge Recorder。可通过系统设置的“+”选择它，或将它拖入录屏授权列表。')
+    } catch (error) {
+      setStatus(`无法显示录制组件：${error.message}`, { error: true })
+    } finally {
+      revealHelper.disabled = false
     }
   })
 
@@ -115,7 +152,7 @@ export async function renderNewRecording({ container, api, onBack, onStarted }) 
     } else if (permission.granted) {
       setStatus('屏幕录制权限已就绪，正在查找 Chrome…')
     } else {
-      setStatus('开始前，macOS 会请求屏幕录制权限；Browser Forge 只录制它打开的 Chrome 窗口。')
+      setStatus('开始前，macOS 会请求 Browser Forge Recorder 的屏幕录制权限；它只录制 Browser Forge 打开的 Chrome 窗口。')
     }
   } catch (error) {
     permissionLoaded = true

@@ -32,6 +32,7 @@ export function createRecorderHttpServer({
   createVideoRecorder = (options = {}) => new DefaultVideoRecorder({ ...options, nativeToolPathOptions }),
   screenRecordingPermission = new DefaultScreenRecordingPermission({ nativeToolPathOptions }),
   openScreenRecordingSettings = null,
+  revealScreenRecordingHelper = null,
   chromeReadyTimeoutMs = 20000,
   startupLogFile = join(homedir(), 'Library', 'Application Support', 'browser-forge', 'recorder-startup.log'),
   afterChromeLaunch = async () => {},
@@ -192,6 +193,14 @@ export function createRecorderHttpServer({
       throw apiError('UNSUPPORTED_SHELL', 'Screen recording settings are only available in the Browser Forge app')
     }
     await openScreenRecordingSettings()
+    res.status(204).end()
+  }))
+
+  app.post('/api/screen-recording-permission/reveal-helper', asyncRoute(async (req, res) => {
+    if (typeof revealScreenRecordingHelper !== 'function') {
+      throw apiError('UNSUPPORTED_SHELL', 'The Browser Forge Recorder Helper is only available in the Browser Forge app')
+    }
+    await revealScreenRecordingHelper()
     res.status(204).end()
   }))
 

@@ -1,10 +1,13 @@
-import { join } from 'path'
+import { dirname, join } from 'path'
+
+const MACOS_RECORDER_EXECUTABLE = 'Browser Forge Recorder'
+const MACOS_RECORDER_APP = 'Browser Forge Recorder.app'
 
 const NATIVE_TOOL_PLATFORMS = Object.freeze({
   'darwin-arm64': Object.freeze({
     delivered: true,
     executables: Object.freeze({
-      windowRecorder: 'bf-window-recorder',
+      windowRecorder: MACOS_RECORDER_EXECUTABLE,
       videoFrame: 'bf-video-frame'
     })
   }),
@@ -38,6 +41,22 @@ export function getNativeToolExecutableName({ tool, ...options } = {}) {
   return name
 }
 
+export function resolveScreenRecordingHelperAppPath({
+  platform = process.platform,
+  arch = process.arch,
+  resourcesPath = process.resourcesPath,
+  projectRoot = process.cwd(),
+  packaged = false
+} = {}) {
+  getNativeToolPlatformKey({ platform, arch })
+  if (platform !== 'darwin') throw new Error(`No screen recording Helper App for platform: ${platform}-${arch}`)
+  if (packaged) {
+    if (!resourcesPath) throw new Error('resourcesPath is required for packaged native tools')
+    return join(dirname(resourcesPath), 'Helpers', MACOS_RECORDER_APP)
+  }
+  return join(projectRoot, 'native-tools', MACOS_RECORDER_APP)
+}
+
 export function resolveNativeToolPath({
   toolName,
   platform = process.platform,
@@ -48,6 +67,14 @@ export function resolveNativeToolPath({
 } = {}) {
   if (!toolName) throw new Error('toolName is required')
   getNativeToolPlatformKey({ platform, arch })
+  if (platform === 'darwin' && toolName === MACOS_RECORDER_EXECUTABLE) {
+    return join(
+      resolveScreenRecordingHelperAppPath({ platform, arch, resourcesPath, projectRoot, packaged }),
+      'Contents',
+      'MacOS',
+      MACOS_RECORDER_EXECUTABLE
+    )
+  }
   if (packaged) {
     if (!resourcesPath) throw new Error('resourcesPath is required for packaged native tools')
     return join(resourcesPath, 'native-tools', toolName)

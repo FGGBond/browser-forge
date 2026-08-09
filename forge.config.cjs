@@ -2,6 +2,7 @@ const { existsSync, readdirSync } = require('fs')
 const { join } = require('path')
 const { homedir } = require('os')
 const { devDependencies } = require('./package.json')
+const { packageRecorderHelpers } = require('./scripts/package-native-helpers.cjs')
 
 function findElectronZipDir() {
   if (process.env.ELECTRON_ZIP_DIR) return process.env.ELECTRON_ZIP_DIR
@@ -32,6 +33,9 @@ const electronZipDir = findElectronZipDir()
 
 module.exports = {
   outDir: 'dist',
+  hooks: {
+    postPackage: async (_forgeConfig, packageResult) => packageRecorderHelpers(packageResult)
+  },
   packagerConfig: {
     name: 'Browser Forge',
     executableName: 'Browser Forge',

@@ -30,6 +30,7 @@ describe('macOS packaging configuration', () => {
     expect(forgeConfig.packagerConfig.executableName).toBe('Browser Forge')
     expect(forgeConfig.packagerConfig.appBundleId).toBe('com.browserforge.app')
     expect(forgeConfig.packagerConfig.extraResource).toEqual(['native-tools'])
+    expect(forgeConfig.hooks?.postPackage).toBeTypeOf('function')
     expect(forgeConfig.makers.map((maker) => maker.name)).toEqual([
       '@electron-forge/maker-dmg',
       '@electron-forge/maker-zip'

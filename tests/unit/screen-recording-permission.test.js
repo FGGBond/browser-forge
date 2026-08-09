@@ -28,7 +28,7 @@ describe('ScreenRecordingPermission', () => {
       granted: true,
       restartRequired: false
     })
-    expect(execute).toHaveBeenCalledWith('/native/bf-window-recorder', ['--check-permission'])
+    expect(execute).toHaveBeenCalledWith('/native/Browser Forge Recorder', ['--check-permission'])
   })
 
   it.each([
@@ -40,7 +40,7 @@ describe('ScreenRecordingPermission', () => {
     const permission = new ScreenRecordingPermission({
       platform: 'darwin',
       arch: 'arm64',
-      resolveBinaryPath: () => '/native/bf-window-recorder',
+      resolveBinaryPath: () => '/native/Browser Forge Recorder',
       execute: async () => ({ stdout: jsonResult({ action: 'request', status, granted, restartRequired }), stderr: '' })
     })
 
@@ -51,7 +51,7 @@ describe('ScreenRecordingPermission', () => {
     const permission = new ScreenRecordingPermission({
       platform: 'darwin',
       arch: 'arm64',
-      resolveBinaryPath: () => '/native/bf-window-recorder',
+      resolveBinaryPath: () => '/native/Browser Forge Recorder',
       execute: async () => ({ stdout: '{"type":"completed"}\n', stderr: '' })
     })
 
@@ -62,7 +62,7 @@ describe('ScreenRecordingPermission', () => {
     const permission = new ScreenRecordingPermission({
       platform: 'darwin',
       arch: 'arm64',
-      resolveBinaryPath: () => '/native/bf-window-recorder',
+      resolveBinaryPath: () => '/native/Browser Forge Recorder',
       execute: async () => { throw new Error('spawn EACCES') }
     })
 

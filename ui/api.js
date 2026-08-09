@@ -37,6 +37,7 @@ export const api = {
   getScreenRecordingPermission() { return request('/api/screen-recording-permission') },
   requestScreenRecordingPermission() { return request('/api/screen-recording-permission/request', { method: 'POST' }) },
   openScreenRecordingSettings() { return request('/api/screen-recording-permission/open-settings', { method: 'POST' }) },
+  revealScreenRecordingHelper() { return request('/api/screen-recording-permission/reveal-helper', { method: 'POST' }) },
   getSummary() { return request('/api/summary') },
   startRecording({ chromePath }) { return request('/api/start-recording', { method: 'POST', body: JSON.stringify({ chromePath }) }) },
   stopRecording() { return request('/api/stop-recording', { method: 'POST' }) }

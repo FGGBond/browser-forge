@@ -50,10 +50,12 @@ describe('recorder HTTP server', () => {
       request: vi.fn(async () => ({ supported: true, status: 'restart-required', granted: false, restartRequired: true }))
     }
     const openScreenRecordingSettings = vi.fn(async () => {})
+    const revealScreenRecordingHelper = vi.fn(async () => {})
     recorderServer = createRecorderHttpServer({
       uiRoot: join(process.cwd(), 'ui'),
       screenRecordingPermission,
-      openScreenRecordingSettings
+      openScreenRecordingSettings,
+      revealScreenRecordingHelper
     })
     const url = await recorderServer.listen()
 
@@ -69,10 +71,15 @@ describe('recorder HTTP server', () => {
       body: JSON.stringify({ url: 'https://attacker.example' })
     })
 
+    const revealResponse = await fetch(`${url}/api/screen-recording-permission/reveal-helper`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: '/tmp/attacker' })
+    })
     expect(settingsResponse.status).toBe(204)
+    expect(revealResponse.status).toBe(204)
     expect(screenRecordingPermission.check).toHaveBeenCalledTimes(1)
     expect(screenRecordingPermission.request).toHaveBeenCalledTimes(1)
     expect(openScreenRecordingSettings).toHaveBeenCalledWith()
+    expect(revealScreenRecordingHelper).toHaveBeenCalledWith()
   })
 
   it('checks permission before allocating a port, creating staging material, or launching Chrome', async () => {

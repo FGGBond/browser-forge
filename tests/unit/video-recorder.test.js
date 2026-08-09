@@ -18,7 +18,7 @@ describe('VideoRecorder', () => {
     const recorder = new VideoRecorder({ platform: 'darwin', arch: 'arm64', resolveBinaryPath, spawnProcess: () => child })
 
     const starting = recorder.start({ chromePid: 1, expectedWindowTitle: 'title', outputPath: '/tmp/output.mp4' })
-    expect(resolveBinaryPath).toHaveBeenCalledWith('bf-window-recorder')
+    expect(resolveBinaryPath).toHaveBeenCalledWith('Browser Forge Recorder')
     child.stdout.emit('data', Buffer.from('{"type":"started","startEpochMs":100,"window":{"pid":1,"windowId":"a","title":"title"}}\n'))
     await starting
   })

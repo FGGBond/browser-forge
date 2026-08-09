@@ -128,7 +128,8 @@ describe('Electron app startup', () => {
       recordingLibrary,
       chooseExportDirectory: expect.any(Function),
       revealPath: expect.any(Function),
-      openScreenRecordingSettings: expect.any(Function)
+      openScreenRecordingSettings: expect.any(Function),
+      revealScreenRecordingHelper: expect.any(Function)
     }))
     stubs.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: ['/Users/example/Desktop'] })
     await expect(options.chooseExportDirectory()).resolves.toBe('/Users/example/Desktop')
@@ -136,6 +137,8 @@ describe('Electron app startup', () => {
     expect(stubs.shell.showItemInFolder).toHaveBeenCalledWith('/Users/example/Desktop/export')
     await options.openScreenRecordingSettings('https://attacker.example')
     expect(stubs.shell.openExternal).toHaveBeenCalledWith('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
+    await options.revealScreenRecordingHelper('/tmp/attacker')
+    expect(stubs.shell.showItemInFolder).toHaveBeenCalledWith('/app/path/native-tools/Browser Forge Recorder.app')
   })
 
 })

@@ -13,8 +13,10 @@ let startRequests
 let startFailure
 let permissionCheckResult
 let permissionRequestResult
+let permissionCheckCount
 let permissionRequestCount
 let settingsRequestCount
+let helperRevealCount
 
 const grantedPermission = { supported: true, status: 'granted', granted: true, restartRequired: false }
 const missingPermission = { supported: true, status: 'not-granted', granted: false, restartRequired: false }
@@ -29,13 +31,21 @@ beforeAll(async () => {
     if (url.pathname.endsWith('/timeline')) return json(res, { events: [] })
     if (url.pathname.endsWith('/prompt')) return json(res, { text: '', status: 'empty', updatedAt: null })
     if (url.pathname === '/api/chrome-path') return json(res, { path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' })
-    if (url.pathname === '/api/screen-recording-permission' && req.method === 'GET') return json(res, permissionCheckResult)
+    if (url.pathname === '/api/screen-recording-permission' && req.method === 'GET') {
+      permissionCheckCount += 1
+      return json(res, permissionCheckResult)
+    }
     if (url.pathname === '/api/screen-recording-permission/request' && req.method === 'POST') {
       permissionRequestCount += 1
       return json(res, permissionRequestResult)
     }
     if (url.pathname === '/api/screen-recording-permission/open-settings' && req.method === 'POST') {
       settingsRequestCount += 1
+      res.statusCode = 204
+      return res.end()
+    }
+    if (url.pathname === '/api/screen-recording-permission/reveal-helper' && req.method === 'POST') {
+      helperRevealCount += 1
       res.statusCode = 204
       return res.end()
     }
@@ -68,8 +78,10 @@ function reset({ check = grantedPermission, request = grantedPermission, failSta
   startFailure = failStart
   permissionCheckResult = check
   permissionRequestResult = request
+  permissionCheckCount = 0
   permissionRequestCount = 0
   settingsRequestCount = 0
+  helperRevealCount = 0
 }
 
 async function openNewRecording() {
@@ -118,7 +130,7 @@ describe('managed start recording UI', () => {
     await page.close()
   })
 
-  it('shows retry and fixed system-settings actions after permission is denied', async () => {
+  it('checks the Helper identity again and offers fixed settings/Finder recovery after denial', async () => {
     reset({
       check: missingPermission,
       request: { supported: true, status: 'denied', granted: false, restartRequired: false }
@@ -127,12 +139,21 @@ describe('managed start recording UI', () => {
 
     await page.getByRole('button', { name: '允许屏幕录制' }).click()
 
-    await expect.poll(() => page.locator('[data-status]').textContent()).toContain('系统设置')
+    await expect.poll(() => page.locator('[data-status]').textContent()).toContain('Browser Forge Recorder')
     expect(startRequests).toEqual([])
-    await page.getByRole('button', { name: '重新请求权限' }).click()
-    await expect.poll(() => permissionRequestCount).toBe(2)
+    expect(permissionRequestCount).toBe(1)
+    expect(await page.getByRole('button', { name: '重新请求权限' }).count()).toBe(0)
+
+    await page.getByRole('button', { name: '在 Finder 中显示录制组件' }).click()
+    await expect.poll(() => helperRevealCount).toBe(1)
     await page.getByRole('button', { name: '打开系统设置' }).click()
     await expect.poll(() => settingsRequestCount).toBe(1)
+
+    permissionCheckResult = grantedPermission
+    await page.getByRole('button', { name: '再次检查权限' }).click()
+    await expect.poll(() => permissionCheckCount).toBe(2)
+    expect(await page.getByRole('button', { name: '打开 Chrome 并开始录制' }).isDisabled()).toBe(false)
+    expect(permissionRequestCount).toBe(1)
     await page.close()
   })
 

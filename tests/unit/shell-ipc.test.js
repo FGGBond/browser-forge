@@ -13,12 +13,15 @@ function JavaScriptFiles(root) {
 }
 
 describe('managed recording shell boundary', () => {
-  it('keeps the screen-recording settings destination fixed in Electron Main', () => {
+  it('keeps screen-recording settings and Helper destinations fixed in Electron Main', () => {
     const source = readFileSync('src/main/index.js', 'utf8')
 
     expect(source).toContain("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
     expect(source).toContain('openScreenRecordingSettings')
-    expect(source).not.toMatch(/openScreenRecordingSettings\s*=\s*(?:async\s*)?\(?\s*(?:url|path|destination)/)
+    expect(source).toContain('revealScreenRecordingHelper')
+    expect(source).toContain('resolveScreenRecordingHelperAppPath')
+    expect(source).not.toMatch(/openScreenRecordingSettings\s*=\s*(?:async\s*)?\(?\s*(?:url|path|destination)\b/)
+    expect(source).not.toMatch(/revealScreenRecordingHelper\s*=\s*(?:async\s*)?\(?\s*(?:url|path|destination)\b/)
   })
 
   it('contains no legacy output-directory IPC channel', () => {

@@ -5,6 +5,7 @@ import { ensureAgentSkillsInstalled as defaultEnsureAgentSkillsInstalled } from 
 import { createTelemetry as defaultCreateTelemetry } from './telemetry/index.js'
 import { hashForTelemetry } from './telemetry/config.js'
 import { RecordingLibrary } from './recording-library/index.js'
+import { resolveScreenRecordingHelperAppPath } from './recorder/native-tools.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SCREEN_RECORDING_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
@@ -18,7 +19,8 @@ export async function createWindow({
   recordingLibrary,
   chooseExportDirectory,
   revealPath,
-  openScreenRecordingSettings
+  openScreenRecordingSettings,
+  revealScreenRecordingHelper
 }) {
   state.recorderServer = createRecorderHttpServer({
     uiRoot: join(app.getAppPath(), 'ui'),
@@ -31,7 +33,8 @@ export async function createWindow({
     recordingLibrary,
     chooseExportDirectory,
     revealPath,
-    openScreenRecordingSettings
+    openScreenRecordingSettings,
+    revealScreenRecordingHelper
   })
   const url = await state.recorderServer.listen()
   const win = new BrowserWindow({
@@ -104,6 +107,11 @@ export function startApp({
     }
     const revealPath = path => shell.showItemInFolder(path)
     const openScreenRecordingSettings = () => shell.openExternal(SCREEN_RECORDING_SETTINGS_URL)
+    const revealScreenRecordingHelper = () => shell.showItemInFolder(resolveScreenRecordingHelperAppPath({
+      packaged: Boolean(app.isPackaged),
+      resourcesPath: process.resourcesPath,
+      projectRoot: app.getAppPath()
+    }))
 
     await createWindow({
       app,
@@ -114,7 +122,8 @@ export function startApp({
       recordingLibrary,
       chooseExportDirectory,
       revealPath,
-      openScreenRecordingSettings
+      openScreenRecordingSettings,
+      revealScreenRecordingHelper
     })
     await activeTelemetry.track('app_launched', { startup_ms: Date.now() - startupStartedAt, phase: 'ready_complete' })
     await installPromise
