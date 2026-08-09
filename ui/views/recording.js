@@ -302,7 +302,7 @@ export async function renderRecording({ container, api, activeRecording, onStopp
       </div>
       <section class="open-pages-card" aria-labelledby="open-pages-title">
         <div class="open-pages-heading">
-          <div><p class="eyebrow">Chrome window</p><h2 id="open-pages-title">已打开页面</h2></div>
+          <h2 id="open-pages-title">已打开页面</h2>
           <span data-tab-count aria-live="polite" aria-atomic="true">0 个页面</span>
         </div>
         <div class="open-pages-list" data-open-pages><div class="panel-empty">等待 Chrome 页面…</div></div>

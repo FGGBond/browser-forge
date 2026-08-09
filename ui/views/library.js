@@ -1,20 +1,12 @@
 import { mountVideoPlayer } from './video-player.js'
 
-const VIDEO_LABELS = {
-  complete: ['视频可用', 'success'],
-  partial: ['部分视频', 'warning'],
-  failed: ['视频失败', 'danger'],
-  unavailable: ['无视频', 'neutral']
-}
-
 export async function renderLibrary({ container, api, state, onSelect }) {
   container.innerHTML = `
     <section class="library-view repository-view" aria-labelledby="library-title">
       <header class="view-header repository-header">
         <div>
-          <p class="eyebrow">Recording repository</p>
           <h1 id="library-title">录制仓库</h1>
-          <p class="view-subtitle">直接回看每段浏览器操作，搜索网站，并进入分析工作区。</p>
+          <p class="view-subtitle">查看、搜索并分析保存在这台设备上的录制。</p>
         </div>
       </header>
       <div class="library-toolbar">
@@ -104,30 +96,18 @@ export async function loadLibrary({ api, state, list, count, onSelect, onRendere
 }
 
 function recordingRow(recording) {
-  const [videoText, tone] = VIDEO_LABELS[recording.videoStatus] || VIDEO_LABELS.unavailable
   const playable = ['complete', 'partial'].includes(recording.videoStatus)
-  const hosts = [...new Set([recording.startHost, ...(recording.visitedHosts || [])].filter(Boolean))]
   return `
     <article class="recording-row" data-recording-id="${escapeAttribute(recording.id)}" tabindex="0">
       <div class="repository-video">
-        ${playable ? `<div data-row-player="${escapeAttribute(recording.id)}"></div>` : `<div class="repository-video-placeholder">${windowIcon()}<span>${videoText}</span></div>`}
+        ${playable ? `<div data-row-player="${escapeAttribute(recording.id)}"></div>` : videoPlaceholder(recording.videoStatus)}
       </div>
       <div class="recording-row-content">
-        <div class="recording-row-heading">
-          <div class="recording-row-title">
-            <h2>${escapeHtml(recording.title)}</h2>
-            <p>${escapeHtml(hosts.join(' · ') || '未知网站')}</p>
-            <div class="recording-row-summary" aria-label="录制信息">
-              <time datetime="${escapeAttribute(recording.createdAt)}">${formatDate(recording.createdAt)}</time>
-              <span aria-hidden="true">·</span>
-              <span>${formatDuration(recording.durationMs)}</span>
-              <span aria-hidden="true">·</span>
-              <span>${recording.promptStatus === 'draft' ? '已有分析说明' : '分析说明待补充'}</span>
-            </div>
-          </div>
+        <div class="recording-row-title">
+          <h2>${escapeHtml(recording.title)}</h2>
+          <time datetime="${escapeAttribute(recording.createdAt)}">${formatDate(recording.createdAt)}</time>
         </div>
         <div class="recording-row-actions">
-          <span class="status-pill ${tone}"><i></i>${videoText}</span>
           <button class="button primary" type="button" data-analyze="${escapeAttribute(recording.id)}">去分析</button>
         </div>
       </div>
@@ -143,6 +123,10 @@ function formatDate(value) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '时间未知'
   return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
+}
+function videoPlaceholder(status) {
+  const failed = status === 'failed'
+  return `<div class="repository-video-placeholder">${windowIcon()}<strong>${failed ? '视频录制失败' : '没有可播放视频'}</strong><span>${failed ? '录制过程未生成可播放视频。' : '这段录制暂时没有视频。'}</span></div>`
 }
 function emptyLibrary(query) { return `<div class="empty-list">${searchIcon()}<strong>${query ? '没有匹配的录制' : '还没有录制'}</strong><span>${query ? '试试录制名称、主站点或访问过的网站。' : '点击左上角“新录制”开始第一段浏览器操作。'}</span></div>` }
 function skeletonRows(count) { return Array.from({ length: count }, () => '<div class="recording-row skeleton"><div class="repository-video"></div><div class="recording-row-content"><div><i></i><i></i></div><i></i></div></div>').join('') }

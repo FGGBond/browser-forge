@@ -1,10 +1,35 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'fs'
+import { readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 
 const readUi = path => readFileSync(join(process.cwd(), 'ui', path), 'utf8')
 
 describe('recording workspace product boundaries', () => {
+  it('removes redundant English eyebrow and repository status copy from visible renderer views', () => {
+    const rendererSource = [
+      ...readdirSync(join(process.cwd(), 'ui', 'views'))
+      .filter(name => name.endsWith('.js'))
+      .map(name => readUi(join('views', name))),
+      readUi('styles.css')
+    ]
+      .join('\n')
+
+    for (const copy of [
+      'Recording workspace',
+      'Recording repository',
+      'Analysis session',
+      'Agent guidance',
+      'Chrome window',
+      'Recycle bin',
+      '视频可用',
+      '视频部分可用',
+      '分析说明待补充',
+      '已有分析说明'
+    ]) {
+      expect(rendererSource.toLocaleLowerCase()).not.toContain(copy.toLocaleLowerCase())
+    }
+  })
+
   it('keeps internal artifact vocabulary out of visible renderer views', () => {
     const visibleViews = [
       'views/library.js',

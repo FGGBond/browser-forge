@@ -12,7 +12,7 @@ export function writeSidebarCollapsed(collapsed, storage = globalThis.localStora
   try {
     storage?.setItem(SIDEBAR_PREFERENCE_KEY, collapsed ? 'true' : 'false')
   } catch {
-    // UI preferences must never block the recording workspace.
+    // UI preferences must never block navigation rendering.
   }
 }
 
@@ -31,7 +31,7 @@ export function renderSidebar({
     <aside class="app-sidebar${collapsed ? ' is-collapsed' : ''}" aria-label="录制工作区导航">
       <div class="brand">
         <span class="brand-mark">${brandIcon()}</span>
-        <span class="sidebar-label brand-copy"><strong>Browser Forge</strong><small>Recording workspace</small></span>
+        <span class="sidebar-label brand-copy"><strong>Browser Forge</strong></span>
       </div>
       <button class="button primary sidebar-new${route === 'new-recording' ? ' active' : ''}" type="button" data-new-recording ${locked ? 'disabled' : ''} title="新录制">
         ${plusIcon()}<span class="sidebar-label">新录制</span>

@@ -6,7 +6,6 @@ export async function renderTrash({ container, api, onBack, onRestored }) {
     <section class="trash-view" aria-labelledby="trash-title">
       <header class="view-header">
         <div>
-          <p class="eyebrow">Recycle bin</p>
           <h1 id="trash-title" tabindex="-1">回收站</h1>
           <p class="view-subtitle">在这里恢复仍需保留的录制，或永久清理不再需要的内容。</p>
         </div>

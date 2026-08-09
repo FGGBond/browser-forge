@@ -9,26 +9,54 @@ let server
 let baseUrl
 
 const contentTypes = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' }
-const recording = {
-  id: 'f4bf0a25-a468-45dc-a006-0f607ade0240',
-  title: '查询订单并导出发票',
-  state: 'active',
-  createdAt: '2026-08-09T09:32:00.000Z',
-  durationMs: 163000,
-  startHost: 'dongdev.jd.com',
-  visitedHosts: ['dongdev.jd.com', 'invoice.jd.com'],
-  videoStatus: 'complete',
-  promptStatus: 'draft',
-  sizeBytes: 1024
-}
+const recordings = [
+  {
+    id: 'f4bf0a25-a468-45dc-a006-0f607ade0240',
+    title: '查询订单并导出发票',
+    state: 'active',
+    createdAt: '2026-08-09T09:32:00.000Z',
+    durationMs: 163000,
+    startHost: 'dongdev.jd.com',
+    visitedHosts: ['dongdev.jd.com', 'invoice.jd.com'],
+    videoStatus: 'complete',
+    promptStatus: 'draft',
+    sizeBytes: 1024
+  },
+  {
+    id: '66c2169a-4af4-48a6-9d1a-b5a25aaf6039',
+    title: '核对库存变更',
+    state: 'active',
+    createdAt: '2026-08-09T10:15:00.000Z',
+    durationMs: 68000,
+    startHost: 'stock.example.com',
+    visitedHosts: ['stock.example.com'],
+    videoStatus: 'partial',
+    promptStatus: 'empty',
+    sizeBytes: 2048
+  },
+  {
+    id: '3b371e59-eb0e-4b79-b4c5-b6360e0d0774',
+    title: '提交失败的录制',
+    state: 'active',
+    createdAt: '2026-08-09T11:05:00.000Z',
+    durationMs: 42000,
+    startHost: 'failed.example.com',
+    visitedHosts: ['failed.example.com'],
+    videoStatus: 'failed',
+    promptStatus: 'draft',
+    sizeBytes: 4096
+  }
+]
+const recording = recordings[0]
 
 beforeAll(async () => {
   browser = await chromium.launch()
   server = createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost')
-    if (url.pathname === '/api/recordings') return json(res, { recordings: [recording] })
-    if (url.pathname === `/api/recordings/${recording.id}`) return json(res, recording)
-    if (url.pathname === `/api/recordings/${recording.id}/prompt`) return json(res, { text: '', status: 'empty', updatedAt: null })
+    if (url.pathname === '/api/recordings') return json(res, { recordings })
+    const selected = recordings.find(item => url.pathname === `/api/recordings/${item.id}`)
+    if (selected) return json(res, selected)
+    if (recordings.some(item => url.pathname === `/api/recordings/${item.id}/prompt`)) return json(res, { text: '', status: 'empty', updatedAt: null })
     if (url.pathname.endsWith('/poster') || url.pathname.endsWith('/video')) {
       res.statusCode = 404
       return res.end()
@@ -72,7 +100,7 @@ describe('recording repository video-first layout', () => {
     })
     expect(shellTransitions).not.toContain('grid-template-columns')
 
-    await page.getByRole('button', { name: '去分析', exact: true }).click()
+    await page.getByRole('button', { name: '去分析', exact: true }).first().click()
     await page.locator('[data-toggle-analysis]').waitFor()
     const workspaceTransitions = await page.evaluate(() => {
       const workspace = document.querySelector('[data-analysis-workspace]')
@@ -91,7 +119,7 @@ describe('recording repository video-first layout', () => {
   ])('keeps the $width px guidance pane beside or below the video without overlap', async ({ width, height, stacked }) => {
     const page = await browser.newPage({ viewport: { width, height } })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
-    await page.getByRole('button', { name: '去分析', exact: true }).click()
+    await page.getByRole('button', { name: '去分析', exact: true }).first().click()
     await page.locator('[data-toggle-analysis]').click()
     await page.locator('[data-analysis-pane]').waitFor({ state: 'visible' })
 
@@ -128,7 +156,9 @@ describe('recording repository video-first layout', () => {
 
   it.each([
     { width: 1280, height: 800 },
-    { width: 900, height: 700 }
+    { width: 900, height: 700 },
+    { width: 640, height: 760 },
+    { width: 520, height: 760 }
   ])('keeps the $width px card video dominant with compact metadata below it', async viewport => {
     const page = await browser.newPage({ viewport })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
@@ -141,9 +171,53 @@ describe('recording repository video-first layout', () => {
 
     expect(videoBox.width / rowBox.width).toBeGreaterThan(.95)
     expect(videoBox.y).toBeLessThan(contentBox.y)
-    expect(contentBox.height / videoBox.height).toBeLessThan(.35)
+    expect(contentBox.height / videoBox.height).toBeLessThan(viewport.width > 640 ? .35 : .5)
     expect(await row.locator('.recording-row-meta').count()).toBe(0)
     expect(await row.getByRole('button', { name: '去分析' }).count()).toBe(1)
+    await page.close()
+  })
+
+  it('renders complete, partial, and failed cards with the minimal card contract and preserved navigation', async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+    await page.goto(baseUrl, { waitUntil: 'networkidle' })
+
+    const rows = page.locator('[data-recording-id]')
+    await expect.poll(() => rows.count()).toBe(3)
+    for (const recording of recordings) {
+      const row = page.locator(`[data-recording-id="${recording.id}"]`)
+      const footer = row.locator('.recording-row-content')
+      await row.waitFor()
+      expect(await row.getAttribute('data-recording-id')).toBe(recording.id)
+      expect(await footer.getByRole('heading', { name: recording.title }).count()).toBe(1)
+      expect(await footer.locator('time').count()).toBe(1)
+      expect(await footer.getByRole('button', { name: '去分析' }).count()).toBe(1)
+      expect(await footer.locator('button').count()).toBe(1)
+      expect(await footer.locator('p, .recording-row-summary, .status-pill').count()).toBe(0)
+      const footerText = await footer.textContent()
+      expect(footerText).not.toContain(recording.startHost)
+      expect(footerText).not.toContain('02:43')
+      expect(footerText).not.toMatch(/视频可用|视频部分可用|分析说明待补充|已有分析说明/)
+    }
+
+    for (const playable of recordings.slice(0, 2)) {
+      const video = page.locator(`[data-recording-id="${playable.id}"] .repository-video`)
+      expect(await video.locator('[data-video-player]').count()).toBe(1)
+      expect(await video.locator('.repository-video-placeholder').count()).toBe(0)
+    }
+    const failedVideo = page.locator(`[data-recording-id="${recordings[2].id}"] .repository-video`)
+    expect(await failedVideo.locator('[data-video-player]').count()).toBe(0)
+    expect(await failedVideo.locator('.repository-video-placeholder').count()).toBe(1)
+    expect(await failedVideo.textContent()).toContain('视频录制失败')
+
+    await page.locator(`[data-recording-id="${recordings[1].id}"] [data-analyze]`).click()
+    await expect.poll(() => page.locator('[data-title-input]').inputValue()).toBe(recordings[1].title)
+    await page.locator('[data-back]').click()
+    await rows.first().waitFor()
+
+    const failedRow = page.locator(`[data-recording-id="${recordings[2].id}"]`)
+    await failedRow.focus()
+    await page.keyboard.press('Enter')
+    await expect.poll(() => page.locator('[data-title-input]').inputValue()).toBe(recordings[2].title)
     await page.close()
   })
 })

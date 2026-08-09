@@ -46,6 +46,7 @@ describe('App recycle bin UI', () => {
     const page = await browser.newPage({ viewport: { width: 1180, height: 760 } })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
     await page.getByRole('button', { name: '回收站' }).click()
+    expect(await page.getByText('Recycle bin', { exact: true }).count()).toBe(0)
 
     const row = page.locator('[data-trash-row]')
     await row.waitFor()
