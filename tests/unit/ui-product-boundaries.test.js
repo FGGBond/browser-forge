@@ -40,6 +40,43 @@ describe('recording workspace product boundaries', () => {
     expect(readUi('views/detail.js')).toContain('data-analysis-pane')
   })
 
+  it('keeps the analysis guidance flow structured, local, and free of normal save-state copy', () => {
+    const promptEditor = readUi('views/prompt-editor.js')
+
+    for (const dependency of ['parseGuidanceMarkdown', 'serializeGuidanceMarkdown', 'mountMarkdownEditor', 'renderSafeMarkdown']) {
+      expect(promptEditor).toContain(dependency)
+    }
+    for (const question of [
+      '这次录制中，你完成了什么？',
+      '希望把这段操作变成什么能力？',
+      '怎样证明这个 skill 可以交付？'
+    ]) {
+      expect(promptEditor).toContain(question)
+    }
+    for (const hook of [
+      'data-guidance-step',
+      'data-guidance-progress',
+      'data-guidance-next',
+      'data-guidance-previous',
+      'data-guidance-review',
+      'data-edit-guidance',
+      'data-save-error',
+      'data-retry-save',
+      'data-dismiss-save-error',
+      'data-prompt-textarea'
+    ]) {
+      expect(promptEditor).toContain(hook)
+    }
+    expect(promptEditor).toContain('尚未配置 Agent')
+    expect(promptEditor).toContain('browser-forge skill')
+    expect(promptEditor).not.toContain('Agent guidance')
+    expect(promptEditor).not.toContain('data-save-state')
+    expect(promptEditor).not.toContain('说明尚未保存')
+    expect(promptEditor).not.toContain('正在保存')
+    expect(promptEditor).not.toContain('预览完整提示词')
+    expect(promptEditor).not.toContain('GUIDED_PROMPT_TEMPLATE')
+  })
+
   it('locks the local UI to same-origin resources with a strict CSP', () => {
     const index = readUi('index.html')
     const csp = index.match(/<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"/i)?.[1]
