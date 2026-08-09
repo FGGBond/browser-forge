@@ -17,9 +17,15 @@ describe('external Agent prompt domain', () => {
     expect(result).toContain('查询订单状态')
     expect(result).toContain('独立运行')
     expect(result).toContain('CLI')
+    for (const section of ['本次录制中的动作与意图', '希望提取的 skill 能力', 'Skill 验收标准']) {
+      expect(result).toContain(section)
+    }
     expect(result).toContain('timeline.json')
     expect(result).toContain('videoOffsetMs')
+    expect(result).toContain('零依赖视频抽帧工具')
     expect(result).toContain('不需要额外安装 FFmpeg、Homebrew、Python 或 pip')
+    expect(result).toContain('必须实际执行用户给出的验收任务')
+    expect(result).toContain('每一项验收标准是否通过')
   })
 
   it('provides actionable fallback guidance when the persisted prompt is empty', () => {

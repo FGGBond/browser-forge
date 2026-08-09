@@ -31,6 +31,11 @@ export function buildExternalAgentPrompt({ recordingPath, guidance }) {
 录制物料绝对路径：
 ${normalizedPath}
 
+用户说明分为：
+- 本次录制中的动作与意图
+- 希望提取的 skill 能力
+- Skill 验收标准
+
 用户对录制行为和目标的说明：
 ${normalizedGuidance || '用户尚未补充说明，请先基于录制物料分析并向用户确认关键目标。'}
 
@@ -38,5 +43,6 @@ ${normalizedGuidance || '用户尚未补充说明，请先基于录制物料分�
 - 读取录制目录中的 metadata.json、timeline.json、recording.har、tabs/ 和 video/manifest.json。
 - 根据 timeline.json 中事件的 videoOffsetMs，按需调用 browser-forge 自带的零依赖视频抽帧工具获取对应时刻的浏览器画面。
 - 视频抽帧不需要额外安装 FFmpeg、Homebrew、Python 或 pip。
-- 最终结果必须是可独立运行、包含清晰输入输出契约和一系列 CLI 工具的 Browser Forge skill。`
+- 最终结果必须是可独立运行、包含清晰输入输出契约和一系列 CLI 工具的 Browser Forge skill。
+- 完成产物后，必须实际执行用户给出的验收任务，并说明每一项验收标准是否通过。`
 }
