@@ -141,7 +141,7 @@
       font: inherit;
       font-size: 16px;
     }
-    input::placeholder { color: #98a2b3; }
+    input::placeholder { color: #667085; }
     button {
       flex: none;
       min-width: 88px;
@@ -159,6 +159,7 @@
     button:hover { background: var(--blue-hover); box-shadow: 0 10px 22px rgba(37, 99, 235, .3); }
     button:active { transform: scale(.98); }
     button:focus-visible { outline: 3px solid rgba(37, 99, 235, .24); outline-offset: 2px; }
+    button:disabled { cursor:wait; opacity:.58; box-shadow:none; }
     .hint {
       margin-top: 10px;
       color: var(--muted);
@@ -204,9 +205,9 @@
           autofocus
           spellcheck="false"
         >
-        <button type="submit">开始</button>
+        <button type="submit" disabled>开始</button>
       </form>
-      <p class="hint">录制完成后，回到 Browser Forge 停止录制。</p>
+      <p class="hint" data-readiness aria-live="polite">正在准备录制…</p>
     </section>
   </main>
   <script>
@@ -215,17 +216,38 @@
 
     const destinationForm = document.getElementById('destination-form')
     const destinationInput = document.getElementById('destination-url')
+    const startButton = destinationForm.querySelector('button[type="submit"]')
+    const readiness = document.querySelector('[data-readiness]')
+    let recorderReady = false
+
+    async function waitUntilRecorderReady() {
+      try {
+        const response = await fetch('/api/recording-ready', { cache: 'no-store' })
+        const status = response.ok ? await response.json() : null
+        recorderReady = status?.ready === true
+      } catch {
+        recorderReady = false
+      }
+      startButton.disabled = !recorderReady
+      readiness.textContent = recorderReady ? '录制已准备完成' : '正在准备录制…'
+      if (!recorderReady) window.setTimeout(waitUntilRecorderReady, 200)
+    }
+
     destinationForm.addEventListener('submit', event => {
       event.preventDefault()
+      if (!recorderReady) return
       const destination = destinationInput.value.trim()
       try {
-        window.location.assign(new URL(destination).href)
+        const target = new URL(destination)
+        if (!['http:', 'https:'].includes(target.protocol)) throw new Error('unsafe protocol')
+        window.location.assign(target.href)
       } catch {
-        destinationInput.setCustomValidity('请输入完整的网址，例如 https://example.com')
+        destinationInput.setCustomValidity('请输入以 http:// 或 https:// 开头的完整网址')
         destinationInput.reportValidity()
       }
     })
     destinationInput.addEventListener('input', () => destinationInput.setCustomValidity(''))
+    waitUntilRecorderReady()
   </script>
 </body>
 </html>

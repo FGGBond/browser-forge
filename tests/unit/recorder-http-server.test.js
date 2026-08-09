@@ -31,11 +31,13 @@ describe('recorder HTTP server', () => {
 
     const html = await fetch(url).then(response => response.text())
     const summary = await fetch(`${url}/api/summary`).then(response => response.json())
+    const readiness = await fetch(`${url}/api/recording-ready`).then(response => response.json())
 
     expect(html).toContain('<div id="app"')
     expect(html).toContain('<link rel="stylesheet" href="/styles.css">')
     expect(html).toContain('<script type="module" src="/app.js"></script>')
     expect(html).not.toContain('output-dir')
+    expect(readiness).toEqual({ ready: false })
     expect(summary).toEqual(expect.objectContaining({
       type: 'summary',
       startedAt: null,
@@ -759,6 +761,7 @@ describe('window video lifecycle', () => {
       body: JSON.stringify({ outputDir: '/tmp/attacker-ignored', goalText: '  查询订单状态  ' })
     }).then(response => response.json())
     expect(started).toEqual({ ok: true, port: 9333, recordingId: id })
+    expect(await fetch(`${url}/api/recording-ready`).then(response => response.json())).toEqual({ ready: true })
     expect(sessionOptions[0]).toEqual(expect.objectContaining({ port: 9333, sessionDir: stagingPath }))
     expect(sessionOptions[0]).not.toHaveProperty('outputDir')
 

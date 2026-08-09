@@ -392,6 +392,10 @@ export function createRecorderHttpServer({
     res.json({ tabs })
   })
 
+  app.get('/api/recording-ready', (req, res) => {
+    res.json({ ready: Boolean(activeSession && hasStartedActiveSession) })
+  })
+
   app.get('/api/summary', async (req, res) => {
     if (shouldClearActiveSession({ activeSession, chromeProcess })) {
       await stopActiveRecording().catch(() => {})
