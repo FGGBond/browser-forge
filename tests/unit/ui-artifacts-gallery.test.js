@@ -15,6 +15,7 @@ beforeAll(async () => {
     const url = new URL(req.url, 'http://localhost')
     if (url.pathname === '/api/recordings') return json(res, { recordings: [] })
     if (url.pathname === '/api/chrome-path') return json(res, { path: '/Applications/Google Chrome.app' })
+    if (url.pathname === '/api/screen-recording-permission') return json(res, { supported: true, status: 'granted', granted: true, restartRequired: false })
     if (url.pathname === '/api/start-recording') return json(res, { ok: true, port: 9333, recordingId: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27' })
     if (url.pathname === '/api/summary') return json(res, {
       type: 'summary', startedAt: Date.now(), totals: { events: 2, network: 5, console: 1, artifacts: 1 },

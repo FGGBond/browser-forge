@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreGraphics
 import CoreMedia
 import CoreVideo
 import Foundation
@@ -51,6 +52,46 @@ func emit(_ value: [String: Any]) {
     guard let data = try? JSONSerialization.data(withJSONObject: value), let line = String(data: data, encoding: .utf8) else { return }
     print(line)
     fflush(stdout)
+}
+
+func emitPermissionResult(action: String, status: String, granted: Bool, restartRequired: Bool = false) {
+    emit([
+        "type": "screen-recording-permission",
+        "action": action,
+        "status": status,
+        "granted": granted,
+        "restartRequired": restartRequired
+    ])
+}
+
+func runPermissionCommand() -> Bool {
+    guard let command = CommandLine.arguments.dropFirst().first else { return false }
+    switch command {
+    case "--check-permission":
+        let granted = CGPreflightScreenCaptureAccess()
+        emitPermissionResult(
+            action: "check",
+            status: granted ? "granted" : "not-granted",
+            granted: granted
+        )
+        return true
+    case "--request-permission":
+        if CGPreflightScreenCaptureAccess() {
+            emitPermissionResult(action: "request", status: "granted", granted: true)
+            return true
+        }
+        let requestAccepted = CGRequestScreenCaptureAccess()
+        if requestAccepted {
+            // ScreenCaptureKit requires the responsible app to restart after
+            // first-time approval before capture access becomes reliable.
+            emitPermissionResult(action: "request", status: "restart-required", granted: false, restartRequired: true)
+        } else {
+            emitPermissionResult(action: "request", status: "denied", granted: false)
+        }
+        return true
+    default:
+        return false
+    }
 }
 
 final class WindowRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
@@ -337,6 +378,7 @@ final class WindowRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
 struct Main {
     static func main() async {
         do {
+            if runPermissionCommand() { return }
             let args = try RecorderArguments()
             let recorder = WindowRecorder(args: args)
             FileHandle.standardInput.readabilityHandler = { handle in

@@ -7,6 +7,7 @@ import { hashForTelemetry } from './telemetry/config.js'
 import { RecordingLibrary } from './recording-library/index.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+const SCREEN_RECORDING_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
 
 export async function createWindow({
   app,
@@ -16,7 +17,8 @@ export async function createWindow({
   telemetry,
   recordingLibrary,
   chooseExportDirectory,
-  revealPath
+  revealPath,
+  openScreenRecordingSettings
 }) {
   state.recorderServer = createRecorderHttpServer({
     uiRoot: join(app.getAppPath(), 'ui'),
@@ -28,7 +30,8 @@ export async function createWindow({
     telemetry,
     recordingLibrary,
     chooseExportDirectory,
-    revealPath
+    revealPath,
+    openScreenRecordingSettings
   })
   const url = await state.recorderServer.listen()
   const win = new BrowserWindow({
@@ -100,6 +103,7 @@ export function startApp({
       return result.canceled ? null : result.filePaths[0]
     }
     const revealPath = path => shell.showItemInFolder(path)
+    const openScreenRecordingSettings = () => shell.openExternal(SCREEN_RECORDING_SETTINGS_URL)
 
     await createWindow({
       app,
@@ -109,7 +113,8 @@ export function startApp({
       telemetry: activeTelemetry,
       recordingLibrary,
       chooseExportDirectory,
-      revealPath
+      revealPath,
+      openScreenRecordingSettings
     })
     await activeTelemetry.track('app_launched', { startup_ms: Date.now() - startupStartedAt, phase: 'ready_complete' })
     await installPromise

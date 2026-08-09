@@ -2,8 +2,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'path'
 import { access, mkdtemp, open as openFile, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { createRecorderHttpServer } from '../../src/main/recorder/http-server.js'
+import { createRecorderHttpServer as createRecorderHttpServerImpl } from '../../src/main/recorder/http-server.js'
 import { WebSocket } from 'ws'
+
+
+const grantedPermission = Object.freeze({ supported: true, status: 'granted', granted: true, restartRequired: false })
+function createRecorderHttpServer(options = {}) {
+  return createRecorderHttpServerImpl({
+    screenRecordingPermission: { check: vi.fn(async () => grantedPermission), request: vi.fn(async () => grantedPermission) },
+    ...options
+  })
+}
 
 let recorderServer
 
@@ -33,6 +42,73 @@ describe('recorder HTTP server', () => {
       tabs: [],
       totals: { events: 0, network: 0, console: 0, artifacts: 0 }
     }))
+  })
+
+  it('exposes screen recording permission check, request, and fixed-purpose settings endpoints', async () => {
+    const screenRecordingPermission = {
+      check: vi.fn(async () => ({ supported: true, status: 'not-granted', granted: false, restartRequired: false })),
+      request: vi.fn(async () => ({ supported: true, status: 'restart-required', granted: false, restartRequired: true }))
+    }
+    const openScreenRecordingSettings = vi.fn(async () => {})
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      screenRecordingPermission,
+      openScreenRecordingSettings
+    })
+    const url = await recorderServer.listen()
+
+    expect(await fetch(`${url}/api/screen-recording-permission`).then(response => response.json())).toEqual({
+      supported: true, status: 'not-granted', granted: false, restartRequired: false
+    })
+    expect(await fetch(`${url}/api/screen-recording-permission/request`, { method: 'POST' }).then(response => response.json())).toEqual({
+      supported: true, status: 'restart-required', granted: false, restartRequired: true
+    })
+    const settingsResponse = await fetch(`${url}/api/screen-recording-permission/open-settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'https://attacker.example' })
+    })
+
+    expect(settingsResponse.status).toBe(204)
+    expect(screenRecordingPermission.check).toHaveBeenCalledTimes(1)
+    expect(screenRecordingPermission.request).toHaveBeenCalledTimes(1)
+    expect(openScreenRecordingSettings).toHaveBeenCalledWith()
+  })
+
+  it('checks permission before allocating a port, creating staging material, or launching Chrome', async () => {
+    const findAvailablePort = vi.fn(async () => 9444)
+    const launchChrome = vi.fn()
+    const recordingLibrary = { createStagingRecording: vi.fn() }
+    const screenRecordingPermission = {
+      check: vi.fn(async () => ({ supported: true, status: 'not-granted', granted: false, restartRequired: false })),
+      request: vi.fn()
+    }
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      startupLogFile: null,
+      recordingLibrary,
+      screenRecordingPermission,
+      findAvailablePort,
+      launchChrome
+    })
+    const url = await recorderServer.listen()
+
+    const result = await fetch(`${url}/api/start-recording`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chromePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' })
+    }).then(response => response.json())
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'SCREEN_RECORDING_PERMISSION_REQUIRED',
+      error: 'Screen recording permission is required before recording can start',
+      permission: { supported: true, status: 'not-granted', granted: false, restartRequired: false }
+    })
+    expect(screenRecordingPermission.check).toHaveBeenCalledTimes(1)
+    expect(findAvailablePort).not.toHaveBeenCalled()
+    expect(recordingLibrary.createStagingRecording).not.toHaveBeenCalled()
+    expect(launchChrome).not.toHaveBeenCalled()
   })
 
   it('stops and saves an active recording before server shutdown', async () => {

@@ -15,6 +15,34 @@ describe.runIf(process.platform === 'darwin')('macOS native video tools', () => 
     }
   }, 120_000)
 
+  it('exposes a non-interactive screen-recording permission check protocol', () => {
+    const tool = join(process.cwd(), 'native-tools', 'bf-window-recorder')
+    const result = JSON.parse(execFileSync(tool, ['--check-permission'], { encoding: 'utf8' }).trim())
+
+    expect(result).toEqual(expect.objectContaining({
+      type: 'screen-recording-permission',
+      action: 'check',
+      status: expect.stringMatching(/^(granted|not-granted)$/),
+      granted: expect.any(Boolean),
+      restartRequired: false
+    }))
+  })
+
+  it('implements permission request states with CoreGraphics before recorder argument parsing', () => {
+    const source = readFileSync(join(process.cwd(), 'native/macos/window-recorder/main.swift'), 'utf8')
+
+    expect(source).toContain('import CoreGraphics')
+    expect(source).toContain('CGPreflightScreenCaptureAccess()')
+    expect(source).toContain('CGRequestScreenCaptureAccess()')
+    expect(source).toContain('case "--check-permission"')
+    expect(source).toContain('case "--request-permission"')
+    expect(source).toContain('"restart-required"')
+    const requestBranch = source.slice(source.indexOf('case "--request-permission"'), source.indexOf('default:', source.indexOf('case "--request-permission"')))
+    expect(requestBranch).toContain('if requestAccepted')
+    expect(requestBranch).not.toContain('let granted = CGPreflightScreenCaptureAccess()')
+    expect(source.indexOf('runPermissionCommand')).toBeLessThan(source.indexOf('let args = try RecorderArguments()'))
+  })
+
   it('commits the video epoch only after the first append and finalizes captured prefixes as partial', () => {
     const source = readFileSync(join(process.cwd(), 'native/macos/window-recorder/main.swift'), 'utf8')
     const outputHandler = source.slice(

@@ -16,6 +16,7 @@ import { VideoRecorder as DefaultVideoRecorder } from './video-recorder.js'
 import { createMediaRange } from './media-response.js'
 import { pipeline } from 'stream/promises'
 import { generatePoster as defaultGeneratePoster } from './poster-generator.js'
+import { ScreenRecordingPermission as DefaultScreenRecordingPermission } from './screen-recording-permission.js'
 
 export function createRecorderHttpServer({
   uiRoot,
@@ -29,6 +30,8 @@ export function createRecorderHttpServer({
   RecordingSession = DefaultRecordingSession,
   nativeToolPathOptions = {},
   createVideoRecorder = (options = {}) => new DefaultVideoRecorder({ ...options, nativeToolPathOptions }),
+  screenRecordingPermission = new DefaultScreenRecordingPermission({ nativeToolPathOptions }),
+  openScreenRecordingSettings = null,
   chromeReadyTimeoutMs = 20000,
   startupLogFile = join(homedir(), 'Library', 'Application Support', 'browser-forge', 'recorder-startup.log'),
   afterChromeLaunch = async () => {},
@@ -176,6 +179,22 @@ export function createRecorderHttpServer({
 
   if (recordingLibrary) registerRecordingLibraryRoutes({ app, recordingLibrary, chooseExportDirectory, revealPath })
 
+  app.get('/api/screen-recording-permission', asyncRoute(async (req, res) => {
+    res.json(await screenRecordingPermission.check())
+  }))
+
+  app.post('/api/screen-recording-permission/request', asyncRoute(async (req, res) => {
+    res.json(await screenRecordingPermission.request())
+  }))
+
+  app.post('/api/screen-recording-permission/open-settings', asyncRoute(async (req, res) => {
+    if (typeof openScreenRecordingSettings !== 'function') {
+      throw apiError('UNSUPPORTED_SHELL', 'Screen recording settings are only available in the Browser Forge app')
+    }
+    await openScreenRecordingSettings()
+    res.status(204).end()
+  }))
+
   app.use(express.static(uiRoot))
 
   app.get('/api/chrome-path', async (req, res) => {
@@ -201,6 +220,18 @@ export function createRecorderHttpServer({
     let chromePort
     let videoOutputPath
     try {
+      const permission = await screenRecordingPermission.check()
+      if (!permission.granted) {
+        const supported = permission.supported !== false
+        return res.json({
+          ok: false,
+          code: supported ? 'SCREEN_RECORDING_PERMISSION_REQUIRED' : 'SCREEN_RECORDING_UNSUPPORTED',
+          error: supported
+            ? 'Screen recording permission is required before recording can start'
+            : `Window video recording is not implemented for ${permission.platform ?? 'this platform'}`,
+          permission
+        })
+      }
       chromePort = Number(req.body.port) || await findAvailablePort()
       throwIfClosing()
       const checkedAt = new Date().toISOString()

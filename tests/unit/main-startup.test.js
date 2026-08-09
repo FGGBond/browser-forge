@@ -26,7 +26,7 @@ function createElectronStubs() {
     BrowserWindow,
     loadedUrls,
     dialog: { showOpenDialog: vi.fn() },
-    shell: { showItemInFolder: vi.fn() },
+    shell: { showItemInFolder: vi.fn(), openExternal: vi.fn(async () => {}) },
     createRecordingLibrary: vi.fn(() => recordingLibrary)
   }
 }
@@ -127,12 +127,15 @@ describe('Electron app startup', () => {
     expect(options).toEqual(expect.objectContaining({
       recordingLibrary,
       chooseExportDirectory: expect.any(Function),
-      revealPath: expect.any(Function)
+      revealPath: expect.any(Function),
+      openScreenRecordingSettings: expect.any(Function)
     }))
     stubs.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: ['/Users/example/Desktop'] })
     await expect(options.chooseExportDirectory()).resolves.toBe('/Users/example/Desktop')
     await options.revealPath('/Users/example/Desktop/export')
     expect(stubs.shell.showItemInFolder).toHaveBeenCalledWith('/Users/example/Desktop/export')
+    await options.openScreenRecordingSettings('https://attacker.example')
+    expect(stubs.shell.openExternal).toHaveBeenCalledWith('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
   })
 
 })

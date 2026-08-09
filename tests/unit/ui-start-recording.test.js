@@ -11,7 +11,13 @@ let baseUrl
 let wss
 let startRequests
 let startFailure
+let permissionCheckResult
+let permissionRequestResult
+let permissionRequestCount
+let settingsRequestCount
 
+const grantedPermission = { supported: true, status: 'granted', granted: true, restartRequired: false }
+const missingPermission = { supported: true, status: 'not-granted', granted: false, restartRequired: false }
 const contentTypes = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' }
 
 beforeAll(async () => {
@@ -23,13 +29,23 @@ beforeAll(async () => {
     if (url.pathname.endsWith('/timeline')) return json(res, { events: [] })
     if (url.pathname.endsWith('/prompt')) return json(res, { text: '', status: 'empty', updatedAt: null })
     if (url.pathname === '/api/chrome-path') return json(res, { path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' })
+    if (url.pathname === '/api/screen-recording-permission' && req.method === 'GET') return json(res, permissionCheckResult)
+    if (url.pathname === '/api/screen-recording-permission/request' && req.method === 'POST') {
+      permissionRequestCount += 1
+      return json(res, permissionRequestResult)
+    }
+    if (url.pathname === '/api/screen-recording-permission/open-settings' && req.method === 'POST') {
+      settingsRequestCount += 1
+      res.statusCode = 204
+      return res.end()
+    }
     if (url.pathname === '/api/summary') return json(res, { type: 'summary', startedAt: null, tabs: [], totals: { events: 0, network: 0, console: 0, artifacts: 0 } })
     if (url.pathname === '/api/start-recording') {
       let body = ''
       req.on('data', chunk => { body += chunk })
       req.on('end', () => {
         startRequests.push(JSON.parse(body))
-        if (startFailure) return json(res, { ok: false, code: 'SCREEN_RECORDING_PERMISSION_DENIED', error: 'capture denied' })
+        if (startFailure) return json(res, { ok: false, code: 'SCREEN_RECORDING_PERMISSION_REQUIRED', error: 'capture denied', permission: missingPermission })
         json(res, { ok: true, port: 9333, recordingId: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27' })
       })
       return
@@ -47,15 +63,28 @@ afterAll(async () => {
   await new Promise(resolve => server.close(resolve))
 })
 
-describe('managed start recording UI', () => {
-  it('starts with detected Chrome only and contains no output-directory control', async () => {
-    startRequests = []
-    startFailure = false
-    const page = await browser.newPage()
-    await page.goto(baseUrl, { waitUntil: 'networkidle' })
-    await page.getByRole('button', { name: '新建录制' }).first().click()
+function reset({ check = grantedPermission, request = grantedPermission, failStart = false } = {}) {
+  startRequests = []
+  startFailure = failStart
+  permissionCheckResult = check
+  permissionRequestResult = request
+  permissionRequestCount = 0
+  settingsRequestCount = 0
+}
 
-    await expect.poll(() => page.locator('[data-chrome-path]').inputValue()).toContain('Google Chrome')
+async function openNewRecording() {
+  const page = await browser.newPage()
+  await page.goto(baseUrl, { waitUntil: 'networkidle' })
+  await page.getByRole('button', { name: '新建录制' }).first().click()
+  await expect.poll(() => page.locator('[data-chrome-path]').inputValue()).toContain('Google Chrome')
+  return page
+}
+
+describe('managed start recording UI', () => {
+  it('starts with detected Chrome only and contains no output-directory control when permission is granted', async () => {
+    reset()
+    const page = await openNewRecording()
+
     expect(await page.locator('#output-dir').count()).toBe(0)
     expect(await page.getByText('只会录制 Browser Forge 打开的 Chrome 窗口').count()).toBeGreaterThan(0)
 
@@ -65,6 +94,7 @@ describe('managed start recording UI', () => {
     ])
 
     expect(startRequests).toEqual([{ chromePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' }])
+    expect(permissionRequestCount).toBe(0)
     await page.locator('[data-stop]').waitFor()
     expect(await page.getByRole('button', { name: '全部录制' }).isDisabled()).toBe(true)
     expect(await page.getByRole('button', { name: '回收站', exact: true }).isDisabled()).toBe(true)
@@ -76,18 +106,50 @@ describe('managed start recording UI', () => {
     await page.close()
   }, 15_000)
 
-  it('shows actionable macOS Screen Recording permission guidance', async () => {
-    startRequests = []
-    startFailure = true
-    const page = await browser.newPage()
-    await page.goto(baseUrl, { waitUntil: 'networkidle' })
-    await page.getByRole('button', { name: '新建录制' }).first().click()
-    await page.getByRole('button', { name: '打开 Chrome 并开始录制' }).click()
+  it('requests permission from macOS and continues into recording when access is granted', async () => {
+    reset({ check: missingPermission, request: grantedPermission })
+    const page = await openNewRecording()
 
-    await expect.poll(() => page.locator('[data-status]').textContent()).toContain('系统设置 → 隐私与安全性 → 屏幕录制')
+    await page.getByRole('button', { name: '允许屏幕录制' }).click()
+
+    await page.locator('[data-stop]').waitFor()
+    expect(permissionRequestCount).toBe(1)
+    expect(startRequests).toHaveLength(1)
     await page.close()
   })
 
+  it('shows retry and fixed system-settings actions after permission is denied', async () => {
+    reset({
+      check: missingPermission,
+      request: { supported: true, status: 'denied', granted: false, restartRequired: false }
+    })
+    const page = await openNewRecording()
+
+    await page.getByRole('button', { name: '允许屏幕录制' }).click()
+
+    await expect.poll(() => page.locator('[data-status]').textContent()).toContain('系统设置')
+    expect(startRequests).toEqual([])
+    await page.getByRole('button', { name: '重新请求权限' }).click()
+    await expect.poll(() => permissionRequestCount).toBe(2)
+    await page.getByRole('button', { name: '打开系统设置' }).click()
+    await expect.poll(() => settingsRequestCount).toBe(1)
+    await page.close()
+  })
+
+  it('does not launch Chrome and asks for an App restart when macOS reports restart-required', async () => {
+    reset({
+      check: missingPermission,
+      request: { supported: true, status: 'restart-required', granted: false, restartRequired: true }
+    })
+    const page = await openNewRecording()
+
+    await page.getByRole('button', { name: '允许屏幕录制' }).click()
+
+    await expect.poll(() => page.locator('[data-status]').textContent()).toContain('重新启动 Browser Forge')
+    expect(startRequests).toEqual([])
+    expect(await page.getByRole('button', { name: '打开系统设置' }).isVisible()).toBe(true)
+    await page.close()
+  })
 })
 
 function json(res, value) {

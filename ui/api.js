@@ -34,6 +34,9 @@ export const api = {
   deleteRecording(id) { return request(`/api/recordings/${encodeURIComponent(id)}`, { method: 'DELETE' }) },
   exportRecording(id, { reveal = false } = {}) { return request(`/api/recordings/${encodeURIComponent(id)}/export`, { method: 'POST', body: JSON.stringify({ reveal }) }) },
   getChromePath() { return request('/api/chrome-path') },
+  getScreenRecordingPermission() { return request('/api/screen-recording-permission') },
+  requestScreenRecordingPermission() { return request('/api/screen-recording-permission/request', { method: 'POST' }) },
+  openScreenRecordingSettings() { return request('/api/screen-recording-permission/open-settings', { method: 'POST' }) },
   getSummary() { return request('/api/summary') },
   startRecording({ chromePath }) { return request('/api/start-recording', { method: 'POST', body: JSON.stringify({ chromePath }) }) },
   stopRecording() { return request('/api/stop-recording', { method: 'POST' }) }

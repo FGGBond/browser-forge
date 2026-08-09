@@ -18,8 +18,12 @@ export async function renderNewRecording({ container, api, onBack, onStarted }) 
           <p class="field-help">通常无需修改；仅在自动检测失败时手动填写。</p>
         </details>
         <div class="setup-actions">
-          <button class="button primary large" type="button" data-start disabled>${recordDot()}<span>打开 Chrome 并开始录制</span></button>
-          <p class="form-status" data-status>正在查找 Chrome…</p>
+          <button class="button primary large" type="button" data-start disabled>${recordDot()}<span data-start-label>正在检查权限…</span></button>
+          <p class="form-status" data-status>正在检查 macOS 屏幕录制权限…</p>
+          <div class="permission-actions" data-permission-actions hidden>
+            <button class="button secondary" type="button" data-request-permission>重新请求权限</button>
+            <button class="button secondary" type="button" data-open-settings>打开系统设置</button>
+          </div>
         </div>
       </div>
     </section>`
@@ -27,38 +31,149 @@ export async function renderNewRecording({ container, api, onBack, onStarted }) 
   container.querySelector('[data-back]').addEventListener('click', onBack)
   const input = container.querySelector('[data-chrome-path]')
   const button = container.querySelector('[data-start]')
+  const buttonLabel = container.querySelector('[data-start-label]')
   const status = container.querySelector('[data-status]')
-  input.addEventListener('input', () => { button.disabled = !input.value.trim() })
+  const permissionActions = container.querySelector('[data-permission-actions]')
+  const retryPermission = container.querySelector('[data-request-permission]')
+  const openSettings = container.querySelector('[data-open-settings]')
+  let permission
+  let permissionLoaded = false
+  let chromeLoaded = false
+  let busy = false
+
+  const setStatus = (message, { error = false } = {}) => {
+    status.textContent = message
+    status.classList.toggle('error', error)
+  }
+
+  const updateButton = () => {
+    const supported = permission?.supported !== false
+    const granted = permission?.granted === true
+    buttonLabel.textContent = granted ? '打开 Chrome 并开始录制' : '允许屏幕录制'
+    button.disabled = busy || !permissionLoaded || !supported || (granted && (!chromeLoaded || !input.value.trim()))
+  }
+
+  const showPermissionRecovery = result => {
+    permission = result
+    permissionLoaded = true
+    permissionActions.hidden = false
+    if (result?.status === 'restart-required' || result?.restartRequired) {
+      setStatus('macOS 已记录授权，但需要重新启动 Browser Forge 后才能开始录制。', { error: true })
+    } else if (result?.status === 'unsupported') {
+      permissionActions.hidden = true
+      setStatus('当前平台尚未提供窗口视频录制能力。', { error: true })
+    } else {
+      setStatus('macOS 未授予权限。请在“系统设置 → 隐私与安全性 → 屏幕与系统音频录制”中允许 Browser Forge，然后重新打开 App。', { error: true })
+    }
+    updateButton()
+  }
+
+  const requestPermission = async ({ continueRecording = false } = {}) => {
+    busy = true
+    permissionActions.hidden = true
+    setStatus('正在请求 macOS 屏幕录制权限…')
+    updateButton()
+    try {
+      const result = await api.requestScreenRecordingPermission()
+      permission = result
+      permissionLoaded = true
+      if (!result.granted) {
+        showPermissionRecovery(result)
+        return false
+      }
+      setStatus(continueRecording ? '权限已允许，正在启动隔离的 Chrome 窗口…' : '屏幕录制权限已就绪。')
+      return true
+    } catch (error) {
+      showPermissionRecovery({ supported: true, status: 'denied', granted: false, restartRequired: false })
+      setStatus(`权限请求失败：${error.message}`, { error: true })
+      return false
+    } finally {
+      busy = false
+      updateButton()
+    }
+  }
+
+  input.addEventListener('input', updateButton)
+  retryPermission.addEventListener('click', () => requestPermission())
+  openSettings.addEventListener('click', async () => {
+    openSettings.disabled = true
+    try {
+      await api.openScreenRecordingSettings()
+      setStatus('已打开系统设置。允许 Browser Forge 后，请重新启动 App。')
+    } catch (error) {
+      setStatus(`无法打开系统设置：${error.message}`, { error: true })
+    } finally {
+      openSettings.disabled = false
+    }
+  })
+
+  try {
+    permission = await api.getScreenRecordingPermission()
+    permissionLoaded = true
+    if (permission.supported === false) {
+      showPermissionRecovery(permission)
+    } else if (permission.granted) {
+      setStatus('屏幕录制权限已就绪，正在查找 Chrome…')
+    } else {
+      setStatus('开始前，macOS 会请求屏幕录制权限；Browser Forge 只录制它打开的 Chrome 窗口。')
+    }
+  } catch (error) {
+    permissionLoaded = true
+    permission = { supported: true, status: 'not-granted', granted: false, restartRequired: false }
+    setStatus(`权限检查失败：${error.message}`, { error: true })
+  }
+  updateButton()
+
   try {
     const result = await api.getChromePath()
     input.value = result.path || ''
-    button.disabled = !input.value.trim()
-    status.textContent = input.value ? 'Chrome 已就绪' : '未找到 Chrome，请展开高级设置填写路径。'
-    if (!input.value) container.querySelector('details').open = true
+    chromeLoaded = true
+    if (!input.value) {
+      container.querySelector('details').open = true
+      setStatus('未找到 Chrome，请展开高级设置填写路径。', { error: true })
+    } else if (permission?.granted) {
+      setStatus('Chrome 与屏幕录制权限已就绪。')
+    }
   } catch (error) {
-    status.textContent = `自动检测失败：${error.message}`
+    chromeLoaded = true
+    setStatus(`自动检测失败：${error.message}`, { error: true })
     container.querySelector('details').open = true
   }
+  updateButton()
+
   button.addEventListener('click', async () => {
-    button.disabled = true
+    busy = true
     button.classList.add('is-busy')
-    status.textContent = '正在启动隔离的 Chrome 窗口…'
+    permissionActions.hidden = true
+    updateButton()
     try {
+      if (!permission?.granted) {
+        busy = false
+        const granted = await requestPermission({ continueRecording: true })
+        if (!granted) return
+        busy = true
+        updateButton()
+      } else {
+        setStatus('正在启动隔离的 Chrome 窗口…')
+      }
       const chromePath = input.value.trim()
       const result = await api.startRecording({ chromePath })
       if (!result.ok) {
+        if (result.code === 'SCREEN_RECORDING_PERMISSION_REQUIRED' || result.code === 'SCREEN_RECORDING_UNSUPPORTED') {
+          showPermissionRecovery(result.permission || { supported: true, status: 'not-granted', granted: false, restartRequired: false })
+          return
+        }
         const error = new Error(result.error || '无法开始录制')
         error.code = result.code
         throw error
       }
       onStarted(result)
     } catch (error) {
-      button.disabled = false
+      setStatus(error.message, { error: true })
+    } finally {
+      busy = false
       button.classList.remove('is-busy')
-      status.textContent = error.code === 'SCREEN_RECORDING_PERMISSION_DENIED'
-        ? '需要屏幕录制权限。请前往“系统设置 → 隐私与安全性 → 屏幕录制”，允许 Browser Forge 后重新打开 App。'
-        : error.message
-      status.classList.add('error')
+      updateButton()
     }
   })
 }

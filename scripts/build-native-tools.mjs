@@ -15,7 +15,7 @@ const tools = [
   {
     name: 'bf-window-recorder',
     source: join(root, 'native', 'macos', 'window-recorder', 'main.swift'),
-    frameworks: ['ScreenCaptureKit', 'AVFoundation', 'CoreMedia', 'CoreVideo']
+    frameworks: ['ScreenCaptureKit', 'AVFoundation', 'CoreGraphics', 'CoreMedia', 'CoreVideo']
   },
   {
     name: 'bf-video-frame',

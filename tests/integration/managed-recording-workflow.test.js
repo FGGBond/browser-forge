@@ -51,6 +51,10 @@ describe('managed recording workflow', () => {
       uiRoot: join(process.cwd(), 'ui'),
       startupLogFile: null,
       recordingLibrary: firstLibrary,
+      screenRecordingPermission: {
+        check: async () => ({ supported: true, status: 'granted', granted: true, restartRequired: false }),
+        request: async () => ({ supported: true, status: 'granted', granted: true, restartRequired: false })
+      },
       findAvailablePort: async () => 9333,
       findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
       waitForChromeDebugEndpoint: async () => {},
