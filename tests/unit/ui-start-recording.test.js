@@ -16,7 +16,9 @@ let permissionRequestResult
 let permissionCheckCount
 let permissionRequestCount
 let settingsRequestCount
-let helperRevealCount
+let permissionResetCount
+let appRevealCount
+let restartCount
 
 const grantedPermission = { supported: true, status: 'granted', granted: true, restartRequired: false }
 const missingPermission = { supported: true, status: 'not-granted', granted: false, restartRequired: false }
@@ -44,10 +46,19 @@ beforeAll(async () => {
       res.statusCode = 204
       return res.end()
     }
-    if (url.pathname === '/api/screen-recording-permission/reveal-helper' && req.method === 'POST') {
-      helperRevealCount += 1
+    if (url.pathname === '/api/screen-recording-permission/reveal-app' && req.method === 'POST') {
+      appRevealCount += 1
       res.statusCode = 204
       return res.end()
+    }
+    if (url.pathname === '/api/screen-recording-permission/reset' && req.method === 'POST') {
+      permissionResetCount += 1
+      return json(res, { ok: true, service: 'ScreenCapture', bundleId: 'com.browserforge.app' })
+    }
+    if (url.pathname === '/api/restart' && req.method === 'POST') {
+      restartCount += 1
+      res.statusCode = 202
+      return json(res, { ok: true, restarting: true })
     }
     if (url.pathname === '/api/summary') return json(res, { type: 'summary', startedAt: null, tabs: [], totals: { events: 0, network: 0, console: 0, artifacts: 0 } })
     if (url.pathname === '/api/start-recording') {
@@ -81,7 +92,9 @@ function reset({ check = grantedPermission, request = grantedPermission, failSta
   permissionCheckCount = 0
   permissionRequestCount = 0
   settingsRequestCount = 0
-  helperRevealCount = 0
+  permissionResetCount = 0
+  appRevealCount = 0
+  restartCount = 0
 }
 
 async function openNewRecording() {
@@ -130,7 +143,7 @@ describe('managed start recording UI', () => {
     await page.close()
   })
 
-  it('checks the Helper identity again and offers fixed settings/Finder recovery after denial', async () => {
+  it('recovers a stale ad-hoc grant by resetting only Browser Forge and opening fixed manual authorization targets', async () => {
     reset({
       check: missingPermission,
       request: { supported: true, status: 'denied', granted: false, restartRequired: false }
@@ -139,21 +152,52 @@ describe('managed start recording UI', () => {
 
     await page.getByRole('button', { name: '允许屏幕录制' }).click()
 
-    await expect.poll(() => page.locator('[data-status]').textContent()).toContain('Browser Forge Recorder')
+    await expect.poll(() => page.locator('[data-status]').textContent()).toContain('Browser Forge')
+    expect(await page.locator('[data-status]').textContent()).not.toContain('Browser Forge Recorder')
     expect(startRequests).toEqual([])
     expect(permissionRequestCount).toBe(1)
-    expect(await page.getByRole('button', { name: '重新请求权限' }).count()).toBe(0)
+    expect(await page.getByRole('button', { name: '在 Finder 中显示录制组件' }).count()).toBe(0)
 
-    await page.getByRole('button', { name: '在 Finder 中显示录制组件' }).click()
-    await expect.poll(() => helperRevealCount).toBe(1)
     await page.getByRole('button', { name: '打开系统设置' }).click()
     await expect.poll(() => settingsRequestCount).toBe(1)
 
+    await page.getByRole('button', { name: '重置并打开授权设置' }).click()
+    await expect.poll(() => permissionResetCount).toBe(1)
+    await expect.poll(() => appRevealCount).toBe(1)
+    await expect.poll(() => settingsRequestCount).toBe(2)
+    expect(permissionRequestCount).toBe(1)
+    await expect.poll(() => page.locator('[data-status]').textContent()).toContain('关闭再打开 Browser Forge 的开关')
+    await expect.poll(() => page.locator('[data-status]').textContent()).toContain('拖入')
+    expect(startRequests).toEqual([])
+
+    await page.getByRole('button', { name: '授权后重新启动 Browser Forge' }).click()
+    await expect.poll(() => restartCount).toBe(1)
+    await page.close()
+  })
+
+  it('offers an App restart after the user opens System Settings from an initial not-granted state', async () => {
+    reset({ check: missingPermission })
+    const page = await openNewRecording()
+
+    await page.getByRole('button', { name: '打开系统设置' }).click()
+
+    await expect.poll(() => settingsRequestCount).toBe(1)
+    await expect.poll(() => page.getByRole('button', { name: '授权后重新启动 Browser Forge' }).isVisible()).toBe(true)
+    await page.close()
+  })
+
+  it('enables recording only after a fresh Browser Forge preflight succeeds', async () => {
+    reset({ check: missingPermission })
+    const page = await openNewRecording()
+
     permissionCheckResult = grantedPermission
     await page.getByRole('button', { name: '再次检查权限' }).click()
+
     await expect.poll(() => permissionCheckCount).toBe(2)
     expect(await page.getByRole('button', { name: '打开 Chrome 并开始录制' }).isDisabled()).toBe(false)
-    expect(permissionRequestCount).toBe(1)
+    expect(permissionRequestCount).toBe(0)
+    expect(permissionResetCount).toBe(0)
+    expect(appRevealCount).toBe(0)
     await page.close()
   })
 
@@ -168,7 +212,10 @@ describe('managed start recording UI', () => {
 
     await expect.poll(() => page.locator('[data-status]').textContent()).toContain('重新启动 Browser Forge')
     expect(startRequests).toEqual([])
+    expect(await page.getByRole('button', { name: '授权后重新启动 Browser Forge' }).isVisible()).toBe(true)
     expect(await page.getByRole('button', { name: '打开系统设置' }).isVisible()).toBe(true)
+    await page.getByRole('button', { name: '授权后重新启动 Browser Forge' }).click()
+    await expect.poll(() => restartCount).toBe(1)
     await page.close()
   })
 })

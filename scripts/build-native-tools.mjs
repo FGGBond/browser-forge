@@ -19,6 +19,8 @@ const recorderAppDir = join(outputDir, recorderAppName)
 const recorderExecutable = join(recorderAppDir, 'Contents', 'MacOS', recorderExecutableName)
 const recorderResources = join(recorderAppDir, 'Contents', 'Resources')
 const recorderIcon = join(recorderResources, 'BrowserForgeRecorder.icns')
+const appIcon = join(outputDir, 'BrowserForge.icns')
+const screenPermissionAddon = join(outputDir, 'bf-screen-permission.node')
 const skillVideoToolsDir = process.env.BROWSER_FORGE_SKILL_VIDEO_TOOLS_DIR
   ? resolve(process.env.BROWSER_FORGE_SKILL_VIDEO_TOOLS_DIR)
   : join(root, 'skills', 'browser-forge', 'assets', 'video-tools')
@@ -38,16 +40,25 @@ await mkdir(recorderResources, { recursive: true })
 compileSwift({
   name: recorderExecutableName,
   source: join(root, 'native', 'macos', 'window-recorder', 'main.swift'),
-  frameworks: ['ScreenCaptureKit', 'AVFoundation', 'CoreGraphics', 'CoreMedia', 'CoreVideo'],
+  frameworks: ['AppKit', 'ScreenCaptureKit', 'AVFoundation', 'CoreGraphics', 'CoreMedia', 'CoreVideo'],
   output: recorderExecutable
 })
 await writeFile(join(recorderAppDir, 'Contents', 'Info.plist'), recorderInfoPlist(packageJson.version))
+await rm(appIcon, { force: true })
 await createIcns({
   source: join(root, 'design', 'icon-concepts', 'drawn', 'browser-forge-drawn-01-capture-lens.png'),
-  output: recorderIcon
+  output: appIcon
 })
+await copyFile(appIcon, recorderIcon)
 signBundle(recorderAppDir)
 console.log(`Built ${recorderAppDir}`)
+
+compileNodeAddon({
+  name: 'bf-screen-permission.node',
+  source: join(root, 'native', 'macos', 'screen-permission-addon', 'main.c'),
+  output: screenPermissionAddon
+})
+console.log(`Built ${screenPermissionAddon}`)
 
 const frameSource = join(outputDir, 'bf-video-frame')
 compileSwift({
@@ -86,6 +97,27 @@ function compileSwift({ name, source, frameworks, output }) {
     process.stderr.write(result.stdout)
     process.stderr.write(result.stderr)
     throw new Error(`swiftc failed while building ${name}`)
+  }
+  const chmodResult = spawnSync('chmod', ['755', output], { encoding: 'utf8' })
+  if (chmodResult.status !== 0) throw new Error(`Unable to mark ${name} executable: ${chmodResult.stderr}`)
+}
+
+function compileNodeAddon({ name, source, output }) {
+  const nodeIncludeDir = process.env.NODE_INCLUDE_DIR || join(dirname(dirname(process.execPath)), 'include', 'node')
+  const result = spawnSync('clang', [
+    '-target', macOSTarget,
+    '-bundle',
+    '-undefined', 'dynamic_lookup',
+    '-I', nodeIncludeDir,
+    source,
+    '-framework', 'CoreGraphics',
+    '-O2',
+    '-o', output
+  ], { cwd: root, encoding: 'utf8' })
+  if (result.status !== 0) {
+    process.stderr.write(result.stdout)
+    process.stderr.write(result.stderr)
+    throw new Error(`clang failed while building ${name}`)
   }
   const chmodResult = spawnSync('chmod', ['755', output], { encoding: 'utf8' })
   if (chmodResult.status !== 0) throw new Error(`Unable to mark ${name} executable: ${chmodResult.stderr}`)

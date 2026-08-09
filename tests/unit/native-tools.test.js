@@ -26,6 +26,16 @@ describe('resolveNativeToolPath', () => {
     })).toBe(packagedRecorder)
   })
 
+  it('keeps the main-process screen permission addon in Resources/native-tools', () => {
+    expect(resolveNativeToolPath({
+      toolName: 'bf-screen-permission.node',
+      resourcesPath: '/Applications/Browser Forge.app/Contents/Resources',
+      packaged: true,
+      platform: 'darwin',
+      arch: 'arm64'
+    })).toBe('/Applications/Browser Forge.app/Contents/Resources/native-tools/bf-screen-permission.node')
+  })
+
   it('keeps the frame extractor in the Resources/native-tools directory', () => {
     expect(resolveNativeToolPath({
       toolName: 'bf-video-frame',
@@ -86,6 +96,7 @@ describe('getNativeToolPlatformKey', () => {
 describe('getNativeToolExecutableName', () => {
   it('keeps platform executable naming in one registry for future Windows delivery', () => {
     expect(getNativeToolExecutableName({ tool: 'windowRecorder', platform: 'darwin', arch: 'arm64' })).toBe('Browser Forge Recorder')
+    expect(getNativeToolExecutableName({ tool: 'screenPermission', platform: 'darwin', arch: 'arm64' })).toBe('bf-screen-permission.node')
     expect(getNativeToolExecutableName({ tool: 'windowRecorder', platform: 'win32', arch: 'x64' })).toBe('bf-window-recorder.exe')
   })
 })

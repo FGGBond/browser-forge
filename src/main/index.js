@@ -5,9 +5,15 @@ import { ensureAgentSkillsInstalled as defaultEnsureAgentSkillsInstalled } from 
 import { createTelemetry as defaultCreateTelemetry } from './telemetry/index.js'
 import { hashForTelemetry } from './telemetry/config.js'
 import { RecordingLibrary } from './recording-library/index.js'
-import { resolveScreenRecordingHelperAppPath } from './recorder/native-tools.js'
+import { createRequire } from 'module'
+import {
+  createMainProcessScreenRecordingPermission,
+  resetBrowserForgeScreenRecordingPermission as defaultResetScreenRecordingPermission
+} from './screen-recording-recovery.js'
+import { getNativeToolExecutableName, resolveNativeToolPath } from './recorder/native-tools.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+const require = createRequire(import.meta.url)
 const SCREEN_RECORDING_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
 
 export async function createWindow({
@@ -20,7 +26,10 @@ export async function createWindow({
   chooseExportDirectory,
   revealPath,
   openScreenRecordingSettings,
-  revealScreenRecordingHelper
+  screenRecordingPermission,
+  resetScreenRecordingPermission,
+  revealBrowserForgeApp,
+  restartBrowserForge
 }) {
   state.recorderServer = createRecorderHttpServer({
     uiRoot: join(app.getAppPath(), 'ui'),
@@ -34,7 +43,10 @@ export async function createWindow({
     chooseExportDirectory,
     revealPath,
     openScreenRecordingSettings,
-    revealScreenRecordingHelper
+    screenRecordingPermission,
+    resetScreenRecordingPermission,
+    revealBrowserForgeApp,
+    restartBrowserForge
   })
   const url = await state.recorderServer.listen()
   const win = new BrowserWindow({
@@ -62,6 +74,11 @@ export function startApp({
   createRecordingLibrary = options => new RecordingLibrary(options),
   createTelemetry = defaultCreateTelemetry,
   telemetry,
+  screenRecordingPermission,
+  resetScreenRecordingPermission = defaultResetScreenRecordingPermission,
+  loadScreenPermissionModule = path => require(path),
+  platform = process.platform,
+  arch = process.arch,
   logger = console,
   env = process.env,
   state = { recorderServer: null, isQuitting: false }
@@ -76,6 +93,24 @@ export function startApp({
     const startupStartedAt = Date.now()
     await activeTelemetry.track('app_launched', { telemetry_build: Boolean(activeTelemetry.enabled) })
     const appPath = app.getAppPath()
+    const nativeToolPathOptions = {
+      packaged: Boolean(app.isPackaged),
+      resourcesPath: process.resourcesPath,
+      projectRoot: appPath
+    }
+    const nativePermissionModule = !screenRecordingPermission && platform === 'darwin'
+      ? loadScreenPermissionModule(resolveNativeToolPath({
+          ...nativeToolPathOptions,
+          platform,
+          arch,
+          toolName: getNativeToolExecutableName({ tool: 'screenPermission', platform, arch })
+        }))
+      : undefined
+    const activeScreenRecordingPermission = screenRecordingPermission ?? createMainProcessScreenRecordingPermission({
+      nativeModule: nativePermissionModule,
+      platform,
+      arch
+    })
     const installPromise = Promise.resolve().then(async () => {
       await activeTelemetry.track('skill_install_started', { package_version: app.getVersion?.() ?? '0.0.0' })
       const report = await ensureAgentSkillsInstalled({
@@ -107,11 +142,12 @@ export function startApp({
     }
     const revealPath = path => shell.showItemInFolder(path)
     const openScreenRecordingSettings = () => shell.openExternal(SCREEN_RECORDING_SETTINGS_URL)
-    const revealScreenRecordingHelper = () => shell.showItemInFolder(resolveScreenRecordingHelperAppPath({
-      packaged: Boolean(app.isPackaged),
-      resourcesPath: process.resourcesPath,
-      projectRoot: app.getAppPath()
-    }))
+    const browserForgeAppPath = dirname(dirname(dirname(app.getPath('exe'))))
+    const revealBrowserForgeApp = () => shell.showItemInFolder(browserForgeAppPath)
+    const restartBrowserForge = () => {
+      app.relaunch()
+      app.quit()
+    }
 
     await createWindow({
       app,
@@ -123,7 +159,10 @@ export function startApp({
       chooseExportDirectory,
       revealPath,
       openScreenRecordingSettings,
-      revealScreenRecordingHelper
+      screenRecordingPermission: activeScreenRecordingPermission,
+      resetScreenRecordingPermission,
+      revealBrowserForgeApp,
+      restartBrowserForge
     })
     await activeTelemetry.track('app_launched', { startup_ms: Date.now() - startupStartedAt, phase: 'ready_complete' })
     await installPromise

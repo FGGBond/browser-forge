@@ -20,6 +20,7 @@ describe('macOS packaging configuration', () => {
     expect(packageJson.scripts['make:mac']).toBe('npm run build && electron-forge make --platform=darwin --arch=arm64')
     expect(packageJson.scripts['make:mac:private']).toContain('electron-forge make --platform=darwin --arch=arm64')
     expect(packageJson.scripts['make:mac:telemetry']).toContain('electron-forge make --platform=darwin --arch=arm64')
+    expect(packageJson.scripts['install:mac:local']).toBe('node scripts/install-mac-local.mjs')
   })
 
   it('loads a Forge config with macOS DMG and ZIP makers', () => {
@@ -29,6 +30,7 @@ describe('macOS packaging configuration', () => {
     expect(forgeConfig.packagerConfig.name).toBe('Browser Forge')
     expect(forgeConfig.packagerConfig.executableName).toBe('Browser Forge')
     expect(forgeConfig.packagerConfig.appBundleId).toBe('com.browserforge.app')
+    expect(forgeConfig.packagerConfig.icon).toBe('native-tools/BrowserForge.icns')
     expect(forgeConfig.packagerConfig.extraResource).toEqual(['native-tools'])
     expect(forgeConfig.hooks?.postPackage).toBeTypeOf('function')
     expect(forgeConfig.makers.map((maker) => maker.name)).toEqual([

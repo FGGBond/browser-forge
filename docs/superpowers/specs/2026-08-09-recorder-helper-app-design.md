@@ -1,5 +1,9 @@
 # Browser Forge Recorder Helper App 设计
 
+## 后续验证修正（2026-08-09）
+
+实时 TCC 日志确认：当 Recorder Helper 由 Browser Forge 启动时，macOS 将 ScreenCapture 请求归因到负责进程 `Browser Forge.app`，而不是 Helper。Helper App 仍用于稳定组织原生录制二进制，但用户可见的 TCC 授权主体必须是 `com.browserforge.app`。本地 ad-hoc 构建的主 App CDHash 每次构建会变化，因此需要重置旧授权后重新申请。完整恢复流程见 `2026-08-09-local-screen-recording-authorization-design.md`。
+
 ## 问题
 
 系统设置授权的是 `Browser Forge.app`，而当前权限检查、请求和 ScreenCaptureKit 录制由 `Contents/Resources/native-tools/bf-window-recorder` 裸可执行文件完成。两者具有不同的 ad-hoc 代码身份，导致系统设置显示已授权，但运行时子进程仍返回未授权。
@@ -39,23 +43,26 @@ Windows 的预留可执行文件命名不变。权限客户端和视频录制器
 
 ## 权限流程
 
-1. 新建录制页调用 Helper 的 `--check-permission`。
-2. 未授权时调用同一 Helper 的 `--request-permission`。
-3. 用户在系统设置中开启 `Browser Forge Recorder`。
-4. 重启 Browser Forge 后再次由同一 Helper preflight。
-5. 通过后，同一 Helper 进入窗口录制模式。
+1. 新建录制页通过 HTTP 调用 Browser Forge Main 进程中的 N-API addon 执行 preflight。
+2. 未授权时可执行同一主进程 addon 的 best-effort request；当前实机系统可能拒绝程序化弹出 ScreenCapture 对话框。
+3. 无法弹窗时，Main 固定重置 `ScreenCapture com.browserforge.app`、在 Finder 显示主 App 并打开系统设置。
+4. 用户在系统设置中关闭再打开 `Browser Forge` 开关，完成 Touch ID/密码确认后重启 Browser Forge。
+5. Main addon 再次 preflight；只有返回 `granted` 后才启动 Chrome 和 Recorder Helper。
+6. Recorder Helper 进入窗口录制模式，但不作为用户需要管理的 TCC 主体。
 
-权限未通过前不得创建 staging、临时 MP4 或启动 Chrome。
+权限未通过前不得创建 staging、临时 MP4、分配 Chrome 端口或启动 Chrome。
 
 ## 用户恢复入口
 
-系统设置中的目标主体明确显示为 `Browser Forge Recorder`。拒绝后 UI 提供：
+系统设置中的目标主体明确显示为 `Browser Forge`。未授权时 UI 提供：
 
-- `再次检查权限`：重新执行 preflight，不承诺再次弹出系统对话框；
+- `再次检查权限`：重新执行主 App preflight；
+- `允许屏幕录制`：best-effort request，不承诺弹出系统对话框；
 - `打开系统设置`：打开固定的录屏设置页；
-- `在 Finder 中显示录制组件`：Main 进程揭示固定 Helper App，供用户通过加号选择或拖入系统设置。
+- `重置并打开授权设置`：只重置 `ScreenCapture com.browserforge.app`，显示已安装主 App并打开固定设置页；
+- `授权后重新启动 Browser Forge`：用户完成开关与系统认证后重启并复检。
 
-Renderer 不得传入路径或 URL。
+Renderer 不得传入路径、URL、TCC service、bundle ID 或重启参数。完整恢复流程见 `2026-08-09-local-screen-recording-authorization-design.md`。
 
 ## 验收
 

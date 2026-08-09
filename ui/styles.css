@@ -122,7 +122,7 @@ h1, h2, p { margin-top: 0; }
 .field-help { margin: 6px 0 0; color: var(--subtle); font-size: 11px; }
 .setup-actions { margin-top: 28px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .permission-actions { flex-basis: 100%; display: flex; align-items: center; gap: 8px; }
-.permission-actions[hidden] { display: none; }
+.permission-actions[hidden], .permission-actions [hidden] { display: none; }
 .form-status { margin: 0; color: var(--muted); font-size: 11px; }.form-status.error { color: var(--danger); }
 .live-recording { padding: 32px clamp(24px,4vw,54px) 50px; max-width: 1500px; margin: 0 auto; }
 .live-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 22px; }

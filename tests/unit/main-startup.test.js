@@ -6,11 +6,12 @@ function createElectronStubs() {
   const app = {
     isPackaged: false,
     getAppPath: () => '/app/path',
-    getPath: (name) => name === 'userData' ? '/user/data' : '/tmp',
+    getPath: (name) => name === 'userData' ? '/user/data' : name === 'exe' ? '/Applications/Browser Forge.app/Contents/MacOS/Browser Forge' : '/tmp',
     getVersion: () => '1.2.3',
     whenReady: vi.fn(() => Promise.resolve()),
     on: vi.fn(),
-    quit: vi.fn()
+    quit: vi.fn(),
+    relaunch: vi.fn()
   }
   class BrowserWindow {
     constructor(options) {
@@ -27,6 +28,7 @@ function createElectronStubs() {
     loadedUrls,
     dialog: { showOpenDialog: vi.fn() },
     shell: { showItemInFolder: vi.fn(), openExternal: vi.fn(async () => {}) },
+    screenRecordingPermission: { check: vi.fn(), request: vi.fn() },
     createRecordingLibrary: vi.fn(() => recordingLibrary)
   }
 }
@@ -109,6 +111,8 @@ describe('Electron app startup', () => {
       return recordingLibrary
     })
     const recorderServer = { listen: vi.fn(async () => 'http://127.0.0.1:6789'), close: vi.fn() }
+    const resetScreenRecordingPermission = vi.fn(async () => ({ ok: true }))
+    const screenRecordingPermission = { check: vi.fn(), request: vi.fn() }
     const createRecorderHttpServer = vi.fn(options => {
       calls.push('server:create')
       return recorderServer
@@ -118,6 +122,8 @@ describe('Electron app startup', () => {
       ...stubs,
       createRecordingLibrary,
       createRecorderHttpServer,
+      resetScreenRecordingPermission,
+      screenRecordingPermission,
       ensureAgentSkillsInstalled: vi.fn(async () => ({ results: [] }))
     })
 
@@ -129,7 +135,10 @@ describe('Electron app startup', () => {
       chooseExportDirectory: expect.any(Function),
       revealPath: expect.any(Function),
       openScreenRecordingSettings: expect.any(Function),
-      revealScreenRecordingHelper: expect.any(Function)
+      revealBrowserForgeApp: expect.any(Function),
+      screenRecordingPermission,
+      resetScreenRecordingPermission: expect.any(Function),
+      restartBrowserForge: expect.any(Function)
     }))
     stubs.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: ['/Users/example/Desktop'] })
     await expect(options.chooseExportDirectory()).resolves.toBe('/Users/example/Desktop')
@@ -137,8 +146,44 @@ describe('Electron app startup', () => {
     expect(stubs.shell.showItemInFolder).toHaveBeenCalledWith('/Users/example/Desktop/export')
     await options.openScreenRecordingSettings('https://attacker.example')
     expect(stubs.shell.openExternal).toHaveBeenCalledWith('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
-    await options.revealScreenRecordingHelper('/tmp/attacker')
-    expect(stubs.shell.showItemInFolder).toHaveBeenCalledWith('/app/path/native-tools/Browser Forge Recorder.app')
+    await options.revealBrowserForgeApp('/tmp/attacker')
+    expect(stubs.shell.showItemInFolder).toHaveBeenCalledWith('/Applications/Browser Forge.app')
+    // Main adapters are fixed-purpose; HTTP callers cannot supply service, bundle ID, or restart options.
+    expect(options.screenRecordingPermission).toBe(screenRecordingPermission)
+    expect(options.resetScreenRecordingPermission).toBe(resetScreenRecordingPermission)
+    await options.resetScreenRecordingPermission({ service: 'All', bundleId: 'com.attacker.app' })
+    expect(resetScreenRecordingPermission).toHaveBeenCalledWith({ service: 'All', bundleId: 'com.attacker.app' })
+    options.restartBrowserForge({ executable: '/tmp/attacker' })
+    expect(stubs.app.relaunch).toHaveBeenCalledWith()
+    expect(stubs.app.quit).toHaveBeenCalledWith()
   })
+
+  it('does not load the macOS permission addon on an unsupported platform', async () => {
+    const stubs = createElectronStubs()
+    const { screenRecordingPermission: _screenRecordingPermission, ...withoutPermission } = stubs
+    const recorderServer = { listen: vi.fn(async () => 'http://127.0.0.1:7890'), close: vi.fn() }
+    const createRecorderHttpServer = vi.fn(() => recorderServer)
+    const loadScreenPermissionModule = vi.fn()
+
+    await startApp({
+      ...withoutPermission,
+      platform: 'win32',
+      arch: 'x64',
+      loadScreenPermissionModule,
+      createRecorderHttpServer,
+      ensureAgentSkillsInstalled: vi.fn(async () => ({ results: [] }))
+    })
+
+    expect(loadScreenPermissionModule).not.toHaveBeenCalled()
+    const permission = createRecorderHttpServer.mock.calls[0][0].screenRecordingPermission
+    await expect(permission.check()).resolves.toEqual({
+      supported: false,
+      status: 'unsupported',
+      granted: false,
+      restartRequired: false,
+      platform: 'win32-x64'
+    })
+  })
+
 
 })

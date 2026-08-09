@@ -33,13 +33,16 @@ describe.runIf(process.platform === 'darwin')('macOS native video tools', () => 
     const infoPlist = join(helperApp, 'Contents', 'Info.plist')
     const icon = join(helperApp, 'Contents', 'Resources', 'BrowserForgeRecorder.icns')
     const frame = join(nativeToolsDir, 'bf-video-frame')
+    const permissionAddon = join(nativeToolsDir, 'bf-screen-permission.node')
 
-    for (const tool of [recorder, frame]) {
+    for (const tool of [recorder, frame, permissionAddon]) {
       expect(existsSync(tool)).toBe(true)
       expect(statSync(tool).mode & 0o111).not.toBe(0)
       expect(execFileSync('lipo', ['-info', tool], { encoding: 'utf8' })).toContain('architecture: arm64')
       expect(execFileSync('otool', ['-l', tool], { encoding: 'utf8' })).toMatch(/\bminos 14\.2\b/)
     }
+    const addonResult = JSON.parse(execFileSync(process.execPath, ['-e', `const addon = require(${JSON.stringify(permissionAddon)}); process.stdout.write(JSON.stringify({ check: typeof addon.check, request: typeof addon.request, granted: addon.check() }))`], { encoding: 'utf8' }))
+    expect(addonResult).toEqual({ check: 'function', request: 'function', granted: expect.any(Boolean) })
     expect(existsSync(infoPlist)).toBe(true)
     expect(existsSync(icon)).toBe(true)
     expect(execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleIdentifier', infoPlist], { encoding: 'utf8' }).trim()).toBe('com.browserforge.app.recorder')
@@ -48,6 +51,18 @@ describe.runIf(process.platform === 'darwin')('macOS native video tools', () => 
     expect(() => execFileSync('codesign', ['--verify', '--deep', '--strict', helperApp], { encoding: 'utf8', stdio: 'pipe' })).not.toThrow()
     expect(existsSync(join(nativeToolsDir, 'bf-window-recorder'))).toBe(false)
   }, 120_000)
+
+  it('bootstraps AppKit on the main actor before constructing a ScreenCaptureKit window filter', () => {
+    const recorder = join(helperApp, 'Contents', 'MacOS', 'Browser Forge Recorder')
+    const source = readFileSync(join(process.cwd(), 'native/macos/window-recorder/main.swift'), 'utf8')
+    const filterIndex = source.indexOf('SCContentFilter(desktopIndependentWindow: target)')
+
+    expect(source).toContain('import AppKit')
+    expect(source).toContain('NSApplication.shared')
+    expect(source).toContain('@MainActor')
+    expect(source.indexOf('NSApplication.shared')).toBeLessThan(filterIndex)
+    expect(execFileSync('otool', ['-L', recorder], { encoding: 'utf8' })).toContain('/System/Library/Frameworks/AppKit.framework')
+  })
 
   it('exposes a non-interactive screen-recording permission check protocol from the Helper App identity', () => {
     const tool = join(helperApp, 'Contents', 'MacOS', 'Browser Forge Recorder')

@@ -66,6 +66,30 @@ describe('window recorder lifecycle source contract', () => {
     expect(captureDidStart).toContain('stopCaptureAndFinalize()')
   })
 
+  it('falls back only to the unique large on-screen window owned by the dedicated Chrome PID', () => {
+    const matcher = section('private func waitForUniqueWindow', 'func stream(_ stream: SCStream')
+
+    expect(matcher).toContain('window.owningApplication?.processID == args.chromePid')
+    expect(matcher).toContain('window.title == args.expectedWindowTitle')
+    expect(matcher).toContain('let ownedWindows =')
+    expect(matcher).toContain('window.frame.width >= 320 && window.frame.height >= 240')
+    expect(matcher).toContain('if ownedWindows.count == 1 { return WindowMatch(window: ownedWindows[0], strategy: .uniquePidWindow) }')
+    expect(matcher.indexOf('window.title == args.expectedWindowTitle')).toBeLessThan(matcher.indexOf('if ownedWindows.count == 1'))
+    expect(source).toContain('case exactTitle = "exact-title"')
+    expect(source).toContain('case uniquePidWindow = "unique-pid-window"')
+    expect(source).toContain('"requestedTitle": requestedTitle')
+    expect(source).toContain('"matchStrategy": matchStrategy.rawValue')
+  })
+
+  it('keeps the AppKit recorder alive without recursively entering dispatchMain from async main', () => {
+    const mainBody = source.slice(source.indexOf('@main'))
+
+    expect(source).toContain('func waitUntilTermination() async')
+    expect(source).toContain('withUnsafeContinuation')
+    expect(mainBody).toContain('await recorder.waitUntilTermination()')
+    expect(mainBody).not.toContain('dispatchMain()')
+  })
+
   it('typechecks without Swift strict-concurrency data-race warnings', () => {
     const outputDir = mkdtempSync(join(tmpdir(), 'browser-forge-window-recorder-'))
     try {

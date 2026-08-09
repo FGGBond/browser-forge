@@ -32,7 +32,10 @@ export function createRecorderHttpServer({
   createVideoRecorder = (options = {}) => new DefaultVideoRecorder({ ...options, nativeToolPathOptions }),
   screenRecordingPermission = new DefaultScreenRecordingPermission({ nativeToolPathOptions }),
   openScreenRecordingSettings = null,
-  revealScreenRecordingHelper = null,
+  revealBrowserForgeApp = null,
+  resetScreenRecordingPermission = null,
+  restartBrowserForge = null,
+  scheduleRestart = callback => setTimeout(callback, 150),
   chromeReadyTimeoutMs = 20000,
   startupLogFile = join(homedir(), 'Library', 'Application Support', 'browser-forge', 'recorder-startup.log'),
   afterChromeLaunch = async () => {},
@@ -196,12 +199,29 @@ export function createRecorderHttpServer({
     res.status(204).end()
   }))
 
-  app.post('/api/screen-recording-permission/reveal-helper', asyncRoute(async (req, res) => {
-    if (typeof revealScreenRecordingHelper !== 'function') {
-      throw apiError('UNSUPPORTED_SHELL', 'The Browser Forge Recorder Helper is only available in the Browser Forge app')
+  app.post('/api/screen-recording-permission/reveal-app', asyncRoute(async (req, res) => {
+    if (typeof revealBrowserForgeApp !== 'function') {
+      throw apiError('UNSUPPORTED_SHELL', 'Browser Forge app reveal is only available in the Browser Forge app')
     }
-    await revealScreenRecordingHelper()
+    await revealBrowserForgeApp()
     res.status(204).end()
+  }))
+
+  app.post('/api/screen-recording-permission/reset', asyncRoute(async (req, res) => {
+    if (typeof resetScreenRecordingPermission !== 'function') {
+      throw apiError('UNSUPPORTED_SHELL', 'Screen recording permission reset is only available in the Browser Forge app')
+    }
+    res.json(await resetScreenRecordingPermission())
+  }))
+
+  app.post('/api/restart', asyncRoute(async (req, res) => {
+    if (typeof restartBrowserForge !== 'function') {
+      throw apiError('UNSUPPORTED_SHELL', 'App restart is only available in the Browser Forge app')
+    }
+    res.status(202).json({ ok: true, restarting: true })
+    scheduleRestart(() => {
+      Promise.resolve(restartBrowserForge()).catch(() => {})
+    })
   }))
 
   app.use(express.static(uiRoot))

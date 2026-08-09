@@ -13,15 +13,19 @@ function JavaScriptFiles(root) {
 }
 
 describe('managed recording shell boundary', () => {
-  it('keeps screen-recording settings and Helper destinations fixed in Electron Main', () => {
+  it('keeps screen-recording settings, TCC reset, and restart destinations fixed in Electron Main', () => {
     const source = readFileSync('src/main/index.js', 'utf8')
 
     expect(source).toContain("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
     expect(source).toContain('openScreenRecordingSettings')
-    expect(source).toContain('revealScreenRecordingHelper')
-    expect(source).toContain('resolveScreenRecordingHelperAppPath')
+    expect(source).toContain('resetScreenRecordingPermission')
+    expect(source).toContain('restartBrowserForge')
+    expect(source).toContain('revealBrowserForgeApp')
+    expect(source).toContain('defaultResetScreenRecordingPermission')
     expect(source).not.toMatch(/openScreenRecordingSettings\s*=\s*(?:async\s*)?\(?\s*(?:url|path|destination)\b/)
-    expect(source).not.toMatch(/revealScreenRecordingHelper\s*=\s*(?:async\s*)?\(?\s*(?:url|path|destination)\b/)
+    expect(source).not.toMatch(/resetScreenRecordingPermission\s*=\s*(?:async\s*)?\(?\s*(?:service|bundleId|command|path)\b/)
+    expect(source).not.toMatch(/revealBrowserForgeApp\s*=\s*(?:async\s*)?\(?\s*(?:url|path|destination)\b/)
+    expect(source).not.toMatch(/restartBrowserForge\s*=\s*(?:async\s*)?\(?\s*(?:path|executable|args|options)\b/)
   })
 
   it('contains no legacy output-directory IPC channel', () => {

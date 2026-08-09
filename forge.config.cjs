@@ -40,6 +40,7 @@ module.exports = {
     name: 'Browser Forge',
     executableName: 'Browser Forge',
     appBundleId: 'com.browserforge.app',
+    icon: 'native-tools/BrowserForge.icns',
     asar: true,
     // @electron/packager accepts resource paths (not { from, to } mappings).
     // The build script emits this folder with the required final basename.

@@ -44,18 +44,24 @@ describe('recorder HTTP server', () => {
     }))
   })
 
-  it('exposes screen recording permission check, request, and fixed-purpose settings endpoints', async () => {
+  it('exposes fixed-purpose screen recording recovery and restart endpoints', async () => {
     const screenRecordingPermission = {
       check: vi.fn(async () => ({ supported: true, status: 'not-granted', granted: false, restartRequired: false })),
       request: vi.fn(async () => ({ supported: true, status: 'restart-required', granted: false, restartRequired: true }))
     }
     const openScreenRecordingSettings = vi.fn(async () => {})
-    const revealScreenRecordingHelper = vi.fn(async () => {})
+    const revealBrowserForgeApp = vi.fn(async () => {})
+    const resetScreenRecordingPermission = vi.fn(async () => ({ ok: true, service: 'ScreenCapture', bundleId: 'com.browserforge.app' }))
+    const restartBrowserForge = vi.fn(async () => {})
+    const scheduleRestart = vi.fn(callback => callback())
     recorderServer = createRecorderHttpServer({
       uiRoot: join(process.cwd(), 'ui'),
       screenRecordingPermission,
       openScreenRecordingSettings,
-      revealScreenRecordingHelper
+      revealBrowserForgeApp,
+      resetScreenRecordingPermission,
+      restartBrowserForge,
+      scheduleRestart
     })
     const url = await recorderServer.listen()
 
@@ -71,15 +77,34 @@ describe('recorder HTTP server', () => {
       body: JSON.stringify({ url: 'https://attacker.example' })
     })
 
-    const revealResponse = await fetch(`${url}/api/screen-recording-permission/reveal-helper`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: '/tmp/attacker' })
+    const revealResponse = await fetch(`${url}/api/screen-recording-permission/reveal-app`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '/tmp/attacker' })
+    })
+    const resetResponse = await fetch(`${url}/api/screen-recording-permission/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ service: 'All', bundleId: 'com.attacker.app', command: '/tmp/attacker' })
+    })
+    const restartResponse = await fetch(`${url}/api/restart`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ executable: '/tmp/attacker', args: ['--evil'] })
     })
     expect(settingsResponse.status).toBe(204)
     expect(revealResponse.status).toBe(204)
+    expect(resetResponse.status).toBe(200)
+    expect(await resetResponse.json()).toEqual({ ok: true, service: 'ScreenCapture', bundleId: 'com.browserforge.app' })
+    expect(restartResponse.status).toBe(202)
+    expect(await restartResponse.json()).toEqual({ ok: true, restarting: true })
     expect(screenRecordingPermission.check).toHaveBeenCalledTimes(1)
     expect(screenRecordingPermission.request).toHaveBeenCalledTimes(1)
     expect(openScreenRecordingSettings).toHaveBeenCalledWith()
-    expect(revealScreenRecordingHelper).toHaveBeenCalledWith()
+    expect(revealBrowserForgeApp).toHaveBeenCalledWith()
+    expect(resetScreenRecordingPermission).toHaveBeenCalledWith()
+    expect(scheduleRestart).toHaveBeenCalledOnce()
+    expect(restartBrowserForge).toHaveBeenCalledWith()
   })
 
   it('checks permission before allocating a port, creating staging material, or launching Chrome', async () => {

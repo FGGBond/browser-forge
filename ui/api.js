@@ -37,7 +37,9 @@ export const api = {
   getScreenRecordingPermission() { return request('/api/screen-recording-permission') },
   requestScreenRecordingPermission() { return request('/api/screen-recording-permission/request', { method: 'POST' }) },
   openScreenRecordingSettings() { return request('/api/screen-recording-permission/open-settings', { method: 'POST' }) },
-  revealScreenRecordingHelper() { return request('/api/screen-recording-permission/reveal-helper', { method: 'POST' }) },
+  revealBrowserForgeApp() { return request('/api/screen-recording-permission/reveal-app', { method: 'POST' }) },
+  resetScreenRecordingPermission() { return request('/api/screen-recording-permission/reset', { method: 'POST' }) },
+  restartBrowserForge() { return request('/api/restart', { method: 'POST' }) },
   getSummary() { return request('/api/summary') },
   startRecording({ chromePath }) { return request('/api/start-recording', { method: 'POST', body: JSON.stringify({ chromePath }) }) },
   stopRecording() { return request('/api/stop-recording', { method: 'POST' }) }

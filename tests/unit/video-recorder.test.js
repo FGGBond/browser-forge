@@ -144,6 +144,40 @@ describe('VideoRecorder', () => {
 })
 
 describe('VideoRecorder terminal-state safety', () => {
+  it('accepts a unique-window PID fallback when the native recorder proves the requested title and match strategy', async () => {
+    const child = createFakeChild()
+    const recorder = new VideoRecorder({
+      platform: 'darwin',
+      resolveBinaryPath: () => '/bf-window-recorder',
+      spawnProcess: () => child
+    })
+
+    const expectedWindowTitle = 'Browser Forge Recording · expected'
+    const starting = recorder.start({ chromePid: 42, expectedWindowTitle, outputPath: '/tmp/output.mp4' })
+    child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+      type: 'started',
+      startEpochMs: 1_786_170_000_123,
+      window: {
+        pid: 42,
+        windowId: 'window-42',
+        title: '',
+        requestedTitle: expectedWindowTitle,
+        matchStrategy: 'unique-pid-window'
+      }
+    })}\n`))
+
+    await expect(starting).resolves.toEqual({
+      startEpochMs: 1_786_170_000_123,
+      window: {
+        pid: 42,
+        windowId: 'window-42',
+        title: '',
+        requestedTitle: expectedWindowTitle,
+        matchStrategy: 'unique-pid-window'
+      }
+    })
+  })
+
   it('fails closed when the native recorder reports a mismatched window identity', async () => {
     const child = createFakeChild()
     const recorder = new VideoRecorder({
@@ -156,7 +190,13 @@ describe('VideoRecorder terminal-state safety', () => {
     child.stdout.emit('data', Buffer.from(`${JSON.stringify({
       type: 'started',
       startEpochMs: 1_786_170_000_123,
-      window: { pid: 42, windowId: 'wrong-window', title: 'Browser Forge Recording · another-session' }
+      window: {
+        pid: 42,
+        windowId: 'wrong-window',
+        title: 'Browser Forge Recording · another-session',
+        requestedTitle: 'Browser Forge Recording · expected',
+        matchStrategy: 'exact-title'
+      }
     })}\n`))
 
     await expect(starting).rejects.toMatchObject({ code: 'RECORDER_PROTOCOL_ERROR' })

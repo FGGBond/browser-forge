@@ -16,7 +16,8 @@
     "make:mac:telemetry": "npm run build:telemetry && electron-forge make --platform=darwin --arch=arm64",
     "test": "npm run build-native-tools && vitest run",
     "test:skill-generation": "vitest run tests/skill-generation",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "install:mac:local": "node scripts/install-mac-local.mjs"
   },
   "dependencies": {
     "ajv": "^8.20.0",

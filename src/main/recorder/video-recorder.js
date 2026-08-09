@@ -233,7 +233,13 @@ export class VideoRecorder {
     }
     return {
       startEpochMs: Math.round(message.startEpochMs),
-      window: { pid: window.pid, windowId: window.windowId, title: window.title }
+      window: {
+        pid: window.pid,
+        windowId: window.windowId,
+        title: window.title,
+        ...(isNonEmptyString(window.requestedTitle) ? { requestedTitle: window.requestedTitle } : {}),
+        ...(isNonEmptyString(window.matchStrategy) ? { matchStrategy: window.matchStrategy } : {})
+      }
     }
   }
 
@@ -300,14 +306,23 @@ export class VideoRecorder {
   }
 
   _matchesExpectedWindow(window) {
-    return Boolean(
-      window &&
-      Number.isInteger(window.pid) &&
-      window.pid === this._expectedWindow?.pid &&
-      typeof window.title === 'string' &&
-      window.title === this._expectedWindow?.title &&
-      isNonEmptyString(window.windowId)
-    )
+    if (!window ||
+        !Number.isInteger(window.pid) ||
+        window.pid !== this._expectedWindow?.pid ||
+        typeof window.title !== 'string' ||
+        !isNonEmptyString(window.windowId)) {
+      return false
+    }
+
+    const expectedTitle = this._expectedWindow?.title
+    if (window.matchStrategy === undefined && window.requestedTitle === undefined) {
+      // Backward-compatible exact-title protocol. A title mismatch still fails
+      // closed unless the native recorder supplies explicit PID-fallback proof.
+      return window.title === expectedTitle
+    }
+    if (window.requestedTitle !== expectedTitle) return false
+    if (window.matchStrategy === 'exact-title') return window.title === expectedTitle
+    return window.matchStrategy === 'unique-pid-window'
   }
 
   _windowsMatch(left, right) {
@@ -318,6 +333,8 @@ export class VideoRecorder {
       left.pid === right.pid &&
       typeof left.title === 'string' &&
       left.title === right.title &&
+      left.requestedTitle === right.requestedTitle &&
+      left.matchStrategy === right.matchStrategy &&
       isNonEmptyString(left.windowId) &&
       left.windowId === right.windowId
     )

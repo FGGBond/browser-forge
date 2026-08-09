@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import CoreGraphics
 import CoreMedia
@@ -38,13 +39,31 @@ struct RecorderError: Error {
     let message: String
 }
 
+enum WindowMatchStrategy: String {
+    case exactTitle = "exact-title"
+    case uniquePidWindow = "unique-pid-window"
+}
+
+struct WindowMatch {
+    let window: SCWindow
+    let strategy: WindowMatchStrategy
+}
+
 struct WindowIdentity {
     let pid: pid_t
     let windowId: CGWindowID
     let title: String
+    let requestedTitle: String
+    let matchStrategy: WindowMatchStrategy
 
     func json() -> [String: Any] {
-        ["pid": Int(pid), "windowId": String(windowId), "title": title]
+        [
+            "pid": Int(pid),
+            "windowId": String(windowId),
+            "title": title,
+            "requestedTitle": requestedTitle,
+            "matchStrategy": matchStrategy.rawValue
+        ]
     }
 }
 
@@ -116,9 +135,30 @@ final class WindowRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
     }
 
     func start() async throws {
-        let target = try await waitForUniqueWindow()
-        let matchedIdentity = WindowIdentity(pid: target.owningApplication!.processID, windowId: target.windowID, title: target.title ?? "")
+        let match = try await waitForUniqueWindow()
+        let (captureStream, matchedIdentity) = try await makeCaptureStream(match: match)
+        try await installAndStartCapture(stream: captureStream, identity: matchedIdentity)
+    }
 
+    @MainActor
+    private func makeCaptureStream(match: WindowMatch) throws -> (SCStream, WindowIdentity) {
+        let target = match.window
+        // ScreenCaptureKit's desktop-independent window filter reaches into
+        // SkyLight. A standalone helper must establish an AppKit/WindowServer
+        // session on the main actor first or macOS can abort inside
+        // SLSGetDisplaysWithRect before the first frame.
+        _ = NSApplication.shared
+
+        guard let application = target.owningApplication else {
+            throw RecorderError(code: "WINDOW_OWNER_MISSING", message: "Matched Chrome window no longer has an owning application")
+        }
+        let matchedIdentity = WindowIdentity(
+            pid: application.processID,
+            windowId: target.windowID,
+            title: target.title ?? "",
+            requestedTitle: args.expectedWindowTitle,
+            matchStrategy: match.strategy
+        )
         let filter = SCContentFilter(desktopIndependentWindow: target)
         let configuration = SCStreamConfiguration()
         configuration.width = max(2, Int(target.frame.width * 2))
@@ -132,7 +172,7 @@ final class WindowRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
 
         let captureStream = SCStream(filter: filter, configuration: configuration, delegate: self)
         try captureStream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
-        try await installAndStartCapture(stream: captureStream, identity: matchedIdentity)
+        return (captureStream, matchedIdentity)
     }
 
     private func installAndStartCapture(stream: SCStream, identity: WindowIdentity) async throws {
@@ -180,6 +220,15 @@ final class WindowRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
         }
     }
 
+    func waitUntilTermination() async {
+        // async main already runs on libdispatch's main executor. Calling
+        // dispatchMain() from there traps once AppKit has established the main
+        // queue. Keep the main task suspended while ScreenCaptureKit, stdin,
+        // and writer callbacks continue on their own queues; terminal paths
+        // emit their protocol message and exit the helper.
+        await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in }
+    }
+
     func requestStop() {
         queue.async { [weak self] in self?.beginStop() }
     }
@@ -188,20 +237,27 @@ final class WindowRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
         queue.async { [weak self] in self?.beginStop(failure: error) }
     }
 
-    private func waitForUniqueWindow() async throws -> SCWindow {
+    private func waitForUniqueWindow() async throws -> WindowMatch {
         let deadline = Date().addingTimeInterval(Double(args.timeoutMs) / 1000.0)
         while Date() <= deadline {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            let matches = content.windows.filter { window in
+            let ownedWindows = content.windows.filter { window in
                 window.owningApplication?.processID == args.chromePid &&
-                window.title == args.expectedWindowTitle &&
                 window.isOnScreen &&
-                window.frame.width > 1 && window.frame.height > 1
+                window.frame.width >= 320 && window.frame.height >= 240
             }
-            if matches.count == 1 { return matches[0] }
-            if matches.count > 1 {
+            let titleMatches = ownedWindows.filter { window in
+                window.title == args.expectedWindowTitle
+            }
+            if titleMatches.count == 1 { return WindowMatch(window: titleMatches[0], strategy: .exactTitle) }
+            if titleMatches.count > 1 {
                 throw RecorderError(code: "WINDOW_AMBIGUOUS", message: "More than one Chrome window matched the Browser Forge PID/title identity")
             }
+            // Chrome can expose the new top-level window to ScreenCaptureKit
+            // before its page title is available. The browser process is a
+            // dedicated Browser Forge profile, so a single large on-screen
+            // window owned by that exact PID is still a strict identity.
+            if ownedWindows.count == 1 { return WindowMatch(window: ownedWindows[0], strategy: .uniquePidWindow) }
             try await Task.sleep(nanoseconds: 250_000_000)
         }
         throw RecorderError(code: "WINDOW_NOT_FOUND", message: "No on-screen Chrome window matched the Browser Forge PID/title identity before timeout")
@@ -393,7 +449,7 @@ struct Main {
                 recorder.requestStop()
             }
             try await recorder.start()
-            dispatchMain()
+            await recorder.waitUntilTermination()
         } catch let error as RecorderError {
             emit(["type": "error", "code": error.code, "message": error.message])
             exit(1)

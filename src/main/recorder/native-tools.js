@@ -8,6 +8,7 @@ const NATIVE_TOOL_PLATFORMS = Object.freeze({
     delivered: true,
     executables: Object.freeze({
       windowRecorder: MACOS_RECORDER_EXECUTABLE,
+      screenPermission: 'bf-screen-permission.node',
       videoFrame: 'bf-video-frame'
     })
   }),
@@ -17,6 +18,7 @@ const NATIVE_TOOL_PLATFORMS = Object.freeze({
     delivered: false,
     executables: Object.freeze({
       windowRecorder: 'bf-window-recorder.exe',
+      screenPermission: 'bf-screen-permission.node',
       videoFrame: 'bf-video-frame.exe'
     })
   })
