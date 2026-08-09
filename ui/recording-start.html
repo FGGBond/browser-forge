@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>browser-forge 录制窗口</title>
   <style>
     * { box-sizing: border-box; }
@@ -9,9 +10,10 @@
       color-scheme: light;
       --ink: #101828;
       --muted: #667085;
-      --line: rgba(148, 163, 184, .28);
-      --card: rgba(255, 255, 255, .82);
+      --line: rgba(148, 163, 184, .32);
+      --card: rgba(255, 255, 255, .84);
       --blue: #2563eb;
+      --blue-hover: #1d4ed8;
       --red: #d92d20;
     }
     body {
@@ -59,7 +61,13 @@
       background: linear-gradient(135deg, rgba(255, 255, 255, .72), transparent 42%);
       pointer-events: none;
     }
-    .content { position: relative; z-index: 1; display: grid; gap: 16px; max-width: 640px; }
+    .content {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      gap: 16px;
+      max-width: 640px;
+    }
     .badge {
       width: fit-content;
       display: inline-flex;
@@ -83,50 +91,97 @@
       box-shadow: 0 0 0 5px rgba(217, 45, 32, .1);
       animation: pulse 1.6s ease-in-out infinite;
     }
-    h1 { margin: 6px 0 0; font-size: clamp(34px, 5vw, 52px); line-height: 1.06; letter-spacing: -.055em; }
-    p { margin: 0; color: #475467; font-size: 17px; line-height: 1.75; }
-    .address-guide {
-      margin: 12px 0 2px;
+    h1 {
+      margin: 6px 0 0;
+      font-size: clamp(34px, 5vw, 52px);
+      line-height: 1.06;
+      letter-spacing: -.055em;
+    }
+    p {
+      margin: 0;
+      color: #475467;
+      font-size: 17px;
+      line-height: 1.75;
+    }
+    form {
       display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 12px 14px;
-      max-width: 520px;
-      color: #98a2b3;
-      background: rgba(248, 250, 252, .86);
-      border: 1px solid #e4e7ec;
-      border-radius: 16px;
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .85);
-    }
-    .address-guide span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .kbd {
-      flex: none;
-      padding: 3px 7px;
-      color: #667085;
-      background: white;
-      border: 1px solid #d0d5dd;
-      border-radius: 7px;
-      font-size: 12px;
-      font-weight: 600;
-      box-shadow: 0 1px 2px rgba(16, 24, 40, .06);
-    }
-    .hint {
+      gap: 10px;
       margin-top: 12px;
-      padding: 16px 18px;
-      color: var(--muted);
-      background: rgba(248, 250, 252, .78);
-      border: 1px solid #e5e7eb;
+      padding: 8px;
+      max-width: 620px;
+      background: rgba(255, 255, 255, .88);
+      border: 1px solid #d0d5dd;
       border-radius: 18px;
+      box-shadow: 0 10px 28px rgba(16, 24, 40, .08), inset 0 1px 0 rgba(255, 255, 255, .9);
+      transition: border-color 160ms ease, box-shadow 160ms ease;
     }
-    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .42; transform: scale(.84); } }
-    @keyframes pageIn { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    form:focus-within {
+      border-color: rgba(37, 99, 235, .65);
+      box-shadow: 0 0 0 4px rgba(37, 99, 235, .12), 0 12px 32px rgba(16, 24, 40, .1);
+    }
+    label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    input {
+      min-width: 0;
+      flex: 1;
+      padding: 10px 12px;
+      color: var(--ink);
+      background: transparent;
+      border: 0;
+      outline: 0;
+      font: inherit;
+      font-size: 16px;
+    }
+    input::placeholder { color: #98a2b3; }
+    button {
+      flex: none;
+      min-width: 88px;
+      padding: 10px 20px;
+      color: white;
+      background: var(--blue);
+      border: 0;
+      border-radius: 12px;
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
+      box-shadow: 0 8px 18px rgba(37, 99, 235, .24);
+      transition: background 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+    }
+    button:hover { background: var(--blue-hover); box-shadow: 0 10px 22px rgba(37, 99, 235, .3); }
+    button:active { transform: scale(.98); }
+    button:focus-visible { outline: 3px solid rgba(37, 99, 235, .24); outline-offset: 2px; }
+    .hint {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: .42; transform: scale(.84); }
+    }
+    @keyframes pageIn {
+      from { opacity: 0; transform: translateY(10px) scale(.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
     @media (max-width: 560px) {
       body { padding: 20px; }
       main { padding: 30px; border-radius: 22px; }
       p { font-size: 15px; }
+      form { align-items: stretch; flex-direction: column; }
+      button { width: 100%; }
     }
     @media (prefers-reduced-motion: reduce) {
       main, .dot { animation: none; }
+      form, button { transition: none; }
     }
   </style>
 </head>
@@ -134,18 +189,43 @@
   <main>
     <section class="content">
       <div class="badge"><span class="dot"></span> 正在录制这个 Chrome 窗口</div>
-      <h1>这是正在录制的 Chrome 窗口</h1>
-      <p>请在地址栏输入目标网站，或从当前页面开始操作。browser-forge 会记录这个窗口中的导航、点击和页面状态。</p>
-      <div class="address-guide" aria-hidden="true">
-        <span>https://example.com</span>
-        <div class="kbd">⌘L</div>
-      </div>
-      <p class="hint">录制过程中请保持此窗口打开。完成后回到 browser-forge 控制台停止录制。</p>
+      <h1>打开要录制的网站</h1>
+      <p>输入网址后，Browser Forge 会在当前窗口继续记录导航、点击和页面状态。</p>
+      <form id="destination-form">
+        <label for="destination-url">目标网址</label>
+        <input
+          id="destination-url"
+          name="url"
+          type="url"
+          inputmode="url"
+          autocomplete="url"
+          placeholder="https://example.com"
+          required
+          autofocus
+          spellcheck="false"
+        >
+        <button type="submit">开始</button>
+      </form>
+      <p class="hint">录制完成后，回到 Browser Forge 停止录制。</p>
     </section>
   </main>
   <script>
     const recordingTitle = new URLSearchParams(window.location.search).get('bfRecordingTitle')
     if (recordingTitle) document.title = recordingTitle
+
+    const destinationForm = document.getElementById('destination-form')
+    const destinationInput = document.getElementById('destination-url')
+    destinationForm.addEventListener('submit', event => {
+      event.preventDefault()
+      const destination = destinationInput.value.trim()
+      try {
+        window.location.assign(new URL(destination).href)
+      } catch {
+        destinationInput.setCustomValidity('请输入完整的网址，例如 https://example.com')
+        destinationInput.reportValidity()
+      }
+    })
+    destinationInput.addEventListener('input', () => destinationInput.setCustomValidity(''))
   </script>
 </body>
 </html>

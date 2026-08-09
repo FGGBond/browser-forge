@@ -12,15 +12,17 @@ describe('buildChromeArgs', () => {
     expect(args.some(a => a.startsWith('--user-data-dir='))).toBe(true)
   })
 
-  it('opens the configured recording start URL in a new window', () => {
+  it('opens the configured recording start URL in app mode without exposing a normal browser address bar', () => {
+    const startUrl = 'http://localhost:3456/recording-start.html'
     const args = buildChromeArgs({
       port: 9222,
       userDataDir: '/tmp/test',
-      startUrl: 'http://localhost:3456/recording-start.html'
+      startUrl
     })
 
-    expect(args).toContain('--new-window')
-    expect(args.at(-1)).toBe('http://localhost:3456/recording-start.html')
+    expect(args).toContain(`--app=${startUrl}`)
+    expect(args).not.toContain('--new-window')
+    expect(args).not.toContain(startUrl)
     expect(args).not.toContain('about:blank')
   })
 })
