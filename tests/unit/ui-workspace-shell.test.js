@@ -37,5 +37,7 @@ describe('recording workspace shell', () => {
     expect(app).toContain('renderWorkspaceSidebar')
     expect(app).toContain('writeSidebarCollapsed')
     expect(app).toContain("navigate('detail', { selectedId: id })")
+    expect(app).toContain('analysisPaneOpen')
+    expect(readUi('views/detail.js')).toContain('data-analysis-pane')
   })
 })

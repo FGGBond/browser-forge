@@ -29,7 +29,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     <div class="prompt-editor-header"><div><p class="eyebrow">Agent guidance</p><h2>告诉 Agent 你想实现什么</h2></div><span class="save-state idle" data-save-state>${prompt.status === 'draft' ? '已保存' : '说明尚未保存'}</span></div>
     <p class="prompt-help">对照视频复述关键动作，并说明未来希望 skill 自动完成的目标、输入和成功标准。</p>
     <textarea class="prompt-textarea" data-prompt-textarea spellcheck="true" aria-label="Agent 分析说明">${escapeHtml(initialText)}</textarea>
-    <div class="prompt-actions"><button class="button" type="button" data-preview-agent-prompt>预览完整提示词</button><button class="button primary" type="button" data-copy-agent-prompt>${copyIcon()}<span>复制给 Agent</span></button></div>
+    <div class="prompt-actions"><button class="button" type="button" data-preview-agent-prompt>预览完整提示词</button><button class="button primary" type="button" data-copy-agent-prompt>${copyIcon()}<span>复制给外部 Agent</span></button></div>
     <section class="agent-prompt-preview" data-preview-panel hidden><div class="preview-heading"><strong>完整外部 Agent 提示词</strong><button class="icon-button" type="button" data-close-preview aria-label="关闭预览">${closeIcon()}</button></div><p>录制绝对路径只会在复制时加入，不会写入 prompt.md。</p><pre data-agent-prompt-preview></pre></section>`
 
   const textarea = container.querySelector('[data-prompt-textarea]')
@@ -109,7 +109,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
       if (!text) return
       await copyText(text)
       button.querySelector('span').textContent = '已复制'
-      setTimeout(() => { if (button.isConnected) button.querySelector('span').textContent = '复制给 Agent' }, 1800)
+      setTimeout(() => { if (button.isConnected) button.querySelector('span').textContent = '复制给外部 Agent' }, 1800)
     } catch (error) {
       setStatus('error', `复制失败 · ${error.message}`)
     } finally {

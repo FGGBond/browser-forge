@@ -48,6 +48,8 @@ describe('guided prompt editor', () => {
     await page.locator('[data-recording-id]').click()
     const textarea = page.locator('[data-prompt-textarea]')
     await textarea.waitFor()
+    expect(await page.getByText('Agent 尚未配置', { exact: true }).count()).toBe(1)
+    expect(await page.getByRole('button', { name: '复制给外部 Agent' }).count()).toBe(1)
     expect(await textarea.inputValue()).toContain('我在这段录制中完成了：')
     expect(await textarea.inputValue()).not.toContain('/Library/Application Support/')
 
@@ -92,7 +94,7 @@ describe('guided prompt editor', () => {
     await page.locator('[data-recording-id]').click()
     const textarea = page.locator('[data-prompt-textarea]')
     await textarea.fill('重要指导')
-    await page.getByRole('button', { name: '录制仓库', exact: true }).click()
+    await page.locator('[data-nav="library"]').click()
 
     await expect.poll(() => savedPrompts).toEqual(['重要指导'])
     expect(await page.locator('[data-prompt-textarea]').inputValue()).toBe('重要指导')

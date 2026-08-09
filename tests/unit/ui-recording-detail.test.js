@@ -21,11 +21,11 @@ beforeAll(async () => {
     if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'GET') return json(res, { text: '', status: 'empty', updatedAt: null })
     if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'PUT') { const body = await readBody(req); requests.push({ method: req.method, path: url.pathname, body }); return json(res, { text: body.text, status: body.text ? 'draft' : 'empty', updatedAt: '2026-08-08T12:20:00.000Z' }) }
     if (url.pathname === `/api/recordings/${id}/external-agent-prompt`) return json(res, { recordingId: id, text: 'complete prompt' })
-    if (url.pathname === `/api/recordings/${id}/timeline`) return json(res, { events: [
+    if (url.pathname === `/api/recordings/${id}/timeline`) { requests.push({ method: 'GET', path: url.pathname }); return json(res, { events: [
       { type: 'click', label: '提交', videoOffsetMs: 12_345, timestamp: Date.parse(recording.createdAt) + 12_345 },
       { type: 'click', label: '超出视频', videoOffsetMs: 50_000 },
       { type: 'navigation', label: '无关联画面' }
-    ] })
+    ] }) }
     if ([`/api/recordings/${id}`, `/api/recordings/${id}/export`, `/api/recordings/${id}/trash`, `/api/recordings/${id}/restore`].includes(url.pathname)) {
       const body = await readBody(req)
       requests.push({ method: req.method, path: url.pathname, body })
@@ -44,7 +44,7 @@ beforeAll(async () => {
 afterAll(async () => { await browser.close(); await new Promise(resolve => server.close(resolve)) })
 
 describe('recording detail UI', () => {
-  it('uses validated media routes and seeks only valid in-range events', async () => {
+  it('shows a private video workspace and collapsible Agent-ready analysis pane without internal materials', async () => {
     requests = []
     const page = await browser.newPage()
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
@@ -54,17 +54,17 @@ describe('recording detail UI', () => {
     expect(await video.getAttribute('src')).toBe(`/api/recordings/${id}/video`)
     expect(await video.getAttribute('poster')).toBe(`/api/recordings/${id}/poster`)
     expect(await video.getAttribute('controls')).toBeNull()
-    expect(await video.getAttribute('disablepictureinpicture')).not.toBeNull()
-    expect(await page.getByRole('button', { name: '后退 10 秒' }).count()).toBe(1)
-    await page.evaluate(() => {
-      const player = document.querySelector('video')
-      Object.defineProperty(player, 'duration', { configurable: true, value: 42 })
-      player.dispatchEvent(new Event('loadedmetadata'))
-    })
-    await page.locator('[data-event-offset="12345"]').click()
-    expect(await page.evaluate(() => document.querySelector('video').currentTime)).toBe(12.345)
-    expect(await page.locator('[data-event-offset="50000"]').isDisabled()).toBe(true)
-    expect(await page.locator('[data-event-offset="invalid"]').isDisabled()).toBe(true)
+    expect(await page.getByText('录制物料', { exact: true }).count()).toBe(0)
+    expect(await page.getByText('关键事件', { exact: true }).count()).toBe(0)
+    expect(requests.some(item => item.path.endsWith('/timeline'))).toBe(false)
+    const pane = page.locator('[data-analysis-pane]')
+    await pane.waitFor()
+    expect(await pane.getByText('Agent 尚未配置', { exact: true }).count()).toBe(1)
+    expect(await page.locator('[data-prompt-textarea]').count()).toBe(1)
+    await page.locator('[data-close-analysis]').click()
+    expect(await pane.isHidden()).toBe(true)
+    await page.locator('[data-toggle-analysis]').click()
+    expect(await pane.isVisible()).toBe(true)
     await page.close()
   })
 
