@@ -31,6 +31,34 @@ function recordingTime(recording) {
   return Number.isNaN(value) ? 0 : value
 }
 
+function completionPreview(result) {
+  const source = result?.recording || {}
+  const id = source.id || result?.recordingId
+  if (!id) return null
+  const preview = { ...source, id }
+  if (!preview.title) preview.title = pendingRecordingTitle(new Date())
+  if (!preview.state) preview.state = 'active'
+  if (!preview.createdAt) preview.createdAt = new Date().toISOString()
+  return preview
+}
+
+function isCompleteRecording(recording) {
+  return Boolean(
+    recording?.id && recording.title && recording.state && recording.createdAt &&
+    Number.isFinite(Number(recording.durationMs)) &&
+    Object.hasOwn(recording, 'startHost') && Array.isArray(recording.visitedHosts) &&
+    recording.videoStatus && recording.promptStatus
+  )
+}
+
+function pendingRecordingTitle(date) {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+  }).formatToParts(date)
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]))
+  return `Recording-${Number(values.month)}月${Number(values.day)}日${values.hour}:${values.minute}`
+}
+
 const root = document.getElementById('app')
 const isElectron = new URLSearchParams(location.search).get('shell') === 'electron'
 document.body.classList.toggle('shell-electron', isElectron)
@@ -108,13 +136,17 @@ export async function navigate(route, patch = {}, { force = false } = {}) {
         api,
         activeRecording: state.value.activeRecording,
         onStopped: async result => {
-          let recording = result.recording
-          if (!recording?.title && result.recordingId) {
-            try { recording = await api.getRecording(result.recordingId) } catch {}
+          const preview = completionPreview(result)
+          const recordingId = preview?.id || result.recordingId
+          if (preview) state.update(value => ({ recordings: upsertRecording(value.recordings, preview) }))
+          if (recordingId && !isCompleteRecording(result.recording)) {
+            try {
+              const recording = await api.getRecording(recordingId)
+              state.update(value => ({ recordings: upsertRecording(value.recordings, recording) }))
+            } catch {}
           }
-          if (recording?.id) state.update(value => ({ recordings: upsertRecording(value.recordings, recording) }))
-          return result.recordingId
-            ? navigate('detail', { selectedId: result.recordingId }, { force: true })
+          return recordingId
+            ? navigate('detail', { selectedId: recordingId }, { force: true })
             : navigate('library', {}, { force: true })
         },
         onCancel: () => navigate('library', {}, { force: true })

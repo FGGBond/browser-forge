@@ -74,7 +74,7 @@ function recordingItem(recording, selectedId, route, locked) {
   const active = route === 'detail' && recording.id === selectedId
   const label = String(recording.title || '未命名录制')
   return `
-    <button type="button" class="sidebar-recording${active ? ' active' : ''}" data-recording-nav="${escapeAttribute(recording.id)}" ${locked ? 'disabled' : ''} title="${escapeAttribute(label)}">
+    <button type="button" class="sidebar-recording${active ? ' active' : ''}" data-recording-nav="${escapeAttribute(recording.id)}" aria-current="${active ? 'page' : 'false'}" ${locked ? 'disabled' : ''} title="${escapeAttribute(label)}">
       <span class="recording-folder" data-recording-folder="${active ? 'open' : 'closed'}" aria-hidden="true">${folderIcon(active)}</span>
       <span class="sidebar-label recording-nav-copy"><strong>${escapeHtml(label)}</strong></span>
     </button>`

@@ -19,6 +19,7 @@ let settingsRequestCount
 let permissionResetCount
 let appRevealCount
 let restartCount
+let recordingDetailDelayMs
 
 const grantedPermission = { supported: true, status: 'granted', granted: true, restartRequired: false }
 const missingPermission = { supported: true, status: 'not-granted', granted: false, restartRequired: false }
@@ -29,7 +30,10 @@ beforeAll(async () => {
   server = createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost')
     if (url.pathname === '/api/recordings') return json(res, { recordings: [] })
-    if (url.pathname === '/api/recordings/3d4527e4-4d47-4aea-a4ba-cd61218bbd27') return json(res, { id: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27', title: '自动完成的录制', state: 'active', createdAt: '2026-08-08T12:15:00.000Z', durationMs: 1000, startHost: 'example.com', videoStatus: 'failed', promptStatus: 'empty', sizeBytes: 100 })
+    if (url.pathname === '/api/recordings/3d4527e4-4d47-4aea-a4ba-cd61218bbd27') {
+      const detail = { id: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27', title: '自动完成的录制', state: 'active', createdAt: '2026-08-08T12:15:00.000Z', durationMs: 1000, startHost: 'example.com', visitedHosts: ['example.com'], videoStatus: 'failed', promptStatus: 'empty', sizeBytes: 100 }
+      return recordingDetailDelayMs ? setTimeout(() => json(res, detail), recordingDetailDelayMs) : json(res, detail)
+    }
     if (url.pathname.endsWith('/timeline')) return json(res, { events: [] })
     if (url.pathname.endsWith('/prompt')) return json(res, { text: '', status: 'empty', updatedAt: null })
     if (url.pathname === '/api/chrome-path') return json(res, { path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' })
@@ -95,6 +99,7 @@ function reset({ check = grantedPermission, request = grantedPermission, failSta
   permissionResetCount = 0
   appRevealCount = 0
   restartCount = 0
+  recordingDetailDelayMs = 0
 }
 
 async function openNewRecording() {
@@ -145,6 +150,54 @@ describe('managed start recording UI', () => {
     expect(await page.locator('[data-nav="library"]').isDisabled()).toBe(false)
     await page.close()
   }, 15_000)
+
+  it('shows a recordingId-only completion immediately while detail hydration is pending', async () => {
+    reset()
+    recordingDetailDelayMs = 1200
+    const page = await openNewRecording()
+    try {
+      await page.getByRole('button', { name: '开始录制' }).click()
+      await page.locator('[data-stop]').waitFor()
+      await expect.poll(() => wss.clients.size).toBeGreaterThan(0)
+      for (const client of wss.clients) client.send(JSON.stringify({
+        type: 'recording-completed',
+        recordingId: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
+      }))
+
+      const sidebarRecording = page.locator('[data-recording-nav="3d4527e4-4d47-4aea-a4ba-cd61218bbd27"]')
+      await sidebarRecording.waitFor({ timeout: 500 })
+      expect(await sidebarRecording.locator('strong').textContent()).toMatch(/^Recording-\d+月\d+日\d{2}:\d{2}$/)
+      await expect.poll(() => sidebarRecording.locator('strong').textContent(), { timeout: 4000 }).toBe('自动完成的录制')
+    } finally {
+      recordingDetailDelayMs = 0
+      await page.close()
+    }
+  }, 10_000)
+
+  it('shows a partial completion payload in the sidebar before detail hydration finishes', async () => {
+    reset()
+    recordingDetailDelayMs = 1200
+    const page = await openNewRecording()
+    try {
+      await page.getByRole('button', { name: '开始录制' }).click()
+      await page.locator('[data-stop]').waitFor()
+      await expect.poll(() => wss.clients.size).toBeGreaterThan(0)
+      for (const client of wss.clients) client.send(JSON.stringify({
+        type: 'recording-completed',
+        recordingId: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27',
+        recording: { id: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27', title: '正在整理的录制' }
+      }))
+
+      const sidebarRecording = page.locator('[data-recording-nav="3d4527e4-4d47-4aea-a4ba-cd61218bbd27"]')
+      await sidebarRecording.waitFor({ timeout: 500 })
+      expect(await sidebarRecording.getByText('正在整理的录制', { exact: true }).count()).toBe(1)
+      await expect.poll(() => page.locator('[data-title-input]').inputValue(), { timeout: 4000 }).toBe('自动完成的录制')
+      await expect.poll(() => sidebarRecording.locator('strong').textContent()).toBe('自动完成的录制')
+    } finally {
+      recordingDetailDelayMs = 0
+      await page.close()
+    }
+  }, 10_000)
 
   it('requests permission from macOS and continues into recording when access is granted', async () => {
     reset({ check: missingPermission, request: grantedPermission })

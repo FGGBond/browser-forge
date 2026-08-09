@@ -70,7 +70,7 @@ describe('managed recording workflow', () => {
     const started = await fetch(`${url}/api/start-recording`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goalText: '查询订单状态' }) }).then(response => response.json())
     const stopped = await fetch(`${url}/api/stop-recording`, { method: 'POST' }).then(response => response.json())
     expect(stopped.recordingId).toBe(started.recordingId)
-    expect(stopped.recording).toMatchObject({ id: started.recordingId, state: 'active', title: expect.stringContaining('example.com'), videoStatus: 'failed' })
+    expect(stopped.recording).toMatchObject({ id: started.recordingId, state: 'active', title: 'Recording-8月8日20:15', videoStatus: 'failed' })
 
     await server.close()
     server = null
