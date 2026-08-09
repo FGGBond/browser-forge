@@ -6,6 +6,7 @@ import { RecordingLibrary } from '../../src/main/recording-library/index.js'
 import { atomicWriteJson } from '../../src/main/recording-library/atomic-file.js'
 import { createRecordingMetadata } from '../../src/main/recording-library/metadata.js'
 import { createLibraryPaths } from '../../src/main/recording-library/paths.js'
+import { parseGuidanceMarkdown, serializeGuidanceMarkdown } from '../../ui/guidance-format.js'
 
 const firstId = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
 const secondId = 'b6789ee6-dd70-4b26-a829-ff551752e745'
@@ -243,6 +244,59 @@ describe('RecordingLibrary prompts', () => {
     await library.initialize()
 
     await expect(library.getPrompt(firstId)).rejects.toMatchObject({ code: 'CORRUPT_MATERIAL' })
+  })
+
+  it('parses persisted v2 guidance into three external prompt sections without leaking framing', async () => {
+    await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders' })
+    const library = new RecordingLibrary({ root, now })
+    await library.initialize()
+    const fields = {
+      actions: '查询订单并打开物流详情',
+      capability: '根据订单号返回最新物流节点',
+      acceptance: '使用 JD123 核对承运商和更新时间'
+    }
+    const guidance = serializeGuidanceMarkdown(fields)
+
+    await library.savePrompt(firstId, guidance)
+    const result = await library.getExternalAgentPrompt(firstId)
+
+    expect(result.text).toContain(`### 本次录制中的动作与意图\n${fields.actions}`)
+    expect(result.text).toContain(`### 希望提取的 skill 能力\n${fields.capability}`)
+    expect(result.text).toContain(`### Skill 验收标准\n${fields.acceptance}`)
+    expect(result.text).not.toContain('browser-forge-guidance:v2')
+    expect(result.text).not.toContain('<!-- /browser-forge-guidance -->')
+    for (const heading of ['本次录制中的动作与意图', '希望提取的 skill 能力', 'Skill 验收标准']) {
+      expect(result.text).not.toContain(`### ${heading}\n未提供`)
+    }
+  })
+
+  it('removes only the physical storage newline while preserving framed CRLF content and field-tail whitespace', async () => {
+    await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders' })
+    const library = new RecordingLibrary({ root, now })
+    await library.initialize()
+    const fields = {
+      actions: '第一行\r\n第二行  ',
+      capability: '能力说明\r\n\r\n',
+      acceptance: '验收标准\t'
+    }
+    const guidance = serializeGuidanceMarkdown(fields)
+
+    await library.savePrompt(firstId, guidance)
+
+    expect(await readFile(join(paths.active, firstId, 'prompt.md'), 'utf8')).toBe(`${guidance}\n`)
+    const storedPrompt = await library.getPrompt(firstId)
+    expect(storedPrompt.text).toBe(guidance)
+    expect(parseGuidanceMarkdown(storedPrompt.text)).toEqual({
+      actions: '第一行\n第二行  ',
+      capability: '能力说明\n\n',
+      acceptance: '验收标准\t',
+      legacy: false
+    })
+    const external = await library.getExternalAgentPrompt(firstId)
+    expect(external.text).toContain('### 本次录制中的动作与意图\n第一行\n第二行')
+    expect(external.text).toContain('### 希望提取的 skill 能力\n能力说明')
+    expect(external.text).toContain('### Skill 验收标准\n验收标准')
+    expect(external.text).not.toContain('browser-forge-guidance:v2')
   })
 
   it('derives the complete external prompt only for active managed recordings', async () => {

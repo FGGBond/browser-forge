@@ -164,9 +164,9 @@ export class RecordingLibrary {
     this.#requireInitialized()
     const recording = await this.#resolveActive(id)
     if (recording.metadata.prompt.status !== 'draft') return { text: '', status: 'empty', updatedAt: null }
-    const text = await this.#readSafeText(join(recording.path, 'prompt.md'), 'Prompt material is invalid')
+    const text = await this.#readPromptText(recording.path)
     return {
-      text: text.replace(/\n$/, ''),
+      text,
       status: 'draft',
       updatedAt: recording.metadata.prompt.updatedAt
     }
@@ -204,7 +204,7 @@ export class RecordingLibrary {
     this.#requireInitialized()
     const recording = await this.#resolveActive(id)
     const prompt = recording.metadata.prompt.status === 'draft'
-      ? await this.#readSafeText(join(recording.path, 'prompt.md'), 'Prompt material is invalid')
+      ? await this.#readPromptText(recording.path)
       : ''
     return {
       recordingId: recording.metadata.id,
@@ -531,6 +531,11 @@ export class RecordingLibrary {
 
   async #readRequiredJson(path, message) {
     return this.#readSafeJson(path, { required: true, message })
+  }
+
+  async #readPromptText(recordingPath) {
+    const text = await this.#readSafeText(join(recordingPath, 'prompt.md'), 'Prompt material is invalid')
+    return text.endsWith('\n') ? text.slice(0, -1) : text
   }
 
   async #readSafeText(path, message) {
