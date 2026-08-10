@@ -78,9 +78,15 @@ export class NavigationSettler {
     return true
   }
 
-  addVisualSample({ loaderId, timestamp, videoOffsetMs, signature }) {
+  addVisualSample({ loaderId, timestamp, videoOffsetMs, signature, visibilityState = 'visible' }) {
     const navigation = this._matchingNavigation(loaderId)
     if (!navigation || this._emitted || !signature || !Number.isFinite(videoOffsetMs)) return null
+
+    if (visibilityState !== 'visible') {
+      navigation.stableRun = []
+      navigation.validSamples = []
+      return null
+    }
 
     const sample = { timestamp, videoOffsetMs, signature }
     if (navigation.readyAt !== null && timestamp >= navigation.readyAt) {

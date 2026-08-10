@@ -101,6 +101,39 @@ describe('RecordingSession screenshot triggers', () => {
     })).toBe(stable[0].videoOffsetMs)
   })
 
+  it('does not settle a hidden tab until it becomes visible and rebuilds a full stable run', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(2_000)
+    const recording = new RecordingSession({
+      outputDir: '/tmp/browser-forge-test',
+      video: { startEpochMs: 1_000, window: { pid: 1, windowId: 'x', title: 'title' } }
+    })
+    const events = createSettlingSession({
+      screenshots: Array(20).fill('stable'),
+      layoutSignatures: Array(20).fill('stable'),
+      visibilityStates: ['visible', 'visible', 'hidden', 'hidden', 'hidden', 'hidden', 'visible', 'visible', 'visible', 'visible']
+    })
+
+    await recording._setupTabCollectors('tab-background', events.session)
+    await events.handlers.frameNavigated({ frame: { id: 'frame-1', loaderId: 'loader-1', url: 'https://example.test/background' } })
+    events.handlers.lifecycleEvent({ frameId: 'frame-1', loaderId: 'loader-1', name: 'load' })
+
+    await vi.advanceTimersByTimeAsync(1_800)
+    expect(recording._timelineEvents.filter(event => event.type === 'navigation-stable')).toEqual([])
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(recording._timelineEvents.filter(event => event.type === 'navigation-stable')).toEqual([
+      expect.objectContaining({
+        targetId: 'tab-background',
+        url: 'https://example.test/background',
+        confidence: 'high'
+      })
+    ])
+    expect(events.session.Runtime.evaluate).toHaveBeenCalledWith(expect.objectContaining({
+      expression: expect.stringContaining('document.visibilityState')
+    }))
+  })
+
   it('recovers an already-complete external page attached after a fast address-bar navigation', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(5_000)
@@ -174,6 +207,93 @@ describe('RecordingSession screenshot triggers', () => {
     expect(recording._navigationSettling.size).toBe(0)
   })
 
+
+  it('waits for a response body task that started before video stop before building HAR', async () => {
+    const body = deferred()
+    const recording = new RecordingSession({ outputDir: '/tmp/browser-forge-test' })
+    recording._startedAt = Date.now()
+    const events = createSettlingSession({ getResponseBody: vi.fn(() => body.promise) })
+    await recording._setupTabCollectors('tab-1', events.session)
+    recording._cdp = createSessionCdp('tab-1', events.session, 'https://example.test/data')
+    const writeSession = vi.spyOn(recording, '_writeSession').mockResolvedValue('/tmp/browser-forge-test/session-test')
+    vi.spyOn(recording, '_captureActiveTabScreenshot').mockResolvedValue(false)
+
+    events.handlers.requestWillBeSent({
+      requestId: 'req-1', loaderId: 'loader-1', type: 'Fetch',
+      request: { url: 'https://example.test/api/data', method: 'GET', headers: {} }
+    })
+    events.handlers.responseReceived({
+      requestId: 'req-1',
+      response: { status: 200, headers: {}, mimeType: 'application/json', url: 'https://example.test/api/data' }
+    })
+    events.handlers.loadingFinished({ requestId: 'req-1' })
+
+    const stopping = recording.stop()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(writeSession).not.toHaveBeenCalled()
+
+    body.resolve({ body: '{"ready":true}', base64Encoded: false })
+    await stopping
+
+    expect(writeSession.mock.calls[0][0].har.log.entries[0].response.content.text).toBe('{"ready":true}')
+  })
+
+  it('waits for navigation DOM artifacts that started before video stop before building tabs', async () => {
+    const documentResult = deferred()
+    const recording = new RecordingSession({ outputDir: '/tmp/browser-forge-test' })
+    recording._startedAt = Date.now()
+    const events = createSettlingSession({ getDocument: vi.fn(() => documentResult.promise) })
+    await recording._setupTabCollectors('tab-1', events.session)
+    recording._cdp = createSessionCdp('tab-1', events.session, 'https://example.test/orders')
+    const writeSession = vi.spyOn(recording, '_writeSession').mockResolvedValue('/tmp/browser-forge-test/session-test')
+    vi.spyOn(recording, '_captureActiveTabScreenshot').mockResolvedValue(false)
+
+    await events.handlers.frameNavigated({ frame: { id: 'frame-1', loaderId: 'loader-1', url: 'https://example.test/orders' } })
+    events.handlers.lifecycleEvent({ frameId: 'frame-1', loaderId: 'loader-1', name: 'load' })
+
+    const stopping = recording.stop()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(writeSession).not.toHaveBeenCalled()
+
+    documentResult.resolve({ root: { nodeId: 1 } })
+    await stopping
+
+    expect(writeSession.mock.calls[0][0].tabs['tab-1']).toMatchObject({
+      domSnapshots: [expect.objectContaining({ html: '<html></html>', url: 'https://example.test/orders' })],
+      screenshots: [expect.objectContaining({ dataBase64: 'stable' })]
+    })
+  })
+
+  it('bounds pending task drain when a CDP operation never resolves', async () => {
+    vi.useFakeTimers()
+    const body = deferred()
+    const recording = new RecordingSession({ outputDir: '/tmp/browser-forge-test' })
+    recording._startedAt = Date.now()
+    const events = createSettlingSession({ getResponseBody: vi.fn(() => body.promise) })
+    await recording._setupTabCollectors('tab-1', events.session)
+    recording._cdp = createSessionCdp('tab-1', events.session, 'https://example.test/data')
+    const writeSession = vi.spyOn(recording, '_writeSession').mockResolvedValue('/tmp/browser-forge-test/session-test')
+    vi.spyOn(recording, '_captureActiveTabScreenshot').mockResolvedValue(false)
+
+    events.handlers.requestWillBeSent({
+      requestId: 'req-1', loaderId: 'loader-1', type: 'Fetch',
+      request: { url: 'https://example.test/api/data', method: 'GET', headers: {} }
+    })
+    events.handlers.loadingFinished({ requestId: 'req-1' })
+
+    const stopping = recording.stop()
+    await vi.advanceTimersByTimeAsync(999)
+    expect(writeSession).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await stopping
+    expect(writeSession).toHaveBeenCalledOnce()
+
+    body.reject(new Error('late CDP failure'))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
 
   it('cancels delayed interaction screenshots when stopping the session', async () => {
     vi.useFakeTimers()
@@ -407,6 +527,24 @@ describe('RecordingSession screenshot triggers', () => {
   })
 })
 
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function createSessionCdp(targetId, session, url) {
+  return {
+    getTargets: () => [{ targetId, title: 'Example', url }],
+    _targets: new Map([[targetId, { session, info: { targetId, title: 'Example', url } }]]),
+    disconnect: vi.fn()
+  }
+}
+
 function createStoppedRecording({ startedAt }) {
   const recording = new RecordingSession({ outputDir: '/tmp/browser-forge-test' })
   recording._startedAt = startedAt
@@ -466,11 +604,15 @@ function createSettlingSession({
   screenshots = ['stable'],
   layoutSignatures = ['stable'],
   currentFrame = { id: 'frame-internal', loaderId: 'loader-internal', url: 'http://127.0.0.1:43123/recording-start.html' },
-  readyState = 'loading'
+  readyState = 'loading',
+  visibilityStates = ['visible'],
+  getResponseBody = vi.fn().mockRejectedValue(new Error('no body')),
+  getDocument = vi.fn().mockResolvedValue({ root: { nodeId: 1 } })
 } = {}) {
   const handlers = {}
   let screenshotIndex = 0
   let layoutIndex = 0
+  let visibilityIndex = 0
   const session = {
     removeListener: vi.fn(),
     once: vi.fn((name, handler) => { handlers[name] = handler }),
@@ -480,7 +622,7 @@ function createSettlingSession({
       responseReceived: vi.fn(handler => { handlers.responseReceived = handler }),
       loadingFinished: vi.fn(handler => { handlers.loadingFinished = handler }),
       loadingFailed: vi.fn(handler => { handlers.loadingFailed = handler }),
-      getResponseBody: vi.fn().mockRejectedValue(new Error('no body'))
+      getResponseBody
     },
     Page: {
       enable: vi.fn(),
@@ -496,11 +638,13 @@ function createSettlingSession({
       addBinding: vi.fn(),
       bindingCalled: vi.fn(),
       evaluate: vi.fn(async ({ expression }) => {
+        if (expression.includes('document.documentElement')) {
+          const layout = layoutSignatures[Math.min(layoutIndex++, layoutSignatures.length - 1)]
+          const visibilityState = visibilityStates[Math.min(visibilityIndex++, visibilityStates.length - 1)]
+          return { result: { value: JSON.stringify({ layout, visibilityState }) } }
+        }
         if (expression.includes('document.readyState')) {
           return { result: { value: { readyState, url: currentFrame.url } } }
-        }
-        if (expression.includes('document.documentElement')) {
-          return { result: { value: layoutSignatures[Math.min(layoutIndex++, layoutSignatures.length - 1)] } }
         }
         if (expression === 'document.visibilityState') return { result: { value: 'visible' } }
         if (expression === 'document.title') return { result: { value: 'Example' } }
@@ -511,7 +655,7 @@ function createSettlingSession({
     },
     DOM: {
       enable: vi.fn(),
-      getDocument: vi.fn().mockResolvedValue({ root: { nodeId: 1 } }),
+      getDocument,
       getOuterHTML: vi.fn().mockResolvedValue({ outerHTML: '<html></html>' })
     },
     close: vi.fn()

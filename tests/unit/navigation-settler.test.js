@@ -87,6 +87,25 @@ describe('NavigationSettler', () => {
     expect(settler.addVisualSample({ loaderId: 'loader-1', timestamp: 1_050, videoOffsetMs: 1_050, signature: 'live' })).toMatchObject({ timestamp: 800, confidence: 'high' })
   })
 
+  it('clears visual progress while hidden and rebuilds it after the tab becomes visible', () => {
+    const settler = createSettler({ stableSampleCount: 3, networkQuietMs: 0 })
+    settler.beginNavigation({ url: 'https://example.com/background', loaderId: 'loader-1', timestamp: 0, videoOffsetMs: 0 })
+    settler.onLifecycle({ loaderId: 'loader-1', name: 'load', timestamp: 100 })
+
+    expect(settler.addVisualSample({ loaderId: 'loader-1', timestamp: 200, videoOffsetMs: 200, signature: 'stable', visibilityState: 'visible' })).toBeNull()
+    expect(settler.addVisualSample({ loaderId: 'loader-1', timestamp: 450, videoOffsetMs: 450, signature: 'stable', visibilityState: 'visible' })).toBeNull()
+    expect(settler.addVisualSample({ loaderId: 'loader-1', timestamp: 700, videoOffsetMs: 700, signature: 'stable', visibilityState: 'hidden' })).toBeNull()
+    expect(settler._navigation.stableRun).toEqual([])
+
+    expect(settler.addVisualSample({ loaderId: 'loader-1', timestamp: 950, videoOffsetMs: 950, signature: 'stable', visibilityState: 'visible' })).toBeNull()
+    expect(settler.addVisualSample({ loaderId: 'loader-1', timestamp: 1_200, videoOffsetMs: 1_200, signature: 'stable', visibilityState: 'visible' })).toBeNull()
+    expect(settler.addVisualSample({ loaderId: 'loader-1', timestamp: 1_450, videoOffsetMs: 1_450, signature: 'stable', visibilityState: 'visible' })).toMatchObject({
+      url: 'https://example.com/background',
+      timestamp: 950,
+      videoOffsetMs: 950
+    })
+  })
+
   it('uses a bounded deadline fallback instead of waiting forever for animation', () => {
     const settler = createSettler()
     settler.beginNavigation({ url: 'https://example.com/animated', loaderId: 'loader-1', timestamp: 1_000, videoOffsetMs: 300 })

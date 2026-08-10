@@ -28,6 +28,8 @@ export class RecordingSession {
     this._startedAt = null
     this._lastActiveTargetId = null
     this._navigationSettling = new Map()
+    this._pendingTaskStates = new Set()
+    this._pendingTaskDrainTimeoutMs = 1_000
     this._stableNavigationEmitted = false
     this._stopping = false
   }
@@ -130,12 +132,12 @@ export class RecordingSession {
       if (targetEntry) targetEntry.info = { ...targetEntry.info, url: frame.url }
       this._beginNavigationSettling({ settling, frame, timestamp })
     }
-    const lifecycleEvent = params => {
+    const lifecycleEvent = async params => {
       if (params.frameId !== settling.frameId) return
       const timestamp = Date.now()
       settling.settler.onLifecycle({ loaderId: params.loaderId, name: params.name, timestamp })
       if (params.name === 'load' && params.loaderId === settling.loaderId) {
-        this._captureNavigationArtifacts({ session, collectors, targetId, settling }).catch(() => {})
+        await this._captureNavigationArtifacts({ session, collectors, targetId, settling })
       }
     }
 
@@ -176,8 +178,10 @@ export class RecordingSession {
       generation: 0,
       timer: null,
       active: true,
+      acceptingTasks: true,
       capturedLoaders: new Set(),
       pendingTimers: new Set(),
+      pendingTasks: new Set(),
       cleanups: []
     }
     state.settler = new NavigationSettler({
@@ -198,10 +202,34 @@ export class RecordingSession {
   }
 
   _listen(state, session, eventName, subscribe, handler) {
-    const unsubscribe = subscribe(handler)
+    const trackedHandler = (...args) => {
+      if (!state.acceptingTasks) return undefined
+      try {
+        const result = handler(...args)
+        return result && typeof result.then === 'function'
+          ? this._trackTask(state, result)
+          : result
+      } catch {
+        return undefined
+      }
+    }
+    const unsubscribe = subscribe(trackedHandler)
     state.cleanups.push(typeof unsubscribe === 'function'
       ? unsubscribe
-      : () => session.removeListener?.(eventName, handler))
+      : () => session.removeListener?.(eventName, trackedHandler))
+  }
+
+  _trackTask(state, task) {
+    const tracked = Promise.resolve(task).catch(() => undefined)
+    state.pendingTasks.add(tracked)
+    this._pendingTaskStates.add(state)
+    tracked.finally(() => {
+      state.pendingTasks.delete(tracked)
+      if (!state.active && state.pendingTasks.size === 0) {
+        this._pendingTaskStates.delete(state)
+      }
+    }).catch(() => {})
+    return tracked
   }
 
   _wrapSessionClose(state) {
@@ -267,14 +295,16 @@ export class RecordingSession {
 
   _scheduleNavigationSample(settling, delayMs, generation) {
     if (this._stopping || this._stableNavigationEmitted || !settling.active || generation !== settling.generation) return
-    settling.timer = setTimeout(async () => {
+    settling.timer = setTimeout(() => {
       settling.timer = null
       if (this._stopping || this._stableNavigationEmitted || !settling.active || generation !== settling.generation) return
-      await this._sampleNavigationViewport(settling, generation)
-      if (this._stopping || this._stableNavigationEmitted || !settling.active || generation !== settling.generation) return
-      const navigation = settling.settler._navigation
-      if (!navigation || Date.now() > navigation.timestamp + settling.settler.deadlineMs + 500) return
-      this._scheduleNavigationSample(settling, 250, generation)
+      this._trackTask(settling, (async () => {
+        await this._sampleNavigationViewport(settling, generation)
+        if (this._stopping || this._stableNavigationEmitted || !settling.active || generation !== settling.generation) return
+        const navigation = settling.settler._navigation
+        if (!navigation || Date.now() > navigation.timestamp + settling.settler.deadlineMs + 500) return
+        this._scheduleNavigationSample(settling, 250, generation)
+      })())
     }, delayMs)
   }
 
@@ -286,29 +316,34 @@ export class RecordingSession {
           expression: `(() => {
             const root = document.documentElement
             const body = document.body
-            return JSON.stringify({
-              url: location.href,
-              title: document.title,
-              readyState: document.readyState,
-              root: root ? [root.scrollWidth, root.scrollHeight, root.clientWidth, root.clientHeight, root.childElementCount] : null,
-              body: body ? [body.scrollWidth, body.scrollHeight, body.childElementCount, (body.innerText || '').length] : null
-            })
+            return {
+              visibilityState: document.visibilityState,
+              layout: {
+                url: location.href,
+                title: document.title,
+                readyState: document.readyState,
+                root: root ? [root.scrollWidth, root.scrollHeight, root.clientWidth, root.clientHeight, root.childElementCount] : null,
+                body: body ? [body.scrollWidth, body.scrollHeight, body.childElementCount, (body.innerText || '').length] : null
+              }
+            }
           })()`,
           returnByValue: true
         })
       ])
       if (generation !== settling.generation || this._stopping || !settling.active) return null
       const timestamp = Date.now()
+      const viewport = parseViewportSample(layout?.result?.value)
       const signature = createHash('sha256')
         .update(String(data || ''))
         .update('\0')
-        .update(String(layout?.result?.value ?? ''))
+        .update(JSON.stringify(viewport.layout ?? null))
         .digest('hex')
       return settling.settler.addVisualSample({
         loaderId: settling.loaderId,
         timestamp,
         videoOffsetMs: this._videoOffset(timestamp),
-        signature
+        signature,
+        visibilityState: viewport.visibilityState
       })
     } catch {
       return null
@@ -340,6 +375,7 @@ export class RecordingSession {
     const settling = this._navigationSettling.get(targetId)
     if (!settling) return
     settling.active = false
+    settling.acceptingTasks = false
     if (settling.timer) clearTimeout(settling.timer)
     settling.timer = null
     for (const timer of settling.pendingTimers) clearTimeout(timer)
@@ -348,6 +384,7 @@ export class RecordingSession {
       try { cleanup() } catch {}
     }
     this._navigationSettling.delete(targetId)
+    if (settling.pendingTasks.size === 0) this._pendingTaskStates.delete(settling)
   }
 
   _cleanupAllNavigationSettling() {
@@ -360,7 +397,11 @@ export class RecordingSession {
     const timer = setTimeout(() => {
       settling?.pendingTimers.delete(timer)
       if (this._stopping || settling?.active === false) return
-      this._captureScreenshot({ session, collectors, timestamp })
+      if (settling) {
+        this._trackTask(settling, this._captureScreenshot({ session, collectors, timestamp }))
+      } else {
+        this._captureScreenshot({ session, collectors, timestamp }).catch(() => {})
+      }
     }, 300)
     settling?.pendingTimers.add(timer)
   }
@@ -441,8 +482,25 @@ export class RecordingSession {
     this._cleanupAllNavigationSettling()
   }
 
+  async _drainPendingTasks({ timeoutMs = this._pendingTaskDrainTimeoutMs } = {}) {
+    const pending = [...this._pendingTaskStates]
+      .flatMap(state => [...state.pendingTasks])
+    if (pending.length === 0) return true
+
+    let timeout
+    const drained = await Promise.race([
+      Promise.allSettled(pending).then(() => true),
+      new Promise(resolve => {
+        timeout = setTimeout(() => resolve(false), timeoutMs)
+      })
+    ])
+    if (timeout) clearTimeout(timeout)
+    return drained
+  }
+
   async stop({ video = this.video } = {}) {
     this.prepareForVideoStop()
+    await this._drainPendingTasks()
     const durationMs = Math.max(0, Date.now() - this._startedAt)
     await this._captureActiveTabScreenshot()
     const targets = this._cdp.getTargets()
@@ -539,6 +597,20 @@ export class RecordingSession {
       .find(item => String(item.timestamp) === String(timestamp))
     if (!screenshot?.dataBase64) return null
     return Buffer.from(screenshot.dataBase64, 'base64')
+  }
+}
+
+function parseViewportSample(value) {
+  let parsed = value
+  if (typeof parsed === 'string') {
+    try { parsed = JSON.parse(parsed) } catch { parsed = null }
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return { visibilityState: 'hidden', layout: null }
+  }
+  return {
+    visibilityState: parsed.visibilityState === 'visible' ? 'visible' : 'hidden',
+    layout: parsed.layout ?? parsed
   }
 }
 

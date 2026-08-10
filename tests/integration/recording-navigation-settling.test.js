@@ -102,4 +102,49 @@ describe('recording navigation settling integration', () => {
     expect(spawn.mock.calls[0][1]).toContain(String(stable.videoOffsetMs))
     await page.close()
   }, 15_000)
+  it('waits for the navigated tab to become visible before emitting its poster candidate', async () => {
+    const context = await browser.newContext()
+    const pageA = await context.newPage()
+    const pageB = await context.newPage()
+    await pageB.addInitScript(() => {
+      window.__browserForgeTestVisibility = 'hidden'
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => window.__browserForgeTestVisibility
+      })
+    })
+    await Promise.all([
+      pageA.goto(`${baseUrl}/recording-start.html`),
+      pageB.goto(`${baseUrl}/recording-start.html`)
+    ])
+
+    const recording = new RecordingSession({ port: browserPort, outputDir })
+    await recording.start()
+    const stagedUrl = `http://localhost:${webServer.address().port}/background-tab`
+
+    await pageB.bringToFront()
+    await pageB.goto(stagedUrl)
+    await pageA.bringToFront()
+    await pageB.evaluate(() => { window.__browserForgeTestVisibility = 'hidden' })
+
+    await new Promise(resolve => setTimeout(resolve, 2_500))
+    expect(recording._timelineEvents.filter(event => event.type === 'navigation-stable')).toEqual([])
+
+    await pageB.bringToFront()
+    await pageB.evaluate(() => { window.__browserForgeTestVisibility = 'visible' })
+    await expect.poll(
+      () => recording._timelineEvents.find(event => event.type === 'navigation-stable'),
+      { timeout: 4_000, interval: 100 }
+    ).toMatchObject({
+      type: 'navigation-stable',
+      url: stagedUrl,
+      reason: 'load+network-quiet+visual-stable',
+      confidence: 'high'
+    })
+    expect(await pageB.evaluate(() => document.visibilityState)).toBe('visible')
+
+    await recording.stop()
+    await context.close()
+  }, 15_000)
+
 })
