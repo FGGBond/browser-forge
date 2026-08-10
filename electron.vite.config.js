@@ -1,5 +1,4 @@
 import { defineConfig } from 'electron-vite'
-import react from '@vitejs/plugin-react'
 
 function telemetryBuildDefines() {
   return {
@@ -36,10 +35,5 @@ export default defineConfig({
       },
       formats: ['cjs']
     }
-  },
-  renderer: {
-    plugins: [react()],
-    build: { outDir: 'out/renderer' },
-    resolve: { extensions: ['.jsx', '.js'] }
   }
 })

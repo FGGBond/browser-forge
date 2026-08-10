@@ -39,28 +39,56 @@ describe('macOS packaging configuration', () => {
     ])
   })
 
-  it('uses the CommonJS preload bundle emitted for Electron preload', () => {
+  it('keeps the main and CommonJS preload Electron Vite builds', () => {
     const mainSource = readFileSync('src/main/index.js', 'utf8')
     expect(mainSource).toContain("../preload/index.cjs")
 
     const viteConfig = readFileSync('electron.vite.config.js', 'utf8')
+    expect(viteConfig).toContain('main: {')
+    expect(viteConfig).toContain('preload: {')
     expect(viteConfig).toContain("formats: ['cjs']")
     expect(viteConfig).toContain("entryFileNames: 'index.cjs'")
   })
 
-  it('uses the React plugin for production renderer JSX builds', () => {
-    const viteConfig = readFileSync('electron.vite.config.js', 'utf8')
-    expect(viteConfig).toContain("import react from '@vitejs/plugin-react'")
-    expect(viteConfig).toContain('plugins: [react()]')
-  })
-})
+  it('serves the production UI from ui/ through the recorder HTTP server', () => {
+    expect(existsSync('ui/index.html')).toBe(true)
 
-  it('keeps inert concepts and legacy renderer files out of packaged apps', () => {
+    const mainSource = readFileSync('src/main/index.js', 'utf8')
+    const httpServerSource = readFileSync('src/main/recorder/http-server.js', 'utf8')
+    expect(mainSource).toContain("uiRoot: join(app.getAppPath(), 'ui')")
+    expect(mainSource).toContain("win.loadURL(`${url}/?shell=electron`)")
+    expect(httpServerSource).toContain('app.use(express.static(uiRoot))')
+  })
+
+  it('has no inactive React renderer source or Electron Vite renderer build', () => {
+    expect(existsSync('src/renderer')).toBe(false)
+
+    const viteConfig = readFileSync('electron.vite.config.js', 'utf8')
+    expect(viteConfig).not.toContain("@vitejs/plugin-react")
+    expect(viteConfig).not.toContain('react()')
+    expect(viteConfig).not.toMatch(/\brenderer\s*:/)
+  })
+
+  it('has no React renderer runtime or plugin dependencies', () => {
+    expect(packageJson.dependencies).not.toHaveProperty('react')
+    expect(packageJson.dependencies).not.toHaveProperty('react-dom')
+    expect(packageJson.devDependencies).not.toHaveProperty('@vitejs/plugin-react')
+
+    const packageLock = readFileSync('package-lock.json', 'utf8')
+    expect(packageLock).not.toContain('node_modules/react"')
+    expect(packageLock).not.toContain('node_modules/react-dom"')
+    expect(packageLock).not.toContain('node_modules/react-refresh"')
+    expect(packageLock).not.toContain('node_modules/@vitejs/plugin-react"')
+  })
+
+  it('keeps inert concepts out of packaged apps without a legacy renderer ignore', () => {
     const forgeConfig = require('../../forge.config.cjs')
     const ignored = (path) => forgeConfig.packagerConfig.ignore.some((pattern) => pattern.test(path))
 
     expect(ignored('/design/icon-concepts/example.png')).toBe(true)
     expect(ignored('/assets/icon-concepts/example.png')).toBe(true)
-    expect(ignored('/src/renderer/index.html')).toBe(true)
     expect(ignored('/docs/superpowers/plans/integration-plan.md')).toBe(true)
+    expect(ignored('/ui/index.html')).toBe(false)
+    expect(forgeConfig.packagerConfig.ignore.some((pattern) => pattern.test('/src/renderer/index.html'))).toBe(false)
   })
+})
