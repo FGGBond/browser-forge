@@ -144,10 +144,16 @@ describe('recording detail UI', () => {
       return { fontSize: Number.parseFloat(style.fontSize), height: rect.height, left: rect.left, width: rect.width }
     })
     const paneBox = await pane.boundingBox()
+    const flowBox = await pane.locator('[data-guidance-flow]').boundingBox()
+    const closeBox = await pane.locator('[data-close-analysis]').boundingBox()
     expect(progressStyle.fontSize).toBeGreaterThanOrEqual(12)
     expect(progressStyle.height).toBeGreaterThanOrEqual(28)
-    expect(Math.abs((progressStyle.left + progressStyle.width / 2) - (paneBox.x + paneBox.width / 2))).toBeLessThanOrEqual(3)
-    const closeBox = await pane.locator('[data-close-analysis]').boundingBox()
+    expect(progressStyle.left).toBeGreaterThanOrEqual(flowBox.x)
+    expect(progressStyle.left + progressStyle.width).toBeLessThanOrEqual(flowBox.x + flowBox.width)
+    expect(Math.abs(
+      (progressStyle.left + progressStyle.width / 2) -
+      (flowBox.x + flowBox.width / 2)
+    )).toBeLessThanOrEqual(3)
     expect(closeBox.x + closeBox.width).toBeLessThanOrEqual(paneBox.x + paneBox.width)
     const headerLayout = await page.locator('.analysis-main .detail-header').evaluate(element => {
       const title = element.querySelector('.detail-title-input')
