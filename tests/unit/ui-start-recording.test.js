@@ -22,6 +22,7 @@ let restartCount
 let recordingDetailDelayMs
 let stopRequestCount
 let stopResponseDelayMs
+let liveSummary
 
 const grantedPermission = { supported: true, status: 'granted', granted: true, restartRequired: false }
 const missingPermission = { supported: true, status: 'not-granted', granted: false, restartRequired: false }
@@ -66,7 +67,7 @@ beforeAll(async () => {
       res.statusCode = 202
       return json(res, { ok: true, restarting: true })
     }
-    if (url.pathname === '/api/summary') return json(res, { type: 'summary', startedAt: null, tabs: [], totals: { events: 0, network: 0, console: 0, artifacts: 0 } })
+    if (url.pathname === '/api/summary') return json(res, liveSummary)
     if (url.pathname === '/api/stop-recording' && req.method === 'POST') {
       stopRequestCount += 1
       const result = { ok: true, recordingId: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27' }
@@ -109,6 +110,7 @@ function reset({ check = grantedPermission, request = grantedPermission, failSta
   recordingDetailDelayMs = 0
   stopRequestCount = 0
   stopResponseDelayMs = 0
+  liveSummary = { type: 'summary', startedAt: null, tabs: [], totals: { events: 0, network: 0, console: 0, artifacts: 0 } }
 }
 
 async function openNewRecording() {
@@ -193,6 +195,55 @@ describe('managed start recording UI', () => {
     await page.close()
   }, 15_000)
 
+  it('shows elapsed recording time from the live summary and updates it every second', async () => {
+    reset()
+    liveSummary.startedAt = Date.now() - 65_000
+    const page = await openNewRecording()
+
+    await page.getByRole('button', { name: '开始录制' }).click()
+    const elapsed = page.locator('[data-recording-elapsed]')
+    await elapsed.waitFor()
+    await expect.poll(() => elapsed.textContent()).toMatch(/^01:[0-5]\d$/)
+
+    const initialElapsed = await elapsed.textContent()
+    await expect.poll(() => elapsed.textContent(), { timeout: 2500 }).not.toBe(initialElapsed)
+    await page.close()
+  })
+
+  it('freezes the last page summary while the recording is finalizing', async () => {
+    reset()
+    stopResponseDelayMs = 1500
+    liveSummary.tabs = [{ targetId: 'initial', title: '初始页面', url: 'https://initial.example/' }]
+    const page = await openNewRecording()
+
+    try {
+      await page.getByRole('button', { name: '开始录制' }).click()
+      await page.getByText('初始页面', { exact: true }).waitFor()
+      await expect.poll(() => wss.clients.size).toBe(1)
+
+      for (const client of wss.clients) client.send(JSON.stringify({
+        type: 'summary',
+        startedAt: liveSummary.startedAt,
+        tabs: [{ targetId: 'before-stop', title: '停止前页面', url: 'https://before-stop.example/' }]
+      }))
+      await page.getByText('停止前页面', { exact: true }).waitFor()
+
+      await page.locator('[data-stop]').click()
+      await page.getByRole('heading', { name: '正在准备回放' }).waitFor()
+      for (const client of wss.clients) client.send(JSON.stringify({
+        type: 'summary',
+        startedAt: liveSummary.startedAt,
+        tabs: [{ targetId: 'after-stop', title: '停止后页面', url: 'https://after-stop.example/' }]
+      }))
+      await page.waitForTimeout(250)
+
+      expect(await page.getByText('停止前页面', { exact: true }).count()).toBe(1)
+      expect(await page.getByText('停止后页面', { exact: true }).count()).toBe(0)
+    } finally {
+      await page.close()
+    }
+  }, 10_000)
+
   it('shows a recordingId-only completion immediately while detail hydration is pending', async () => {
     reset()
     recordingDetailDelayMs = 1200
@@ -265,6 +316,7 @@ describe('managed start recording UI', () => {
     await expect.poll(() => settingsRequestCount).toBe(1)
     const notice = page.locator('[data-notice-stack] [role="alert"]').last()
     await expect.poll(() => notice.textContent()).toContain('屏幕录制权限')
+    expect(await notice.textContent()).toContain('左侧“全部录制”')
     expect(await notice.textContent()).not.toContain('Browser Forge Recorder')
     expect(await notice.getByRole('button', { name: '关闭提示' }).count()).toBe(1)
     expect(startRequests).toEqual([])

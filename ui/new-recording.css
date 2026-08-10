@@ -105,6 +105,21 @@
   line-height: 1.5;
 }
 
+.recording-active-status > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.recording-elapsed {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
 .recording-readiness[data-tone="ready"] .recording-readiness-icon,
 .recording-active-status .recording-readiness-icon {
   color: var(--success);
@@ -262,6 +277,13 @@
   gap: 24px;
 }
 
+.recording-active-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 14px;
+}
+
 .recording-indicator-dot {
   width: 7px;
   height: 7px;
@@ -341,6 +363,10 @@
     align-items: stretch;
     flex-direction: column;
     gap: 16px;
+  }
+
+  .recording-active-controls {
+    justify-content: space-between;
   }
 
   .recording-primary-action {

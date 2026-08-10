@@ -125,7 +125,7 @@ export async function renderNewRecording({ container, api, onStarted }) {
       } else if (permission?.supported === false || permission?.status === 'unsupported') {
         tone = 'danger'
         title = '当前设备不支持窗口视频录制'
-        detail = '你可以关闭此提示并返回录制库。'
+        detail = '你可以关闭此提示，并使用左侧“全部录制”返回录制库。'
       } else if (permission?.granted) {
         tone = 'ready'
         title = 'Chrome 与屏幕录制权限已就绪'
@@ -195,7 +195,7 @@ export async function renderNewRecording({ container, api, onStarted }) {
     waitingForPermission = true
     try {
       await api.openScreenRecordingSettings()
-      showNotice({ id: 'permission', message: '需要屏幕录制权限才能保存录制窗口的视频。已打开系统设置；授权后返回 Browser Forge，会自动重新检查并继续。', tone: 'danger' })
+      showNotice({ id: 'permission', message: '需要屏幕录制权限才能保存录制窗口的视频。已打开系统设置；授权后返回 Browser Forge，会自动重新检查并继续。如果暂时不录制，可使用左侧“全部录制”返回录制库。', tone: 'danger' })
     } catch (error) {
       showNotice({ id: 'permission', message: `无法打开屏幕录制设置：${error.message}`, tone: 'danger' })
     }
@@ -342,9 +342,12 @@ export async function renderRecording({ container, api, activeRecording, onStopp
             <h1 id="live-recording-title">录制进行中</h1>
             <p class="recording-stage-copy" data-recording-copy>请在 Chrome 中完成操作，Browser Forge 会保留打开页面和录制视频。</p>
           </div>
-          <button class="recording-primary-action recording-stop-action" type="button" data-stop data-primary-action>
-            ${stopIcon()}<span>停止录制</span>
-          </button>
+          <div class="recording-active-controls">
+            <time class="recording-elapsed" data-recording-elapsed datetime="PT0S" aria-label="录制时长">00:00</time>
+            <button class="recording-primary-action recording-stop-action" type="button" data-stop data-primary-action>
+              ${stopIcon()}<span>停止录制</span>
+            </button>
+          </div>
         </header>
 
         <div class="recording-active-status" role="status" aria-live="polite" aria-atomic="true">
@@ -374,13 +377,34 @@ export async function renderRecording({ container, api, activeRecording, onStopp
   const stop = container.querySelector('[data-stop]')
   const stopLabel = stop.querySelector('span')
   const errorNotice = container.querySelector('[data-live-error]')
+  const elapsed = container.querySelector('[data-recording-elapsed]')
   let finished = false
   let stopping = false
+  let recordingStartedAt = epochMilliseconds(activeRecording?.startedAt) || Date.now()
+
+  const updateElapsed = () => {
+    if (stopping || finished) return
+    const elapsedMs = Math.max(0, Date.now() - recordingStartedAt)
+    const formattedElapsed = formatElapsedTime(elapsedMs)
+    elapsed.textContent = formattedElapsed
+    elapsed.dateTime = `PT${Math.floor(elapsedMs / 1000)}S`
+    elapsed.setAttribute('aria-label', `录制时长 ${formattedElapsed}`)
+  }
+  const elapsedTimer = setInterval(updateElapsed, 1000)
+  updateElapsed()
+
+  const applyLiveSummary = summary => {
+    if (stopping || finished) return
+    recordingStartedAt = epochMilliseconds(summary?.startedAt) || recordingStartedAt
+    updateElapsed()
+    applySummary(container, summary)
+  }
 
   const finish = result => {
     if (finished) return
     finished = true
     stopping = true
+    clearInterval(elapsedTimer)
     disconnectInspector()
     onStopped(result)
   }
@@ -396,6 +420,7 @@ export async function renderRecording({ container, api, activeRecording, onStopp
     stop.classList.remove('is-busy')
     stop.removeAttribute('aria-busy')
     stopLabel.textContent = '停止录制'
+    updateElapsed()
   }
 
   const showFinalizingState = () => {
@@ -431,12 +456,15 @@ export async function renderRecording({ container, api, activeRecording, onStopp
   })
 
   try {
-    applySummary(container, await api.getSummary())
+    applyLiveSummary(await api.getSummary())
   } catch {}
-  connectInspector(container, message => finish({ ok: true, ...message }))
+  connectInspector(container, message => finish({ ok: true, ...message }), applyLiveSummary)
   return {
     beforeNavigate: async () => false,
-    cleanup: () => disconnectInspector()
+    cleanup: () => {
+      clearInterval(elapsedTimer)
+      disconnectInspector()
+    }
   }
 }
 
@@ -464,7 +492,7 @@ function openPageSummary(tab) {
     </article>`
 }
 
-function connectInspector(container, onCompleted) {
+function connectInspector(container, onCompleted, onSummary) {
   disconnectInspector()
   try {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -473,6 +501,7 @@ function connectInspector(container, onCompleted) {
       try {
         const message = JSON.parse(event.data)
         if (message.type === 'recording-completed') onCompleted?.(message)
+        else if (onSummary) onSummary(message)
         else applySummary(container, message)
       } catch {}
     })
@@ -483,6 +512,21 @@ function connectInspector(container, onCompleted) {
 function disconnectInspector() {
   inspectorSocket?.close?.()
   inspectorSocket = null
+}
+
+function epochMilliseconds(value) {
+  if (Number.isFinite(value)) return value
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function formatElapsedTime(elapsedMs) {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  const clock = [minutes, seconds].map(value => String(value).padStart(2, '0')).join(':')
+  return hours ? `${String(hours).padStart(2, '0')}:${clock}` : clock
 }
 
 function hostname(url) { try { return new URL(url).hostname } catch { return '新标签页' } }
