@@ -1,62 +1,36 @@
 let inspectorSocket
 
-const QUICK_SUGGESTIONS = [
-  {
-    id: 'search',
-    tone: 'blue',
-    title: '搜索信息',
-    prompt: '搜索信息：在网站里检索并筛选需要的内容',
-    icon: () => '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>'
-  },
-  {
-    id: 'form',
-    tone: 'purple',
-    title: '填写表单',
-    prompt: '填写表单：完成一次表单填写与提交',
-    icon: () => '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 19.5 1-4L16 5a2 2 0 0 1 3 3L8.5 18.5l-4 1Z"/><path d="m14.5 6.5 3 3"/></svg>'
-  },
-  {
-    id: 'flow',
-    tone: 'green',
-    title: '点击流程',
-    prompt: '点击流程：完成一串连续的页面点击操作',
-    icon: () => '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 3.5 7.5 16.5 2-6.5 6.5-1.5L6 3.5Z"/></svg>'
-  },
-  {
-    id: 'scrape',
-    tone: 'orange',
-    title: '抓取数据',
-    prompt: '抓取数据：把页面上的列表或表格数据整理下来',
-    icon: () => '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 10h17M10 10v9"/></svg>'
-  }
-]
-
 export async function renderNewRecording({ container, api, onStarted }) {
   ensureRecordingStylesheet()
   container.innerHTML = `
-    <section class="recording-setup new-recording-view" aria-labelledby="new-recording-title">
-      <div class="nr-hero">
-        <span class="nr-mark" aria-hidden="true">${forgeIcon()}</span>
-        <h1 id="new-recording-title">这次想记录哪个页面的操作？</h1>
-        <div class="nr-suggestions">
-          ${QUICK_SUGGESTIONS.map(suggestion => `
-          <button class="nr-suggestion" type="button" data-suggestion="${suggestion.id}" data-tone="${suggestion.tone}">
-            <span class="nr-card-icon">${suggestion.icon()}</span>
-            <span class="nr-card-text">${suggestion.title}</span>
-          </button>`).join('')}
+    <section class="recording-lifecycle recording-prepare new-recording-view" aria-labelledby="new-recording-title">
+      <div class="recording-stage">
+        <header class="recording-stage-header">
+          <span class="recording-stage-mark" aria-hidden="true">${forgeIcon()}</span>
+          <div>
+            <p class="recording-stage-kicker">新录制</p>
+            <h1 id="new-recording-title">准备录制</h1>
+            <p class="recording-stage-copy">描述这次操作的目标，随后在 Chrome 中完成流程。</p>
+          </div>
+        </header>
+
+        <div class="recording-readiness" data-readiness role="status" aria-live="polite" aria-atomic="true">
+          <span class="recording-readiness-icon" aria-hidden="true">${statusIcon()}</span>
+          <div>
+            <strong data-readiness-title>正在检查录制环境</strong>
+            <p data-readiness-detail>正在检测 Chrome 和屏幕录制权限。</p>
+          </div>
         </div>
-      </div>
-      <div class="nr-composer-zone">
+
         <div class="composer-notice-stack" data-notice-stack aria-live="polite"></div>
+
         <div class="goal-composer">
-          <label class="sr-only" for="recording-goal">录制目标</label>
-          <textarea id="recording-goal" data-goal-text class="goal-textarea" rows="2" placeholder="简短描述意图（可选）"></textarea>
+          <label class="goal-label" for="recording-goal">这次录制要完成什么？</label>
+          <textarea id="recording-goal" data-goal-text class="goal-textarea" rows="3" placeholder="例如：查询订单并导出结果（可选）"></textarea>
           <input data-chrome-path type="hidden">
           <div class="goal-composer-toolbar">
-            <button class="nr-plus-action" type="button" aria-label="添加（即将支持）" title="添加（即将支持）" disabled>
-              ${plusIcon()}
-            </button>
-            <button class="record-start-action" type="button" data-start disabled>
+            <span class="goal-helper">目标会和录制一起保存</span>
+            <button class="record-start-action" type="button" data-start data-primary-action disabled>
               ${recordDot()}<span>开始录制</span>
             </button>
           </div>
@@ -68,6 +42,9 @@ export async function renderNewRecording({ container, api, onStarted }) {
   const goalInput = container.querySelector('[data-goal-text]')
   const startButton = container.querySelector('[data-start]')
   const noticeStack = container.querySelector('[data-notice-stack]')
+  const readiness = container.querySelector('[data-readiness]')
+  const readinessTitle = container.querySelector('[data-readiness-title]')
+  const readinessDetail = container.querySelector('[data-readiness-detail]')
   const noticeTimers = new Map()
   let permission
   let permissionLoaded = false
@@ -115,6 +92,7 @@ export async function renderNewRecording({ container, api, onStarted }) {
       actionButton.className = 'composer-notice-action'
       actionButton.type = 'button'
       actionButton.textContent = action.label
+      if (action.primary) actionButton.dataset.primaryAction = ''
       actionButton.addEventListener('click', action.onClick)
       body.append(actionButton)
     }
@@ -134,10 +112,45 @@ export async function renderNewRecording({ container, api, onStarted }) {
     return notice
   }
 
+  const updateReadiness = () => {
+    let tone = 'checking'
+    let title = '正在检查录制环境'
+    let detail = '正在检测 Chrome 和屏幕录制权限。'
+
+    if (permissionLoaded && chromeLoaded) {
+      if (!input.value.trim()) {
+        tone = 'danger'
+        title = '需要设置 Chrome'
+        detail = '提供 Chrome 应用路径后才能开始录制。'
+      } else if (permission?.supported === false || permission?.status === 'unsupported') {
+        tone = 'danger'
+        title = '当前设备不支持窗口视频录制'
+        detail = '你可以关闭此提示并返回录制库。'
+      } else if (permission?.granted) {
+        tone = 'ready'
+        title = 'Chrome 与屏幕录制权限已就绪'
+        detail = '开始后请在打开的 Chrome 窗口中完成操作。'
+      } else {
+        tone = 'attention'
+        title = '开始时需要屏幕录制权限'
+        detail = 'Browser Forge 只会录制隔离的 Chrome 窗口；授权后会自动继续。'
+      }
+    }
+
+    readiness.dataset.tone = tone
+    readinessTitle.textContent = title
+    readinessDetail.textContent = detail
+  }
+
   const updateActions = () => {
     const supported = permission?.supported !== false
-    startButton.disabled = busy || !permissionLoaded || !chromeLoaded || !input.value.trim() || !supported
+    const restartRequired = permission?.status === 'restart-required' || permission?.restartRequired
+    const recoveringPermission = waitingForPermission || restartRequired
+    startButton.disabled = busy || recoveringPermission || !permissionLoaded || !chromeLoaded || !input.value.trim() || !supported
     startButton.classList.toggle('is-busy', busy)
+    startButton.setAttribute('aria-busy', String(busy))
+    startButton.toggleAttribute('data-primary-action', supported && !recoveringPermission)
+    updateReadiness()
   }
 
   const setBusy = value => {
@@ -171,9 +184,9 @@ export async function renderNewRecording({ container, api, onStarted }) {
       waitingForPermission = false
       showNotice({
         id: 'permission',
-        message: '屏幕录制权限已更新，请重新启动 Browser Forge。',
+        message: '屏幕录制权限已更新。重新启动 Browser Forge 后才能开始录制。',
         tone: 'danger',
-        action: { label: '授权后重新启动 Browser Forge', onClick: restartApp }
+        action: { label: '授权后重新启动 Browser Forge', primary: true, onClick: restartApp }
       })
       updateActions()
       return false
@@ -182,7 +195,7 @@ export async function renderNewRecording({ container, api, onStarted }) {
     waitingForPermission = true
     try {
       await api.openScreenRecordingSettings()
-      showNotice({ id: 'permission', message: '屏幕录制权限尚未开启，Browser Forge 会在你返回后自动继续。', tone: 'danger' })
+      showNotice({ id: 'permission', message: '需要屏幕录制权限才能保存录制窗口的视频。已打开系统设置；授权后返回 Browser Forge，会自动重新检查并继续。', tone: 'danger' })
     } catch (error) {
       showNotice({ id: 'permission', message: `无法打开屏幕录制设置：${error.message}`, tone: 'danger' })
     }
@@ -271,15 +284,6 @@ export async function renderNewRecording({ container, api, onStarted }) {
   }
 
   goalInput.addEventListener('input', updateActions)
-  for (const card of container.querySelectorAll('[data-suggestion]')) {
-    card.addEventListener('click', () => {
-      const suggestion = QUICK_SUGGESTIONS.find(item => item.id === card.dataset.suggestion)
-      if (!suggestion) return
-      goalInput.value = suggestion.prompt
-      goalInput.focus()
-      updateActions()
-    })
-  }
   startButton.addEventListener('click', beginRecording)
   window.addEventListener('focus', checkPermissionOnFocus)
 
@@ -328,50 +332,101 @@ export async function renderNewRecording({ container, api, onStarted }) {
 }
 
 export async function renderRecording({ container, api, activeRecording, onStopped, onCancel }) {
+  ensureRecordingStylesheet()
   container.innerHTML = `
-    <section class="live-recording" aria-labelledby="live-recording-title">
-      <header class="live-header">
-        <div class="live-title">
-          <span class="recording-indicator"><i></i>正在录制</span>
-          <h1 id="live-recording-title">在 Chrome 中完成你的操作</h1>
-          <p>Browser Forge 正在记录已打开的隔离窗口。完成后停止录制即可。</p>
+    <section class="recording-lifecycle recording-active live-recording" data-recording-state="active" aria-labelledby="live-recording-title">
+      <div class="recording-stage">
+        <header class="recording-stage-header recording-active-header">
+          <div>
+            <p class="recording-stage-kicker"><span class="recording-indicator-dot" aria-hidden="true"></span>正在录制</p>
+            <h1 id="live-recording-title">录制进行中</h1>
+            <p class="recording-stage-copy" data-recording-copy>请在 Chrome 中完成操作，Browser Forge 会保留打开页面和录制视频。</p>
+          </div>
+          <button class="recording-primary-action recording-stop-action" type="button" data-stop data-primary-action>
+            ${stopIcon()}<span>停止录制</span>
+          </button>
+        </header>
+
+        <div class="recording-active-status" role="status" aria-live="polite" aria-atomic="true">
+          <span class="recording-readiness-icon" aria-hidden="true">${recordDot()}</span>
+          <div>
+            <strong data-recording-status-title>正在记录 Chrome 中的页面操作</strong>
+            <p data-recording-status-detail>完成操作后停止录制；页面清单会保留最后一次已知状态。</p>
+          </div>
         </div>
-        <button class="button danger large live-stop" type="button" data-stop>${stopIcon()}<span>停止录制</span></button>
-      </header>
-      <div class="recording-status-card" role="status">
-        <span class="recording-status-icon">${recordDot()}</span>
-        <div><strong>录制已开始</strong><p>保持 Browser Forge 与录制窗口开启；停止后会自动整理视频和页面信息。</p></div>
+
+        <section class="open-pages-card recording-pages" aria-labelledby="open-pages-title">
+          <div class="open-pages-heading">
+            <h2 id="open-pages-title">打开的页面</h2>
+            <span data-tab-count aria-live="polite" aria-atomic="true">0 个页面</span>
+          </div>
+          <div class="open-pages-list" data-open-pages><div class="panel-empty">等待 Chrome 页面…</div></div>
+        </section>
+        <p class="live-error" data-live-error role="alert" aria-live="assertive" hidden></p>
       </div>
-      <section class="open-pages-card" aria-labelledby="open-pages-title">
-        <div class="open-pages-heading">
-          <h2 id="open-pages-title">已打开页面</h2>
-          <span data-tab-count aria-live="polite" aria-atomic="true">0 个页面</span>
-        </div>
-        <div class="open-pages-list" data-open-pages><div class="panel-empty">等待 Chrome 页面…</div></div>
-      </section>
-      <p class="live-error" data-live-error role="alert" aria-live="polite" hidden></p>
     </section>`
+
+  const section = container.querySelector('[data-recording-state]')
+  const heading = container.querySelector('#live-recording-title')
+  const copy = container.querySelector('[data-recording-copy]')
+  const statusTitle = container.querySelector('[data-recording-status-title]')
+  const statusDetail = container.querySelector('[data-recording-status-detail]')
   const stop = container.querySelector('[data-stop]')
+  const stopLabel = stop.querySelector('span')
+  const errorNotice = container.querySelector('[data-live-error]')
   let finished = false
+  let stopping = false
+
   const finish = result => {
     if (finished) return
     finished = true
+    stopping = true
     disconnectInspector()
     onStopped(result)
   }
-  stop.addEventListener('click', async () => {
+
+  const showActiveState = () => {
+    section.dataset.recordingState = 'active'
+    section.classList.remove('is-finalizing')
+    heading.textContent = '录制进行中'
+    copy.textContent = '请在 Chrome 中完成操作，Browser Forge 会保留打开页面和录制视频。'
+    statusTitle.textContent = '正在记录 Chrome 中的页面操作'
+    statusDetail.textContent = '完成操作后停止录制；页面清单会保留最后一次已知状态。'
+    stop.disabled = false
+    stop.classList.remove('is-busy')
+    stop.removeAttribute('aria-busy')
+    stopLabel.textContent = '停止录制'
+  }
+
+  const showFinalizingState = () => {
+    stopping = true
+    section.dataset.recordingState = 'finalizing'
+    section.classList.add('is-finalizing')
+    heading.textContent = '正在准备回放'
+    copy.textContent = '正在保存最后的页面信息和视频，完成后会自动打开录制详情。'
+    statusTitle.textContent = '录制已停止，正在整理已捕获的内容'
+    statusDetail.textContent = '请保持 Browser Forge 开启；现有页面清单不会再更新。'
+    errorNotice.hidden = true
+    errorNotice.textContent = ''
     stop.disabled = true
     stop.classList.add('is-busy')
+    stop.setAttribute('aria-busy', 'true')
+    stopLabel.textContent = '正在准备回放'
+  }
+
+  stop.addEventListener('click', async () => {
+    if (stopping || finished) return
+    showFinalizingState()
     try {
       const result = await api.stopRecording()
       if (!result.ok) throw new Error(result.error || '停止录制失败')
       finish(result)
     } catch (error) {
-      stop.disabled = false
-      stop.classList.remove('is-busy')
-      const notice = container.querySelector('[data-live-error]')
-      notice.hidden = false
-      notice.textContent = error.message
+      if (finished) return
+      stopping = false
+      showActiveState()
+      errorNotice.hidden = false
+      errorNotice.textContent = error.message
     }
   })
 
@@ -440,7 +495,6 @@ function statusIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><cir
 function recordDot() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="4" fill="currentColor" stroke="none"/></svg>' }
 function stopIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="8" height="8" rx="1"/></svg>' }
 function forgeIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><rect x="8.5" y="8.5" width="7" height="3" rx="1.5"/><path d="M12 15v3"/><path d="M10 18h4"/></svg>' }
-function plusIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4.5v11M4.5 10h11"/></svg>' }
 
 function ensureRecordingStylesheet() {
   const id = 'bf-new-recording-css'

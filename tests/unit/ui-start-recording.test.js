@@ -20,6 +20,8 @@ let permissionResetCount
 let appRevealCount
 let restartCount
 let recordingDetailDelayMs
+let stopRequestCount
+let stopResponseDelayMs
 
 const grantedPermission = { supported: true, status: 'granted', granted: true, restartRequired: false }
 const missingPermission = { supported: true, status: 'not-granted', granted: false, restartRequired: false }
@@ -65,6 +67,11 @@ beforeAll(async () => {
       return json(res, { ok: true, restarting: true })
     }
     if (url.pathname === '/api/summary') return json(res, { type: 'summary', startedAt: null, tabs: [], totals: { events: 0, network: 0, console: 0, artifacts: 0 } })
+    if (url.pathname === '/api/stop-recording' && req.method === 'POST') {
+      stopRequestCount += 1
+      const result = { ok: true, recordingId: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27' }
+      return stopResponseDelayMs ? setTimeout(() => json(res, result), stopResponseDelayMs) : json(res, result)
+    }
     if (url.pathname === '/api/start-recording') {
       let body = ''
       req.on('data', chunk => { body += chunk })
@@ -100,6 +107,8 @@ function reset({ check = grantedPermission, request = grantedPermission, failSta
   appRevealCount = 0
   restartCount = 0
   recordingDetailDelayMs = 0
+  stopRequestCount = 0
+  stopResponseDelayMs = 0
 }
 
 async function openNewRecording() {
@@ -115,12 +124,16 @@ describe('managed start recording UI', () => {
     reset()
     const page = await openNewRecording()
 
+    const prepare = page.locator('.recording-prepare')
     expect(await page.locator('#output-dir').count()).toBe(0)
-    expect(await page.getByRole('heading', { name: '这次想记录哪个页面的操作？' }).count()).toBe(1)
-    const composer = page.locator('.goal-composer')
+    expect(await prepare.getByRole('heading', { name: '准备录制' }).count()).toBe(1)
+    expect(await prepare.getByText('描述这次操作的目标，随后在 Chrome 中完成流程。', { exact: true }).count()).toBe(1)
+    expect(await prepare.locator('.nr-suggestion, [data-suggestion]').count()).toBe(0)
+    expect(await prepare.getByRole('status').textContent()).toContain('Chrome 与屏幕录制权限已就绪')
+    const composer = prepare.locator('.goal-composer')
     expect(await composer.locator('.goal-context-note, .advanced-settings, .permission-actions').count()).toBe(0)
-    // 当前对齐 Codex:左【+】+ 右【开始录制】,无单独「发送目标」按钮;目标直接输入随开始录制一起提交
-    expect(await composer.getByRole('button').count()).toBe(2)
+    expect(await prepare.locator('[data-primary-action]').count()).toBe(1)
+    expect(await composer.getByRole('button').count()).toBe(1)
     const startButton = composer.getByRole('button', { name: '开始录制' })
     await page.locator('[data-goal-text]').fill('  查询订单状态  ')
     await Promise.all([
@@ -144,6 +157,39 @@ describe('managed start recording UI', () => {
     expect(await sidebarRecording.getByText('example.com', { exact: true }).count()).toBe(0)
     expect(await sidebarRecording.locator('[data-recording-folder="open"]').count()).toBe(1)
     expect(await page.locator('[data-nav="library"]').isDisabled()).toBe(false)
+    await page.close()
+  }, 15_000)
+
+  it('keeps active and finalizing states to one primary action and ignores duplicate stop submissions', async () => {
+    reset()
+    stopResponseDelayMs = 800
+    const page = await openNewRecording()
+
+    await page.getByRole('button', { name: '开始录制' }).click()
+    const active = page.locator('.recording-active')
+    const stopButton = active.locator('[data-stop]')
+    await stopButton.waitFor()
+
+    expect(await active.getByRole('heading', { name: '录制进行中' }).count()).toBe(1)
+    expect(await active.locator('[data-primary-action]').count()).toBe(1)
+    expect(await active.getByRole('status').textContent()).toContain('正在记录 Chrome 中的页面操作')
+    expect(await active.getByRole('progressbar').count()).toBe(0)
+
+    const stopped = page.waitForResponse(response => response.url().endsWith('/api/stop-recording'))
+    await stopButton.evaluate(button => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    await expect.poll(() => stopButton.isDisabled()).toBe(true)
+    expect(await active.getByRole('heading', { name: '正在准备回放' }).count()).toBe(1)
+    expect(await active.locator('[data-primary-action]').count()).toBe(1)
+    expect(await active.getByRole('status').textContent()).toContain('录制已停止，正在整理已捕获的内容')
+    expect(await active.getByRole('progressbar').count()).toBe(0)
+    expect(stopRequestCount).toBe(1)
+
+    await stopped
+    await expect.poll(() => stopRequestCount).toBe(1)
     await page.close()
   }, 15_000)
 
@@ -236,12 +282,14 @@ describe('managed start recording UI', () => {
     const page = await openNewRecording()
 
     expect(settingsRequestCount).toBe(0)
-    expect(await page.locator('.goal-composer').getByRole('button').count()).toBe(2)
+    expect(await page.locator('.goal-composer').getByRole('button').count()).toBe(1)
     await page.getByRole('button', { name: '开始录制' }).click()
 
     await expect.poll(() => settingsRequestCount).toBe(1)
     expect(await page.getByRole('button', { name: '打开系统设置' }).count()).toBe(0)
     expect(await page.getByRole('button', { name: '再次检查权限' }).count()).toBe(0)
+    expect(await page.getByRole('button', { name: '开始录制' }).isDisabled()).toBe(true)
+    expect(await page.locator('[data-primary-action]:not([disabled])').count()).toBe(0)
     await page.close()
   })
 
@@ -277,6 +325,10 @@ describe('managed start recording UI', () => {
     expect(startRequests).toEqual([])
     expect(await page.getByRole('button', { name: '授权后重新启动 Browser Forge' }).isVisible()).toBe(true)
     expect(await page.getByRole('button', { name: '打开系统设置' }).count()).toBe(0)
+    expect(await page.getByRole('button', { name: '开始录制' }).isDisabled()).toBe(true)
+    const recoveryPrimary = page.locator('[data-primary-action]:not([disabled])')
+    expect(await recoveryPrimary.count()).toBe(1)
+    expect(await recoveryPrimary.textContent()).toContain('授权后重新启动 Browser Forge')
     await page.getByRole('button', { name: '授权后重新启动 Browser Forge' }).click()
     await expect.poll(() => restartCount).toBe(1)
     await page.close()
