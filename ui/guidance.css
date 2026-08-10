@@ -20,17 +20,17 @@
 .guidance-progress {
   width: max-content;
   max-width: 100%;
-  margin: 2px auto 24px;
-  padding: 5px 10px;
+  margin: 8px auto 26px;
+  padding: 7px 13px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 9px;
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted);
   background: color-mix(in srgb, var(--surface-muted) 82%, transparent);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   letter-spacing: .01em;
@@ -40,8 +40,8 @@
 }
 
 .guidance-progress-dot {
-  width: 5px;
-  height: 5px;
+  width: 7px;
+  height: 7px;
   flex: none;
   border-radius: 50%;
   background: var(--accent);

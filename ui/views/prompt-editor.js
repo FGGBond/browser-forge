@@ -30,10 +30,6 @@ export async function renderPromptEditor({ container, recordingId, api }) {
 
   container.innerHTML = `
     <section class="guidance-editor" aria-label="Skill 要求指导">
-      <div class="guidance-agent-status">
-        <span class="guidance-agent-mark" aria-hidden="true">${sparkIcon()}</span>
-        <div><strong>尚未配置 Agent</strong><p>先整理要求，再复制给外部 Agent，并让它使用 <span>browser-forge skill</span>。</p></div>
-      </div>
       <div class="guidance-save-error-slot" data-save-error-slot></div>
       <div class="guidance-flow" data-guidance-flow></div>
     </section>`
@@ -388,6 +384,5 @@ async function copyText(text) {
   if (!copied) throw new Error('浏览器拒绝访问剪贴板')
 }
 
-function sparkIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m10 2 1.4 4.6L16 8l-4.6 1.4L10 14l-1.4-4.6L4 8l4.6-1.4L10 2Z"/></svg>' }
 function copyIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="7" width="9" height="9" rx="2"/><path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/></svg>' }
 function closeIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 6 8 8m0-8-8 8"/></svg>' }

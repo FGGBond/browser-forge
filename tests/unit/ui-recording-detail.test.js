@@ -134,14 +134,27 @@ describe('recording detail UI', () => {
     expect(await page.locator('[data-sidebar-host]').getAttribute('aria-hidden')).toBeNull()
     expect(await page.locator('.analysis-main').evaluate(element => element.inert)).toBe(false)
     expect(await page.locator('[data-sidebar-host]').evaluate(element => element.inert)).toBe(false)
-    expect(await pane.getByText('尚未配置 Agent', { exact: true }).count()).toBe(1)
+    expect(await pane.getByText('尚未配置 Agent', { exact: true }).count()).toBe(0)
     expect(await pane.getByText('Analysis session', { exact: true }).count()).toBe(0)
     expect(await pane.getByText('分析会话', { exact: true }).count()).toBe(0)
     expect(await pane.getByText('分析指导', { exact: true }).count()).toBe(0)
-    const statusBox = await pane.locator('.guidance-agent-status').boundingBox()
+    const progressStyle = await pane.locator('[data-guidance-progress]').evaluate(element => {
+      const style = getComputedStyle(element)
+      const rect = element.getBoundingClientRect()
+      return { fontSize: Number.parseFloat(style.fontSize), height: rect.height, left: rect.left, width: rect.width }
+    })
+    const paneBox = await pane.boundingBox()
+    expect(progressStyle.fontSize).toBeGreaterThanOrEqual(12)
+    expect(progressStyle.height).toBeGreaterThanOrEqual(28)
+    expect(Math.abs((progressStyle.left + progressStyle.width / 2) - (paneBox.x + paneBox.width / 2))).toBeLessThanOrEqual(3)
     const closeBox = await pane.locator('[data-close-analysis]').boundingBox()
-    expect(Math.abs(closeBox.y - statusBox.y)).toBeLessThanOrEqual(2)
-    expect(closeBox.x + closeBox.width).toBeLessThanOrEqual(statusBox.x + statusBox.width)
+    expect(closeBox.x + closeBox.width).toBeLessThanOrEqual(paneBox.x + paneBox.width)
+    const headerLayout = await page.locator('.analysis-main .detail-header').evaluate(element => {
+      const title = element.querySelector('.detail-title-input')
+      return { flexDirection: getComputedStyle(element).flexDirection, titleWidth: title.getBoundingClientRect().width }
+    })
+    expect(headerLayout).toMatchObject({ flexDirection: 'column' })
+    expect(headerLayout.titleWidth).toBeGreaterThanOrEqual(400)
     await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-guidance-editor-surface]'))).toBe(true)
 
     const rateButton = page.locator('[data-player-rate]')
