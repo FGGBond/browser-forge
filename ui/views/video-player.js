@@ -1,7 +1,7 @@
 const PLAYBACK_RATES = [0.5, 1, 1.5, 2]
 const CONTROLS_IDLE_MS = 1600
 
-export function mountVideoPlayer({ container, src, poster = '', durationMs = 0, compact = false, title = '' }) {
+export function mountVideoPlayer({ container, src, poster = '', durationMs = 0, compact = false, title = '', onMediaError = () => {} }) {
   const fallbackDuration = Math.max(0, Number(durationMs) || 0) / 1000
   container.innerHTML = `
     <div class="bf-player${compact ? ' is-compact' : ''}" data-video-player tabindex="0" aria-label="${escapeAttribute(title ? `${title} 视频播放器` : '录制视频播放器')}">
@@ -26,6 +26,7 @@ export function mountVideoPlayer({ container, src, poster = '', durationMs = 0, 
   const rateButton = root.querySelector('[data-player-rate]')
   const abortController = new AbortController()
   let controlsIdleTimer = null
+  let mediaErrorReported = false
   const listen = (target, type, handler) => target?.addEventListener(type, handler, { signal: abortController.signal })
 
   const duration = () => Number.isFinite(video.duration) && video.duration > 0 ? video.duration : fallbackDuration
@@ -72,7 +73,11 @@ export function mountVideoPlayer({ container, src, poster = '', durationMs = 0, 
     try {
       if (video.paused || video.ended) await video.play()
       else video.pause()
-    } catch {}
+    } catch {
+      if (!video.error || mediaErrorReported) return
+      mediaErrorReported = true
+      onMediaError(video.error)
+    }
   }
   const seekBy = seconds => {
     video.currentTime = clamp((Number(video.currentTime) || 0) + seconds)
@@ -112,6 +117,11 @@ export function mountVideoPlayer({ container, src, poster = '', durationMs = 0, 
   listen(video, 'timeupdate', syncTime)
   listen(video, 'loadedmetadata', syncTime)
   listen(video, 'durationchange', syncTime)
+  listen(video, 'error', () => {
+    if (mediaErrorReported) return
+    mediaErrorReported = true
+    onMediaError(video.error || new Error('视频无法播放'))
+  })
   listen(video, 'contextmenu', event => event.preventDefault())
   syncPlayback()
   syncTime()

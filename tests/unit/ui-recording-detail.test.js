@@ -11,21 +11,27 @@ let baseUrl
 let requests
 let promptDelayMs = 0
 let promptShouldFail = false
+let promptFailuresRemaining = 0
 let promptText = ''
 let promptSaveDelayMs = 0
 let promptSaveShouldFail = false
+let restoreShouldFail = false
 const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
 const recording = { id, title: '订单查询', state: 'active', createdAt: '2026-08-08T12:15:00.000Z', durationMs: 42_000, startHost: 'example.com', visitedHosts: ['example.com', 'checkout.example.com'], videoStatus: 'complete', promptStatus: 'empty', sizeBytes: 1048576 }
+const secondRecording = { ...recording, id: 'd603d55d-4196-4e13-a538-cd262f5a064e', title: '售后查询', createdAt: '2026-08-08T12:10:00.000Z' }
+let listedRecordings = [recording]
 const contentTypes = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' }
 
 beforeAll(async () => {
   browser = await chromium.launch()
   server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost')
-    if (url.pathname === '/api/recordings' && req.method === 'GET') return json(res, { recordings: [recording] })
+    if (url.pathname === '/api/recordings' && req.method === 'GET') return json(res, { recordings: url.searchParams.get('q') ? [] : listedRecordings })
     if (url.pathname === `/api/recordings/${id}` && req.method === 'GET') return json(res, recording)
     if (url.pathname === `/api/recordings/${id}/prompt` && req.method === 'GET') {
       if (promptDelayMs) await new Promise(resolve => setTimeout(resolve, promptDelayMs))
+      requests.push({ method: req.method, path: url.pathname })
+      if (promptFailuresRemaining > 0) { promptFailuresRemaining -= 1; res.statusCode = 500; return json(res, { error: { message: 'prompt failed once' } }) }
       if (promptShouldFail) { res.statusCode = 500; return json(res, { error: { message: 'prompt failed' } }) }
       return json(res, { text: promptText, status: promptText ? 'draft' : 'empty', updatedAt: promptText ? '2026-08-08T12:20:00.000Z' : null })
     }
@@ -37,13 +43,20 @@ beforeAll(async () => {
       { type: 'click', label: '超出视频', videoOffsetMs: 50_000 },
       { type: 'navigation', label: '无关联画面' }
     ] }) }
+    if (url.pathname === `/api/recordings/${id}/video`) {
+      res.setHeader('content-type', 'video/mp4')
+      return res.end(readFileSync(join(process.cwd(), 'tests', 'fixtures', 'tiny.mp4')))
+    }
     if ([`/api/recordings/${id}`, `/api/recordings/${id}/export`, `/api/recordings/${id}/trash`, `/api/recordings/${id}/restore`].includes(url.pathname)) {
       const body = await readBody(req)
       requests.push({ method: req.method, path: url.pathname, body })
       if (req.method === 'PATCH') return json(res, { ...recording, title: body.title })
       if (url.pathname.endsWith('/export')) return json(res, { path: '/Users/example/Desktop/订单查询' })
       if (url.pathname.endsWith('/trash')) return json(res, { ...recording, state: 'trashed' })
-      if (url.pathname.endsWith('/restore')) return json(res, recording)
+      if (url.pathname.endsWith('/restore')) {
+        if (restoreShouldFail) { res.statusCode = 500; return json(res, { error: { message: 'restore unavailable' } }) }
+        return json(res, recording)
+      }
     }
     if (url.pathname === '/api/chrome-path') return json(res, { path: '/Applications/Google Chrome.app' })
     serveUi(url.pathname, res)
@@ -56,9 +69,12 @@ beforeEach(() => {
   requests = []
   promptDelayMs = 0
   promptShouldFail = false
+  promptFailuresRemaining = 0
   promptText = ''
   promptSaveDelayMs = 0
   promptSaveShouldFail = false
+  restoreShouldFail = false
+  listedRecordings = [recording]
 })
 
 afterAll(async () => { await browser.close(); await new Promise(resolve => server.close(resolve)) })
@@ -89,9 +105,9 @@ describe('recording detail UI', () => {
     expect(css).toMatch(/\.workspace-context-host\s*\{[^}]*position:sticky[^}]*top:0[^}]*height:100vh/s)
     expect(css).toMatch(/@media \(max-width:1103px\)[\s\S]*?\.workspace-context-host \{[^}]*position:fixed/s)
     expect(css).toMatch(/\.analysis-pane-inner\s*\{[^}]*opacity:0[^}]*transform:translateX\(10px\)/s)
-    expect(css).toMatch(/\.app-shell\.analysis-pane-open:not\(\.analysis-pane-closing\) \.analysis-pane-inner\s*\{[^}]*opacity:1[^}]*transform:none[^}]*transition:transform 200ms cubic-bezier\(\.2,\.8,\.2,1\),opacity 180ms cubic-bezier\(\.2,\.8,\.2,1\)/s)
+    expect(css).toMatch(/\.app-shell\.analysis-pane-open:not\(\.analysis-pane-closing\) \.analysis-pane-inner\s*\{[^}]*opacity:1[^}]*transform:none[^}]*transition:transform 200ms cubic-bezier\(\.32,\.72,0,1\),opacity 180ms cubic-bezier\(\.23,1,\.32,1\)/s)
     expect(css).toMatch(/\.app-shell\.analysis-pane-closing \.analysis-pane-inner\s*\{[^}]*opacity:0[^}]*transform:translateX\(10px\)[^}]*transition:transform 140ms cubic-bezier\(\.4,0,\.2,1\),opacity 140ms cubic-bezier\(\.4,0,\.2,1\)/s)
-    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[^{]*\{[^}]*\.analysis-pane-inner[^}]*transform:none[^}]*transition-property:opacity[^}]*transition-duration:120ms/s)
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[^{]*\{[^}]*\.analysis-pane-inner[^}]*transform:none[^}]*transition-property:opacity[^}]*transition-duration:80ms/s)
     expect(css).not.toContain('.analysis-backdrop')
     expect(css).not.toContain('transition:all')
     expect(detailSource).not.toContain('data-analysis-pane')
@@ -176,6 +192,27 @@ describe('recording detail UI', () => {
     expect(stickyComposer.composerBottom).toBeLessThanOrEqual(stickyComposer.paneBottom + 1)
     await page.close()
   }, 20_000)
+
+  it('replaces a runtime-broken video with a truthful unavailable state while preserving object actions', async () => {
+    const page = await newIsolatedPage()
+    try {
+      await openDetail(page)
+      await page.locator('[data-video-player]').waitFor()
+
+      await page.locator('video').evaluate(video => video.dispatchEvent(new Event('error')))
+
+      const unavailable = page.locator('.video-unavailable')
+      await unavailable.waitFor()
+      expect(await unavailable.textContent()).toContain('视频无法播放')
+      expect(await page.locator('[data-video-player]').count()).toBe(0)
+      expect(await page.locator('[data-video-status-value]').textContent()).toBe('不可播放')
+      expect(await page.getByRole('button', { name: '导出录制' }).count()).toBe(1)
+      expect(await page.getByRole('button', { name: '移入回收站' }).count()).toBe(1)
+      expect(await page.locator('[data-analysis-pane]').isVisible()).toBe(true)
+    } finally {
+      await page.close()
+    }
+  })
 
   it('changes responsive modes before the three panes can overflow', async () => {
     const page = await newIsolatedPage()
@@ -322,8 +359,6 @@ describe('recording detail UI', () => {
     const page = await newIsolatedPage()
     try {
       await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
-      await page.getByRole('button', { name: '去分析', exact: true }).waitFor()
-      await page.getByRole('button', { name: '去分析', exact: true }).click()
       await page.locator('[data-analysis-workspace]').waitFor()
       await page.locator('[data-back]').click()
       await page.locator('.library-view').waitFor({ timeout: 350 })
@@ -340,8 +375,7 @@ describe('recording detail UI', () => {
     promptDelayMs = 900
     const page = await newIsolatedPage()
     try {
-      await page.goto(baseUrl, { waitUntil: 'networkidle' })
-      await page.getByRole('button', { name: '去分析', exact: true }).click()
+      await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
       await page.locator('[data-analysis-workspace]').waitFor()
       await page.locator('[data-export]').click()
       await expect.poll(() => requests.some(item => item.path.endsWith('/export')), { timeout: 350 }).toBe(true)
@@ -353,12 +387,32 @@ describe('recording detail UI', () => {
     }
   })
 
+  it('keeps the undo toast retryable and visible when restoring a trashed recording fails', async () => {
+    const page = await newIsolatedPage()
+    try {
+      await openDetail(page)
+      await page.locator('[data-trash]').click()
+      const toast = page.locator('[data-toast]')
+      await toast.waitFor()
+      restoreShouldFail = true
+
+      const undo = toast.locator('[data-undo-trash]')
+      await undo.click()
+
+      await expect.poll(() => toast.textContent()).toContain('restore unavailable')
+      expect(await toast.count()).toBe(1)
+      expect(await undo.isEnabled()).toBe(true)
+    } finally {
+      await page.close()
+    }
+  })
+
   it('does not steal focus when delayed guidance resolves after the user operates video controls', async () => {
     promptDelayMs = 700
     const page = await newIsolatedPage()
     try {
-      await page.goto(baseUrl, { waitUntil: 'networkidle' })
-      await page.getByRole('button', { name: '去分析', exact: true }).click()
+      await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
+      await page.locator('[data-analysis-workspace]').waitFor()
       const rateButton = page.locator('[data-player-rate]')
       await rateButton.click()
       expect(await rateButton.textContent()).toBe('1.5×')
@@ -402,6 +456,56 @@ describe('recording detail UI', () => {
     }
   }, 8_000)
 
+  it.each([
+    { label: 'normal motion', reducedMotion: 'no-preference', expectedProperties: ['opacity', 'transform'] },
+    { label: 'reduced motion', reducedMotion: 'reduce', expectedProperties: ['opacity'] }
+  ])('lets the context drawer finish its $label exit before hiding it', async ({ reducedMotion, expectedProperties }) => {
+    const page = await newIsolatedPage()
+    try {
+      await page.emulateMedia({ reducedMotion })
+      await page.setViewportSize({ width: 820, height: 760 })
+      await openDetail(page)
+      await openContextDrawer(page)
+      await page.waitForTimeout(reducedMotion === 'reduce' ? 120 : 240)
+      await observeContextTransitions(page)
+
+      await page.locator('[data-close-analysis]').click()
+      await page.locator('[data-context-host]').waitFor({ state: 'hidden' })
+
+      const events = await readContextTransitions(page)
+      expect(events.filter(event => event.type === 'cancel')).toEqual([])
+      for (const property of expectedProperties) {
+        expect(events.some(event => event.type === 'end' && event.propertyName === property)).toBe(true)
+      }
+    } finally {
+      await page.close()
+    }
+  })
+
+  it('finishes the active context drawer exit when reduced-motion changes during close', async () => {
+    const page = await newIsolatedPage()
+    try {
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      await page.setViewportSize({ width: 820, height: 760 })
+      await openDetail(page)
+      await openContextDrawer(page)
+      await page.waitForTimeout(120)
+      await observeContextTransitions(page)
+
+      await page.locator('[data-close-analysis]').click()
+      await page.waitForTimeout(25)
+      await page.emulateMedia({ reducedMotion: 'no-preference' })
+      await page.locator('[data-context-host]').waitFor({ state: 'hidden' })
+
+      const events = await readContextTransitions(page)
+      const endedProperties = events.filter(event => event.type === 'end').map(event => event.propertyName)
+      expect(endedProperties).toEqual(expect.arrayContaining(['opacity', 'transform']))
+      expect(events.some(event => event.type === 'cancel' && event.hostHidden)).toBe(false)
+    } finally {
+      await page.close()
+    }
+  })
+
   it('cancels a pending close when the pane is quickly reopened', async () => {
     const page = await newIsolatedPage()
     try {
@@ -426,15 +530,44 @@ describe('recording detail UI', () => {
     }
   })
 
+  it('animates a fully hidden context drawer from its closed state when reopened', async () => {
+    const page = await newIsolatedPage()
+    try {
+      await page.setViewportSize({ width: 820, height: 760 })
+      await openDetail(page)
+      await openContextDrawer(page)
+      await page.locator('[data-close-analysis]').click()
+      const host = page.locator('[data-context-host]')
+      await host.waitFor({ state: 'hidden' })
+
+      await page.locator('[data-toggle-analysis]').dispatchEvent('click')
+      const start = await page.locator('.analysis-pane-inner').evaluate(element => {
+        const style = getComputedStyle(element)
+        return { opacity: Number.parseFloat(style.opacity), transform: style.transform }
+      })
+      expect(start.opacity).toBeLessThan(1)
+      expect(start.transform).not.toBe('none')
+
+      await page.waitForTimeout(32)
+      const running = await page.locator('.analysis-pane-inner').evaluate(element => ({
+        opacity: Number.parseFloat(getComputedStyle(element).opacity),
+        animations: element.getAnimations().length
+      }))
+      expect(running.opacity).toBeGreaterThan(0)
+      expect(running.opacity).toBeLessThan(1)
+      expect(running.animations).toBeGreaterThan(0)
+    } finally {
+      await page.close()
+    }
+  })
+
   it('does not reopen or steal focus when guidance finishes loading after a quick close', async () => {
     promptDelayMs = 800
     const page = await newIsolatedPage()
     try {
       await page.setViewportSize({ width: 820, height: 760 })
       await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
-      const analyze = page.getByRole('button', { name: '去分析', exact: true })
-      await analyze.waitFor()
-      await analyze.click()
+      await page.locator('[data-analysis-workspace]').waitFor()
       await openContextDrawer(page)
       const pane = page.locator('[data-analysis-pane]')
       const toggle = page.locator('[data-toggle-analysis]')
@@ -457,7 +590,6 @@ describe('recording detail UI', () => {
     try {
       await page.setViewportSize({ width: 820, height: 760 })
       await page.goto(baseUrl, { waitUntil: 'networkidle' })
-      await page.getByRole('button', { name: '去分析', exact: true }).click()
       await openContextDrawer(page)
       const toggle = page.locator('[data-toggle-analysis]')
       await page.locator('[data-prompt-load-error]').waitFor()
@@ -466,6 +598,69 @@ describe('recording detail UI', () => {
       expect(await page.locator('[data-prompt-load-error]').textContent()).toContain('无法读取分析指导')
       await page.locator('[data-close-analysis]').click()
       await expect.poll(() => toggle.getAttribute('aria-expanded')).toBe('false')
+    } finally {
+      await page.close()
+    }
+  })
+
+  it('retries a transient guidance load failure for the same recording', async () => {
+    promptShouldFail = true
+    const page = await newIsolatedPage()
+    try {
+      await page.goto(baseUrl, { waitUntil: 'networkidle' })
+      const error = page.locator('[data-prompt-load-error]')
+      await error.waitFor()
+
+      promptShouldFail = false
+      await error.getByRole('button', { name: '重试' }).click()
+
+      await page.locator('[data-guidance-editor-surface]').waitFor({ state: 'attached' })
+      expect(await page.locator('[data-prompt-load-error]').count()).toBe(0)
+      expect(requests.filter(item => item.method === 'GET' && item.path.endsWith('/prompt')).length).toBeGreaterThanOrEqual(2)
+    } finally {
+      await page.close()
+    }
+  })
+
+  it('keeps the current context draft and canonical sidebar recordings while repository search returns no matches', async () => {
+    listedRecordings = [recording, secondRecording]
+    const page = await newIsolatedPage()
+    try {
+      await page.goto(baseUrl, { waitUntil: 'networkidle' })
+      await page.locator('[data-guidance-editor-surface]').waitFor({ state: 'attached' })
+      await fillActiveEditor(page, '搜索时不能丢失的订单上下文')
+
+      await page.getByRole('button', { name: '全部录制', exact: true }).click()
+      await page.locator('.library-view').waitFor()
+      await page.locator('[data-search]').fill('没有匹配项')
+      await expect.poll(() => page.locator('[data-result-count]').textContent()).toBe('0 段录制')
+
+      expect(await page.locator('[data-context-host]').getAttribute('data-context-recording-id')).toBe(id)
+      expect(await readActiveEditor(page)).toBe('搜索时不能丢失的订单上下文')
+      expect(await page.locator('[data-recording-nav]').count()).toBe(2)
+      await expect.poll(() => requests.some(item => item.method === 'PUT' && item.body.text.includes('搜索时不能丢失的订单上下文'))).toBe(true)
+    } finally {
+      await page.close()
+    }
+  })
+
+  it('keeps center, sidebar, and context on the current recording when context saving blocks a switch', async () => {
+    listedRecordings = [recording, secondRecording]
+    const page = await newIsolatedPage()
+    try {
+      await page.goto(baseUrl, { waitUntil: 'networkidle' })
+      await page.locator('[data-analysis-workspace]').waitFor()
+      await page.locator('[data-guidance-editor-surface]').waitFor({ state: 'attached' })
+      promptSaveShouldFail = true
+      await fillActiveEditor(page, '尚未保存的订单查询上下文')
+
+      await page.locator(`[data-recording-nav="${secondRecording.id}"]`).click()
+
+      await page.locator('[data-save-error]').waitFor()
+      expect(await page.locator('[data-title-input]').inputValue()).toBe(recording.title)
+      expect(await page.locator(`[data-recording-nav="${id}"]`).getAttribute('aria-current')).toBe('page')
+      expect(await page.locator('[data-context-host]').getAttribute('data-context-recording-id')).toBe(id)
+      expect(await page.locator('[data-context-switch-error]').textContent()).toContain('录制说明未切换')
     } finally {
       await page.close()
     }
@@ -522,7 +717,6 @@ describe('recording detail UI', () => {
     const initialWidth = (await sidebar.boundingBox()).width
     expect(initialWidth).toBeGreaterThan(230)
 
-    await page.getByRole('button', { name: '去分析', exact: true }).click()
     await page.locator('[data-analysis-pane]').waitFor({ state: 'visible' })
 
     expect(await shell.getAttribute('class')).not.toContain('sidebar-collapsed')
@@ -564,7 +758,6 @@ describe('recording detail UI', () => {
   it('completes the three-question conversation flow into a handoff card', { timeout: 20_000 }, async () => {
     const page = await newIsolatedPage()
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
-    await page.getByRole('button', { name: '去分析', exact: true }).click()
     await page.locator('[data-analysis-pane]').waitFor({ state: 'visible' })
 
     const answers = ['打开订单并读取物流状态', '接收订单号,返回承运商和最新节点', '使用 JD123 验证结果与页面一致']
@@ -599,7 +792,6 @@ describe('recording detail UI', () => {
     promptText = serializeGuidanceMarkdown({ actions: '原始回答', capability: '能力回答', acceptance: '验收回答' })
     const page = await newIsolatedPage()
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
-    await page.getByRole('button', { name: '去分析', exact: true }).click()
     await page.locator('[data-analysis-pane]').waitFor({ state: 'visible' })
 
     // 全部已提交 → 结果是完成态
@@ -674,9 +866,6 @@ async function openDetail(page, { reset = true } = {}) {
     })
   }
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
-  const analyze = page.getByRole('button', { name: '去分析', exact: true })
-  await analyze.waitFor()
-  await analyze.click()
   await page.locator('[data-analysis-workspace]').waitFor()
 }
 
@@ -685,6 +874,26 @@ async function openContextDrawer(page) {
   await toggle.waitFor({ state: 'visible' })
   if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
   await page.locator('[data-context-host]').waitFor({ state: 'visible' })
+}
+
+async function observeContextTransitions(page) {
+  await page.locator('.analysis-pane-inner').evaluate(element => {
+    window.__contextTransitionEvents = []
+    for (const type of ['transitionend', 'transitioncancel']) {
+      element.addEventListener(type, event => {
+        if (event.target !== element) return
+        window.__contextTransitionEvents.push({
+          type: type === 'transitionend' ? 'end' : 'cancel',
+          propertyName: event.propertyName,
+          hostHidden: document.querySelector('[data-context-host]').hidden
+        })
+      })
+    }
+  })
+}
+
+async function readContextTransitions(page) {
+  return page.evaluate(() => window.__contextTransitionEvents || [])
 }
 
 async function fillActiveEditor(page, value) {

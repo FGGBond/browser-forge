@@ -22,6 +22,8 @@ let restartCount
 let recordingDetailDelayMs
 let stopRequestCount
 let stopResponseDelayMs
+let stopFailure
+let promptSaveShouldFail
 let liveSummary
 
 const grantedPermission = { supported: true, status: 'granted', granted: true, restartRequired: false }
@@ -38,7 +40,14 @@ beforeAll(async () => {
       return recordingDetailDelayMs ? setTimeout(() => json(res, detail), recordingDetailDelayMs) : json(res, detail)
     }
     if (url.pathname.endsWith('/timeline')) return json(res, { events: [] })
-    if (url.pathname.endsWith('/prompt')) return json(res, { text: '', status: 'empty', updatedAt: null })
+    if (url.pathname.endsWith('/prompt') && req.method === 'GET') return json(res, { text: '', status: 'empty', updatedAt: null })
+    if (url.pathname.endsWith('/prompt') && req.method === 'PUT') {
+      if (promptSaveShouldFail) {
+        res.statusCode = 500
+        return json(res, { error: { message: 'context disk full' } })
+      }
+      return json(res, { text: '', status: 'draft', updatedAt: '2026-08-08T12:20:00.000Z' })
+    }
     if (url.pathname === '/api/chrome-path') return json(res, { path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' })
     if (url.pathname === '/api/screen-recording-permission' && req.method === 'GET') {
       permissionCheckCount += 1
@@ -70,7 +79,9 @@ beforeAll(async () => {
     if (url.pathname === '/api/summary') return json(res, liveSummary)
     if (url.pathname === '/api/stop-recording' && req.method === 'POST') {
       stopRequestCount += 1
-      const result = { ok: true, recordingId: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27' }
+      const result = stopFailure
+        ? { ok: false, error: '视频整理失败', terminal: true }
+        : { ok: true, recordingId: '3d4527e4-4d47-4aea-a4ba-cd61218bbd27' }
       return stopResponseDelayMs ? setTimeout(() => json(res, result), stopResponseDelayMs) : json(res, result)
     }
     if (url.pathname === '/api/start-recording') {
@@ -110,13 +121,15 @@ function reset({ check = grantedPermission, request = grantedPermission, failSta
   recordingDetailDelayMs = 0
   stopRequestCount = 0
   stopResponseDelayMs = 0
+  stopFailure = false
+  promptSaveShouldFail = false
   liveSummary = { type: 'summary', startedAt: null, tabs: [], totals: { events: 0, network: 0, console: 0, artifacts: 0 } }
 }
 
 async function openNewRecording() {
   const page = await browser.newPage()
   await page.goto(baseUrl, { waitUntil: 'networkidle' })
-  await page.getByRole('button', { name: '新录制', exact: true }).first().click()
+  await page.locator('.recording-prepare').waitFor()
   await expect.poll(() => page.locator('[data-chrome-path]').inputValue()).toContain('Google Chrome')
   return page
 }
@@ -194,6 +207,49 @@ describe('managed start recording UI', () => {
     await expect.poll(() => stopRequestCount).toBe(1)
     await page.close()
   }, 15_000)
+
+  it('opens the completed recording even when saving same-recording context fails during finalization', async () => {
+    reset()
+    const page = await openNewRecording()
+
+    try {
+      await page.getByRole('button', { name: '开始录制' }).click()
+      const editor = page.locator('[data-guidance-editor-surface]')
+      await editor.waitFor({ state: 'visible' })
+      await editor.fill('这段补充上下文暂时无法写入磁盘')
+      promptSaveShouldFail = true
+
+      await page.locator('[data-stop]').click()
+
+      await page.locator('[data-title-input]').waitFor({ timeout: 4_000 })
+      await page.locator('[data-save-error]').waitFor({ timeout: 2_000 })
+      expect(await page.locator('[data-recording-state]').count()).toBe(0)
+    } finally {
+      await page.close()
+    }
+  }, 10_000)
+
+  it('shows a terminal stop failure as ended and lets the user leave instead of pretending to keep recording', async () => {
+    reset()
+    stopFailure = true
+    const page = await openNewRecording()
+
+    try {
+      await page.getByRole('button', { name: '开始录制' }).click()
+      await page.locator('[data-stop]').click()
+
+      await page.getByRole('heading', { name: '无法准备回放' }).waitFor()
+      const leave = page.getByRole('button', { name: '返回录制仓库' })
+      expect(await leave.isEnabled()).toBe(true)
+      expect(await page.getByText('录制已经结束', { exact: false }).count()).toBeGreaterThan(0)
+
+      await leave.click()
+      await page.locator('.library-view').waitFor()
+      expect(stopRequestCount).toBe(1)
+    } finally {
+      await page.close()
+    }
+  }, 10_000)
 
   it('shows elapsed recording time from the live summary and updates it every second', async () => {
     reset()

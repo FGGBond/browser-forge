@@ -81,14 +81,17 @@ describe('macOS packaging configuration', () => {
     expect(packageLock).not.toContain('node_modules/@vitejs/plugin-react"')
   })
 
-  it('keeps inert concepts out of packaged apps without a legacy renderer ignore', () => {
+  it('keeps inert concepts and stale renderer output out of packaged apps', () => {
     const forgeConfig = require('../../forge.config.cjs')
     const ignored = (path) => forgeConfig.packagerConfig.ignore.some((pattern) => pattern.test(path))
 
     expect(ignored('/design/icon-concepts/example.png')).toBe(true)
     expect(ignored('/assets/icon-concepts/example.png')).toBe(true)
     expect(ignored('/docs/superpowers/plans/integration-plan.md')).toBe(true)
+    expect(ignored('/out/renderer/index.html')).toBe(true)
+    expect(ignored('/out/renderer/assets/stale.js')).toBe(true)
+    expect(ignored('/out/main/index.js')).toBe(false)
     expect(ignored('/ui/index.html')).toBe(false)
-    expect(forgeConfig.packagerConfig.ignore.some((pattern) => pattern.test('/src/renderer/index.html'))).toBe(false)
+    expect(ignored('/src/renderer/index.html')).toBe(false)
   })
 })

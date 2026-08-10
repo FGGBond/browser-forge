@@ -244,9 +244,42 @@ describe('three-question guided composer', () => {
     expect(handoffCopy).not.toMatch(/Browser Forge (?:正在|将会)(?:分析|生成)/)
 
     const css = readFileSync(join(process.cwd(), 'ui', 'guidance.css'), 'utf8')
-    expect(css).toMatch(/\.guidance-chat-item\s*\{[^}]*animation:\s*guidanceMessageIn 1(?:6|7|8)0ms/s)
-    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.guidance-chat-item[\s\S]*animation:\s*none/s)
+    expect(css).toMatch(/\.guidance-chat-item\.is-entering\s*\{[^}]*animation:\s*guidanceMessageIn 1(?:6|7|8)0ms/s)
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.guidance-chat-item\.is-entering[\s\S]*animation:\s*guidanceFadeIn 120ms/s)
     await page.close()
+  })
+
+  it('animates only the newly submitted guidance answer and preserves reduced-motion feedback', async () => {
+    const page = await openGuidance()
+    await fillActiveEditor(page, '查询订单并读取物流状态')
+    await page.locator('[data-guidance-next]').click()
+    await expectStep(page, 2, '希望把这段操作变成什么能力？')
+    await page.waitForFunction(() => !document.querySelector('[data-chat-item="actions"]')?.classList.contains('is-entering'))
+
+    await page.evaluate(() => {
+      window.__guidanceEntrances = []
+      document.querySelector('[data-guidance-chat-list]').addEventListener('animationstart', event => {
+        if (event.animationName === 'guidanceMessageIn') window.__guidanceEntrances.push(event.target.dataset.chatItem)
+      })
+    })
+    await fillActiveEditor(page, '根据订单号返回承运商和最新节点')
+    await page.locator('[data-guidance-next]').click()
+    await expectStep(page, 3, '怎样证明这个 skill 可以交付？')
+    await page.waitForTimeout(40)
+    expect(await page.evaluate(() => window.__guidanceEntrances)).toEqual(['capability'])
+    await page.close()
+
+    const reducedContext = await browser.newContext({ reducedMotion: 'reduce' })
+    const reducedPage = await openGuidance(reducedContext)
+    const reduced = await reducedPage.locator('[data-guidance-send]').evaluate(element => {
+      const style = getComputedStyle(element)
+      return { property: style.transitionProperty, duration: style.transitionDuration, transform: style.transform }
+    })
+    expect(reduced.property).toContain('opacity')
+    expect(reduced.property).not.toContain('transform')
+    expect(Number.parseFloat(reduced.duration)).toBeGreaterThanOrEqual(.08)
+    expect(reduced.transform).toBe('none')
+    await reducedContext.close()
   })
 
   it('renders a bottom composer that grows until its cap and then scrolls internally', async () => {
@@ -582,7 +615,7 @@ async function installControlledClipboard(context) {
 async function openGuidance(context = browser) {
   const page = await context.newPage()
   await page.goto(baseUrl, { waitUntil: 'networkidle' })
-  await page.locator('[data-recording-id]').first().click()
+  await page.locator('[data-analysis-workspace]').waitFor()
   const toggle = page.locator('[data-toggle-analysis]')
   if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
   await page.locator('[data-guidance-step]').waitFor({ timeout: 3_000 })

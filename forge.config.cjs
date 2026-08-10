@@ -54,6 +54,9 @@ module.exports = {
       /^\/\.claude($|\/)/,
       // dist is the build output itself — never re-package a prior build.
       /^\/dist($|\/)/,
+      // Electron Vite no longer owns a renderer build. Exclude stale output
+      // left by older checkouts while preserving the active main/preload build.
+      /^\/out\/renderer($|\/)/,
       /^\/\.superpowers($|\/)/,
       /^\/docs\/superpowers($|\/)/,
       /^\/tests($|\/)/,

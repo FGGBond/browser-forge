@@ -17,8 +17,25 @@ beforeAll(async () => {
       res.setHeader('content-type', 'text/html')
       return res.end(`<!doctype html><html><head><link rel="stylesheet" href="/styles.css"></head><body><div id="player"></div><script type="module">
         import { mountVideoPlayer } from '/views/video-player.js'
-        window.controller = mountVideoPlayer({ container: document.querySelector('#player'), src: '/video.mp4', poster: '/poster.png', durationMs: 42000, title: '订单查询' })
+        window.mediaErrors = []
+        window.controller = mountVideoPlayer({ container: document.querySelector('#player'), src: '/video.mp4', poster: '/poster.png', durationMs: 42000, title: '订单查询', onMediaError: error => window.mediaErrors.push({ name: error?.name, message: error?.message }) })
       </script></body></html>`)
+    }
+    if (url.pathname === '/video.mp4') {
+      const video = readFileSync(join(process.cwd(), 'tests', 'fixtures', 'tiny.mp4'))
+      const match = req.headers.range?.match(/bytes=(\d+)-(\d*)/)
+      res.setHeader('content-type', 'video/mp4')
+      res.setHeader('accept-ranges', 'bytes')
+      if (match) {
+        const start = Number(match[1])
+        const end = match[2] ? Math.min(Number(match[2]), video.length - 1) : video.length - 1
+        res.statusCode = 206
+        res.setHeader('content-range', `bytes ${start}-${end}/${video.length}`)
+        res.setHeader('content-length', end - start + 1)
+        return res.end(video.subarray(start, end + 1))
+      }
+      res.setHeader('content-length', video.length)
+      return res.end(video)
     }
     const path = join(process.cwd(), 'ui', url.pathname.slice(1))
     try {
@@ -55,6 +72,7 @@ describe('custom Browser Forge video player', () => {
   it('clamps seeking, cycles playback rate, supports keyboard, and requests fullscreen', async () => {
     const page = await browser.newPage()
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
+    await page.waitForFunction(() => document.querySelector('video')?.readyState >= HTMLMediaElement.HAVE_METADATA)
     await page.evaluate(() => {
       const video = document.querySelector('video')
       Object.defineProperty(video, 'duration', { configurable: true, value: 42 })
@@ -75,6 +93,22 @@ describe('custom Browser Forge video player', () => {
     expect(await page.locator('video').evaluate(video => video.playbackRate)).toBe(1.5)
     await page.getByRole('button', { name: '进入全屏' }).click()
     expect(await page.evaluate(() => window.fullscreenRequested)).toBe(true)
+    await page.close()
+  })
+
+  it('keeps a valid player intact when play is interrupted with AbortError', async () => {
+    const page = await browser.newPage()
+    await page.goto(baseUrl, { waitUntil: 'networkidle' })
+    await page.waitForFunction(() => document.querySelector('video')?.readyState >= HTMLMediaElement.HAVE_METADATA)
+    await page.locator('video').evaluate(video => {
+      video.play = async () => { throw new DOMException('The play request was interrupted', 'AbortError') }
+    })
+
+    await page.locator('.player-surface-toggle').click()
+
+    expect(await page.locator('[data-video-player]').count()).toBe(1)
+    expect(await page.locator('video').count()).toBe(1)
+    expect(await page.evaluate(() => window.mediaErrors)).toEqual([])
     await page.close()
   })
 

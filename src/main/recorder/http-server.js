@@ -395,7 +395,7 @@ export function createRecorderHttpServer({
       const stopped = await stopActiveRecording()
       res.json(toPublicStopResult(stopped))
     } catch (error) {
-      res.json({ ok: false, error: error.message })
+      res.json({ ok: false, error: error.message, terminal: true })
     }
   })
 

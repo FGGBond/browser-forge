@@ -1,5 +1,6 @@
 import { formatBytes } from './detail.js'
 import { formatDuration } from './library.js'
+import { bindPosterFallbacks } from './poster.js'
 
 export async function renderTrash({ container, api, onBack, onRestored }) {
   container.innerHTML = `
@@ -18,6 +19,7 @@ export async function renderTrash({ container, api, onBack, onRestored }) {
     list.innerHTML = recordings.length
       ? recordings.map(trashRow).join('')
       : '<div class="empty-list"><strong>回收站是空的</strong><span>移入回收站的录制会保留在这里，直到你永久删除。</span></div>'
+    bindPosterFallbacks(list)
     recordings.forEach(recording => bindTrashRow({
       row: list.querySelector(`[data-trash-row="${CSS.escape(recording.id)}"]`),
       recording,
@@ -37,6 +39,7 @@ export async function renderTrash({ container, api, onBack, onRestored }) {
 
 export function renderTrashDetail({ container, recording, api, onRestored, onDeleted }) {
   container.innerHTML = trashRow(recording)
+  bindPosterFallbacks(container)
   bindTrashRow({ row: container.querySelector('[data-trash-row]'), recording, api, onRestored, onDeleted })
 }
 
@@ -91,7 +94,7 @@ function bindTrashRow({ row, recording, api, onRestored, onDeleted }) {
     clearRowError(row)
     try {
       const restored = await api.restoreRecording(recording.id)
-      onRestored(restored)
+      await onRestored(restored)
     } catch (error) {
       restore.disabled = false
       showRowError(row, error.message)
@@ -104,7 +107,7 @@ function trashRow(recording) {
   return `
     <article class="trash-row" data-trash-row="${escapeAttribute(recording.id)}">
       <div class="trash-poster">
-        <img src="/api/recordings/${encodeURIComponent(recording.id)}/poster" alt="${escapeAttribute(recording.title)}的预览" onerror="this.hidden=true">
+        <img src="/api/recordings/${encodeURIComponent(recording.id)}/poster" alt="${escapeAttribute(recording.title)}的预览" data-poster>
         <span>${windowIcon()}</span>
       </div>
       <div class="trash-row-content">

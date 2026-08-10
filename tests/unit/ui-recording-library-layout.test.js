@@ -81,12 +81,29 @@ describe('recording repository compact workspace layout', () => {
   ])('keeps $width px library and new-recording views inside the viewport when collapsed=$collapsed', { timeout: 12000 }, async ({ width, height, collapsed }) => {
     const page = await browser.newPage({ viewport: { width, height } })
     await page.addInitScript(value => localStorage.setItem('browser-forge.sidebar-collapsed', String(value)), collapsed)
-    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
+    await openLibrary(page, { waitUntil: 'domcontentloaded' })
 
     await expectMobileShell(page, width)
     await page.getByRole('button', { name: '新录制', exact: true }).first().click({ timeout: 3000 })
     await page.waitForTimeout(400)
     await expectMobileShell(page, width)
+    await page.close()
+  })
+
+  it('disables repository skeleton pulse when reduced motion is requested', async () => {
+    const page = await browser.newPage({ reducedMotion: 'reduce' })
+    await openLibrary(page)
+    const motion = await page.locator('[data-recording-list]').evaluate(list => {
+      list.innerHTML = '<article class="recording-row skeleton"><div class="repository-preview"></div><div class="recording-row-content"><i></i></div><i></i></article>'
+      const preview = list.querySelector('.repository-preview')
+      const line = list.querySelector('i')
+      return {
+        preview: getComputedStyle(preview).animationName,
+        line: getComputedStyle(line).animationName
+      }
+    })
+
+    expect(motion).toEqual({ preview: 'none', line: 'none' })
     await page.close()
   })
 
@@ -109,7 +126,6 @@ describe('recording repository compact workspace layout', () => {
   ])('keeps the $width px persistent context pane beside recording evidence without overlap', async ({ width, height }) => {
     const page = await browser.newPage({ viewport: { width, height } })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
-    await page.getByRole('button', { name: '去分析', exact: true }).first().click()
     await page.locator('[data-title-input]').waitFor()
     await page.locator('[data-analysis-pane]').waitFor({ state: 'visible' })
 
@@ -141,7 +157,6 @@ describe('recording repository compact workspace layout', () => {
   it('keeps context in the shell at the 1120 px rail breakpoint', async () => {
     const page = await browser.newPage({ viewport: { width: 1120, height: 800 } })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
-    await page.getByRole('button', { name: '去分析', exact: true }).first().click()
     await page.locator('[data-title-input]').waitFor()
 
     const layout = await page.evaluate(() => {
@@ -168,7 +183,7 @@ describe('recording repository compact workspace layout', () => {
     { width: 520, height: 760 }
   ])('keeps the $width px repository compact, horizontal, and evidence-first', async viewport => {
     const page = await browser.newPage({ viewport })
-    await page.goto(baseUrl, { waitUntil: 'networkidle' })
+    await openLibrary(page)
     const row = page.locator('.recording-row').first()
     await row.waitFor()
 
@@ -199,7 +214,7 @@ describe('recording repository compact workspace layout', () => {
 
   it('renders truthful evidence metadata without turning repository rows into competing player cards', async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
-    await page.goto(baseUrl, { waitUntil: 'networkidle' })
+    await openLibrary(page)
 
     const rows = page.locator('[data-recording-id]')
     await expect.poll(() => rows.count()).toBe(3)
@@ -216,7 +231,9 @@ describe('recording repository compact workspace layout', () => {
       expect(await row.getByRole('button', { name: '去分析' }).count()).toBe(1)
       expect(await row.locator('button').count()).toBe(1)
       expect(await row.locator('[data-video-player], video').count()).toBe(0)
-      expect(await row.locator('.repository-preview img').getAttribute('src')).toContain(`/api/recordings/${recording.id}/poster`)
+      const poster = row.locator('.repository-preview img')
+      expect(await poster.getAttribute('src')).toContain(`/api/recordings/${recording.id}/poster`)
+      await expect.poll(() => poster.evaluate(image => ({ hidden: image.hidden, naturalWidth: image.naturalWidth }))).toEqual({ hidden: true, naturalWidth: 0 })
       const text = await row.textContent()
       expect(text).toContain(recording.startHost)
       expect(text).toContain(recording.durationMs === 163000 ? '02:43' : recording.durationMs === 68000 ? '01:08' : '00:42')
@@ -237,6 +254,13 @@ describe('recording repository compact workspace layout', () => {
     await page.close()
   })
 })
+
+async function openLibrary(page, { waitUntil = 'networkidle' } = {}) {
+  await page.goto(baseUrl, { waitUntil })
+  await page.getByRole('button', { name: '全部录制', exact: true }).click()
+  await page.locator('.library-view').waitFor()
+  await page.locator('[data-recording-list][aria-busy="false"]').waitFor()
+}
 
 async function expectMobileShell(page, width) {
   await page.waitForSelector('.app-shell, .app-sidebar', { timeout: 3000 }).catch(() => {})

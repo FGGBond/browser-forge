@@ -380,6 +380,8 @@ export async function renderRecording({ container, api, activeRecording, onStopp
   const elapsed = container.querySelector('[data-recording-elapsed]')
   let finished = false
   let stopping = false
+  let terminalFailure = false
+  let navigationLocked = true
   let recordingStartedAt = epochMilliseconds(activeRecording?.startedAt) || Date.now()
 
   const updateElapsed = () => {
@@ -404,6 +406,7 @@ export async function renderRecording({ container, api, activeRecording, onStopp
     if (finished) return
     finished = true
     stopping = true
+    navigationLocked = false
     clearInterval(elapsedTimer)
     disconnectInspector()
     onStopped(result)
@@ -423,6 +426,43 @@ export async function renderRecording({ container, api, activeRecording, onStopp
     updateElapsed()
   }
 
+  const showUncertainState = message => {
+    stopping = false
+    section.dataset.recordingState = 'uncertain'
+    section.classList.remove('is-finalizing')
+    heading.textContent = '无法确认录制状态'
+    copy.textContent = '与录制服务的连接暂时中断。请重试停止，避免在状态未知时离开。'
+    statusTitle.textContent = '录制是否仍在进行尚未确认'
+    statusDetail.textContent = 'Browser Forge 不会把未知状态显示成已完成；恢复连接后可以再次停止。'
+    stop.disabled = false
+    stop.classList.remove('is-busy')
+    stop.removeAttribute('aria-busy')
+    stopLabel.textContent = '重试停止'
+    errorNotice.hidden = false
+    errorNotice.textContent = message
+  }
+
+  const showTerminalFailure = message => {
+    finished = true
+    stopping = false
+    terminalFailure = true
+    navigationLocked = false
+    clearInterval(elapsedTimer)
+    disconnectInspector()
+    section.dataset.recordingState = 'failed'
+    section.classList.remove('is-finalizing')
+    heading.textContent = '无法准备回放'
+    copy.textContent = '录制已经结束，但最后的整理没有完成。你可以返回录制仓库检查已保留的内容。'
+    statusTitle.textContent = '录制已经结束，回放整理失败'
+    statusDetail.textContent = '不会继续显示为正在录制；返回仓库后可检查是否生成了可用记录。'
+    stop.disabled = false
+    stop.classList.remove('is-busy')
+    stop.removeAttribute('aria-busy')
+    stopLabel.textContent = '返回录制仓库'
+    errorNotice.hidden = false
+    errorNotice.textContent = message
+  }
+
   const showFinalizingState = () => {
     stopping = true
     section.dataset.recordingState = 'finalizing'
@@ -440,18 +480,36 @@ export async function renderRecording({ container, api, activeRecording, onStopp
   }
 
   stop.addEventListener('click', async () => {
+    if (terminalFailure) {
+      await onCancel()
+      return
+    }
     if (stopping || finished) return
     showFinalizingState()
     try {
       const result = await api.stopRecording()
-      if (!result.ok) throw new Error(result.error || '停止录制失败')
+      if (!result.ok) {
+        const error = new Error(result.error || '停止录制失败')
+        error.terminal = Boolean(result.terminal)
+        throw error
+      }
       finish(result)
     } catch (error) {
       if (finished) return
-      stopping = false
-      showActiveState()
-      errorNotice.hidden = false
-      errorNotice.textContent = error.message
+      let readiness = null
+      if (!error.terminal) {
+        try { readiness = await api.getRecordingReady() } catch {}
+      }
+      if (error.terminal || readiness?.ready === false) {
+        showTerminalFailure(error.message)
+      } else if (readiness?.ready === true) {
+        stopping = false
+        showActiveState()
+        errorNotice.hidden = false
+        errorNotice.textContent = error.message
+      } else {
+        showUncertainState(error.message)
+      }
     }
   })
 
@@ -460,7 +518,7 @@ export async function renderRecording({ container, api, activeRecording, onStopp
   } catch {}
   connectInspector(container, message => finish({ ok: true, ...message }), applyLiveSummary)
   return {
-    beforeNavigate: async () => false,
+    beforeNavigate: async () => !navigationLocked,
     cleanup: () => {
       clearInterval(elapsedTimer)
       disconnectInspector()

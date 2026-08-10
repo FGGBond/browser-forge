@@ -100,6 +100,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   let transitionPending = false
   let savedText = prompt.text || ''
   let promptUpdatedAt = prompt.updatedAt || null
+  const renderedChatKeys = new Set()
   let destroyed = false
   let handoffResult = null
   let handoffStatus = emptyHandoffStatus()
@@ -211,13 +212,16 @@ export async function renderPromptEditor({ container, recordingId, api }) {
 
   const renderChatList = () => {
     const items = []
+    const currentKeys = []
     QUESTIONS.forEach((question, index) => {
       if (!submitted[index]) return
+      currentKeys.push(question.key)
+      const enteringClass = renderedChatKeys.has(question.key) ? '' : ' is-entering'
       const questionLabel = `<p class="guidance-chat-question">${escapeHtml(question.title)}<small>${escapeHtml(question.description)}</small></p>`
       if (editingSubmittedKey === question.key) {
         // 编辑态:气泡原地变成宽编辑卡,挂载点由 mountChatEditor 填充
         items.push(`
-          <li class="guidance-chat-item editing" data-chat-item="${question.key}" data-chat-editing="${question.key}">
+          <li class="guidance-chat-item editing${enteringClass}" data-chat-item="${question.key}" data-chat-editing="${question.key}">
             ${questionLabel}
             <div class="guidance-chat-edit">
               <div class="guidance-chat-edit-root" data-chat-edit-root></div>
@@ -230,7 +234,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
         return
       }
       items.push(`
-        <li class="guidance-chat-item" data-chat-item="${question.key}">
+        <li class="guidance-chat-item${enteringClass}" data-chat-item="${question.key}">
           ${questionLabel}
           <div class="guidance-chat-answer">
             <div class="guidance-chat-bubble">
@@ -245,7 +249,14 @@ export async function renderPromptEditor({ container, recordingId, api }) {
         </li>`)
     })
     const html = items.join('')
-    if (chatList.innerHTML !== html) chatList.innerHTML = html
+    if (chatList.innerHTML !== html) {
+      chatList.innerHTML = html
+      chatList.querySelectorAll('.guidance-chat-item.is-entering').forEach(item => {
+        item.addEventListener('animationend', () => item.classList.remove('is-entering'), { once: true })
+      })
+    }
+    renderedChatKeys.clear()
+    currentKeys.forEach(key => renderedChatKeys.add(key))
     scrollChatToEnd()
   }
 

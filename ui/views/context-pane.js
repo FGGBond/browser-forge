@@ -2,8 +2,8 @@ import { renderPromptEditor } from './prompt-editor.js'
 import { mountSplitHandle } from './split-resize.js'
 import { readNumberPreference, writeNumberPreference } from '../layout-prefs.js'
 
-const PANE_EXIT_DURATION_MS = 140
-const REDUCED_MOTION_EXIT_DURATION_MS = 120
+const PANE_EXIT_FALLBACK_MS = 190
+const REDUCED_MOTION_EXIT_FALLBACK_MS = 130
 const PANE_MIN_WIDTH = 300
 const PANE_MAX_WIDTH = 680
 const PANE_DEFAULT_WIDTH = 476
@@ -16,17 +16,18 @@ export function createContextPane({ shell, host, toggle, api, onOpenChange = () 
     <aside class="analysis-pane" id="recording-analysis-guidance" data-analysis-pane aria-label="分析指导">
       <div class="analysis-pane-inner">
         <button class="icon-button analysis-pane-close" type="button" data-close-analysis aria-label="关闭录制说明">${closeIcon()}</button>
+        <div class="context-status-slot" data-context-status></div>
         <section class="analysis-prompt" data-prompt-slot></section>
       </div>
     </aside>`
 
   const pane = host.querySelector('[data-analysis-pane]')
   const promptSlot = host.querySelector('[data-prompt-slot]')
+  const contextStatus = host.querySelector('[data-context-status]')
   const close = host.querySelector('[data-close-analysis]')
   const drawerQuery = globalThis.matchMedia?.(DRAWER_QUERY)
-  const paneExitDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-    ? REDUCED_MOTION_EXIT_DURATION_MS
-    : PANE_EXIT_DURATION_MS
+  const reducedMotionQuery = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')
+  const paneInner = host.querySelector('.analysis-pane-inner')
 
   let controller = null
   let recordingId = null
@@ -36,6 +37,8 @@ export function createContextPane({ shell, host, toggle, api, onOpenChange = () 
   let loadRevision = 0
   let open = true
   let closeTimer = null
+  let closeTransitionEnd = null
+  let closeMotionChange = null
   let closeRevision = 0
   let closePending = false
   let destroyed = false
@@ -109,39 +112,77 @@ export function createContextPane({ shell, host, toggle, api, onOpenChange = () 
     toggle.setAttribute('aria-label', label)
     toggle.setAttribute('title', label)
   }
-  const cancelClose = () => {
-    closeRevision += 1
+  const clearCloseWatchers = () => {
     if (closeTimer !== null) clearTimeout(closeTimer)
     closeTimer = null
+    if (closeTransitionEnd) paneInner.removeEventListener('transitionend', closeTransitionEnd)
+    closeTransitionEnd = null
+    if (closeMotionChange) reducedMotionQuery?.removeEventListener?.('change', closeMotionChange)
+    closeMotionChange = null
+  }
+  const cancelClose = () => {
+    closeRevision += 1
+    clearCloseWatchers()
     shell.classList.remove('analysis-pane-closing')
   }
   const finishClose = revision => {
     if (destroyed || open || revision !== closeRevision) return
+    clearCloseWatchers()
     shell.classList.remove('analysis-pane-closing', 'analysis-pane-open')
     host.hidden = true
-    closeTimer = null
+  }
+  const hasActiveExitTransition = () => paneInner.getAnimations().some(animation => {
+    const property = animation.transitionProperty
+    const isCssTransition = typeof CSSTransition === 'undefined' || animation instanceof CSSTransition
+    return isCssTransition && ['opacity', 'transform'].includes(property) && !['finished', 'idle'].includes(animation.playState)
+  })
+  const armCloseFallback = revision => {
+    if (closeTimer !== null) clearTimeout(closeTimer)
+    const delay = reducedMotionQuery?.matches ? REDUCED_MOTION_EXIT_FALLBACK_MS : PANE_EXIT_FALLBACK_MS
+    closeTimer = setTimeout(() => finishClose(revision), delay)
+  }
+  const watchCloseCompletion = revision => {
+    clearCloseWatchers()
+    closeTransitionEnd = event => {
+      if (event.target !== paneInner || !['opacity', 'transform'].includes(event.propertyName)) return
+      requestAnimationFrame(() => {
+        if (destroyed || open || revision !== closeRevision || hasActiveExitTransition()) return
+        finishClose(revision)
+      })
+    }
+    closeMotionChange = () => armCloseFallback(revision)
+    paneInner.addEventListener('transitionend', closeTransitionEnd)
+    reducedMotionQuery?.addEventListener?.('change', closeMotionChange)
+    armCloseFallback(revision)
   }
   const setOpen = (next, { restoreFocus = true } = {}) => {
     if (!drawerQuery?.matches && !next) next = true
     if (next) {
+      const wasHidden = host.hidden
       cancelClose()
+      const revision = closeRevision
       open = true
       host.hidden = false
-      shell.classList.add('analysis-pane-open')
+      if (wasHidden) shell.classList.remove('analysis-pane-open', 'analysis-pane-closing')
+      else shell.classList.add('analysis-pane-open')
       updateToggle()
       onOpenChange(true)
-      requestAnimationFrame(() => controller?.refresh?.())
+      requestAnimationFrame(() => {
+        if (destroyed || !open || revision !== closeRevision) return
+        shell.classList.add('analysis-pane-open')
+        controller?.refresh?.()
+      })
       return
     }
     if (!open) return
     open = false
     closeRevision += 1
     const revision = closeRevision
+    watchCloseCompletion(revision)
     shell.classList.add('analysis-pane-open', 'analysis-pane-closing')
     updateToggle()
     onOpenChange(false)
     if (restoreFocus) toggle.focus({ preventScroll: true })
-    closeTimer = setTimeout(() => finishClose(revision), paneExitDuration)
   }
   const setClosePending = pending => {
     closePending = Boolean(pending)
@@ -172,24 +213,37 @@ export function createContextPane({ shell, host, toggle, api, onOpenChange = () 
     loadRevision += 1
     controller?.destroy()
     controller = null
+    delete host.dataset.contextRecordingId
+    contextStatus.replaceChildren()
     promptSlot.innerHTML = `<div class="context-placeholder" data-context-placeholder><span aria-hidden="true">${contextIcon()}</span><strong>${escapeHtml(title)}</strong><p>${escapeHtml(message)}</p></div>`
   }
 
-  const showRecording = async nextRecordingId => {
+  const setSwitchError = visible => {
+    contextStatus.innerHTML = visible
+      ? '<div class="inline-error context-switch-error" data-context-switch-error role="alert">录制说明未切换：请先重试保存当前内容。</div>'
+      : ''
+  }
+
+  const showRecording = async (nextRecordingId, { forceReload = false } = {}) => {
     if (!nextRecordingId) {
       setPlaceholder()
       return true
     }
     if (recordingId === nextRecordingId) {
-      if (controller) return true
-      if (loadingRecordingId === nextRecordingId && loadingPromise) return loadingPromise
+      if (controller && !forceReload) return true
+      if (loadingRecordingId === nextRecordingId && loadingPromise && !forceReload) return loadingPromise
     }
-    if (controller && !await controller.beforeNavigate()) return false
+    if (controller && !await controller.beforeNavigate()) {
+      setSwitchError(true)
+      return false
+    }
 
     const revision = ++loadRevision
+    setSwitchError(false)
     controller?.destroy()
     controller = null
     recordingId = nextRecordingId
+    host.dataset.contextRecordingId = nextRecordingId
     loadingRecordingId = nextRecordingId
     placeholderSignature = null
     promptSlot.innerHTML = '<div class="context-loading" role="status" aria-live="polite"><span class="loading-ring"></span><span>正在读取录制说明…</span></div>'
@@ -206,8 +260,10 @@ export function createContextPane({ shell, host, toggle, api, onOpenChange = () 
         return true
       } catch (error) {
         if (destroyed || revision !== loadRevision) return false
-        promptSlot.innerHTML = `<div class="inline-error context-load-error" data-prompt-load-error role="alert"><strong>无法读取分析指导</strong><span>${escapeHtml(error.message)}</span></div>`
-        controller = fallbackController()
+        promptSlot.innerHTML = `<div class="inline-error context-load-error" data-prompt-load-error role="alert"><strong>无法读取分析指导</strong><span>${escapeHtml(error.message)}</span><button class="button quiet" type="button" data-retry-prompt>重试</button></div>`
+        promptSlot.querySelector('[data-retry-prompt]')?.addEventListener('click', () => {
+          void showRecording(nextRecordingId, { forceReload: true })
+        })
         return false
       } finally {
         if (revision === loadRevision) {
@@ -222,6 +278,11 @@ export function createContextPane({ shell, host, toggle, api, onOpenChange = () 
 
   const flush = () => controller?.flush?.() ?? Promise.resolve(true)
   const beforeNavigate = () => controller?.beforeNavigate?.() ?? Promise.resolve(true)
+  const beforeSwitch = async () => {
+    const allowed = await beforeNavigate()
+    setSwitchError(!allowed)
+    return allowed
+  }
   const hideDrawerImmediately = () => {
     cancelClose()
     open = false
@@ -247,6 +308,7 @@ export function createContextPane({ shell, host, toggle, api, onOpenChange = () 
     showPlaceholder: setPlaceholder,
     flush,
     beforeNavigate,
+    beforeSwitch,
     setOpen,
     get recordingId() { return recordingId },
     destroy() {
@@ -265,10 +327,6 @@ export function createContextPane({ shell, host, toggle, api, onOpenChange = () 
   }
 }
 
-function fallbackController() {
-  const proceed = async () => true
-  return { flush: proceed, beforeNavigate: proceed, refresh() {}, destroy() {} }
-}
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]) }
 function closeIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 6 8 8M14 6l-8 8"/></svg>' }
 function contextIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM14 5v14M7 9h4M7 13h4"/></svg>' }

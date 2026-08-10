@@ -288,7 +288,7 @@ function workspaceContextRecordingId(value = state.value) {
   if (value.route === 'recording') return value.activeRecording?.recordingId || value.activeRecording?.id || value.selectedId
   if (value.route === 'library') {
     const selected = value.recordings.find(recording => recording.id === value.selectedId)
-    return selected?.id || value.recordings[0]?.id || null
+    return selected?.id || null
   }
   return null
 }
@@ -307,12 +307,14 @@ function syncWorkspaceContext(value = state.value) {
 state.subscribe(syncWorkspaceContext)
 syncWorkspaceContext()
 
-export async function navigate(route, patch = {}, { force = false } = {}) {
+export async function navigate(route, patch = {}, { force = false, throwOnLoadError = false } = {}) {
   if (navigating) return false
   navigating = true
   try {
     if (!force && beforeNavigate && !await beforeNavigate()) return false
-    if (!await contextPane.beforeNavigate()) return false
+    const currentContextId = workspaceContextRecordingId(state.value)
+    const nextContextId = workspaceContextRecordingId({ ...state.value, route, ...patch })
+    if (currentContextId !== nextContextId && !await contextPane.beforeSwitch()) return false
     cleanupView?.()
     cleanupView = null
     beforeNavigate = null
@@ -371,6 +373,10 @@ export async function navigate(route, patch = {}, { force = false } = {}) {
         onBack: () => navigate('library'),
         onTrashed: async recording => { showUndoToast(recording); await navigate('library', {}, { force: true }) }
       })
+      if (controller?.loadError) {
+        if (throwOnLoadError) throw controller.loadError
+        return false
+      }
       if (controller) {
         beforeNavigate = controller.beforeNavigate
         cleanupView = controller.cleanup
@@ -382,7 +388,7 @@ export async function navigate(route, patch = {}, { force = false } = {}) {
         container: main,
         api,
         onBack: () => navigate('library'),
-        onRestored: recording => navigate('detail', { selectedId: recording.id })
+        onRestored: openRestoredRecording
       })
       return true
     }
@@ -392,19 +398,46 @@ export async function navigate(route, patch = {}, { force = false } = {}) {
   }
 }
 
+async function openRestoredRecording(recording) {
+  state.update(value => ({
+    recordings: upsertRecording(value.recordings, recording),
+    selectedId: recording.id
+  }))
+  if (!await navigate('detail', { selectedId: recording.id })) {
+    throw new Error('录制已恢复，但暂时无法打开详情。请重试。')
+  }
+  return true
+}
+
 function showUndoToast(recording) {
   root.querySelector('[data-toast]')?.remove()
   const toast = document.createElement('div')
   toast.className = 'toast'
   toast.dataset.toast = ''
-  toast.innerHTML = `<span>“${escapeHtml(recording.title)}”已移入回收站</span><button type="button" data-undo-trash>撤销</button>`
+  toast.setAttribute('role', 'status')
+  toast.setAttribute('aria-live', 'polite')
+  toast.innerHTML = `<span data-toast-message>“${escapeHtml(recording.title)}”已移入回收站</span><button type="button" data-undo-trash>撤销</button>`
   root.append(toast)
   const timer = setTimeout(() => toast.remove(), 8000)
-  toast.querySelector('[data-undo-trash]').addEventListener('click', async () => {
+  const undo = toast.querySelector('[data-undo-trash]')
+  const message = toast.querySelector('[data-toast-message]')
+  let restored = null
+  undo.addEventListener('click', async () => {
+    if (undo.disabled) return
     clearTimeout(timer)
-    const restored = await api.restoreRecording(recording.id)
-    toast.remove()
-    await navigate('detail', { selectedId: restored.id })
+    undo.disabled = true
+    undo.setAttribute('aria-busy', 'true')
+    message.textContent = `正在恢复“${recording.title}”…`
+    try {
+      restored ||= await api.restoreRecording(recording.id)
+      await openRestoredRecording(restored)
+      toast.remove()
+    } catch (error) {
+      message.textContent = `恢复失败：${error.message}`
+      undo.disabled = false
+      undo.removeAttribute('aria-busy')
+      undo.textContent = '重试'
+    }
   })
 }
 
@@ -412,4 +445,28 @@ function contextIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><pa
 
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]) }
 
-navigate('library')
+let bootstrapRevision = 0
+
+async function bootstrapWorkspace() {
+  const revision = ++bootstrapRevision
+  main.innerHTML = '<section class="narrow-view workspace-bootstrap" aria-busy="true"><div class="context-loading" role="status" aria-live="polite"><span class="loading-ring"></span><span>正在恢复录制工作区…</span></div></section>'
+  contextPane.showPlaceholder({ title: '正在恢复工作区', message: '正在读取最近的录制与说明。' })
+  try {
+    const recordings = [...await api.listRecordings({ state: 'active', query: '' })]
+      .sort((left, right) => recordingTime(right) - recordingTime(left))
+    if (revision !== bootstrapRevision) return false
+    const recent = recordings[0] || null
+    state.update({ recordings, selectedId: recent?.id || null })
+    return await (recent
+      ? navigate('detail', { selectedId: recent.id }, { force: true, throwOnLoadError: true })
+      : navigate('new-recording', { selectedId: null }, { force: true }))
+  } catch (error) {
+    if (revision !== bootstrapRevision) return false
+    main.innerHTML = `<section class="narrow-view workspace-bootstrap"><div class="inline-error" data-bootstrap-error role="alert"><strong>无法恢复录制工作区</strong><span>${escapeHtml(error.message)}</span><button class="button primary" type="button" data-retry-bootstrap>重试</button></div></section>`
+    main.querySelector('[data-retry-bootstrap]')?.addEventListener('click', () => { void bootstrapWorkspace() })
+    contextPane.showPlaceholder({ title: '工作区暂不可用', message: '工作区内容读取失败。重试后再继续录制或分析。' })
+    return false
+  }
+}
+
+void bootstrapWorkspace()

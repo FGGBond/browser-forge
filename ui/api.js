@@ -41,6 +41,7 @@ export const api = {
   resetScreenRecordingPermission() { return request('/api/screen-recording-permission/reset', { method: 'POST' }) },
   restartBrowserForge() { return request('/api/restart', { method: 'POST' }) },
   getSummary() { return request('/api/summary') },
+  getRecordingReady() { return request('/api/recording-ready') },
   startRecording({ chromePath, goalText = '' }) {
     const normalizedGoal = String(goalText).trim()
     return request('/api/start-recording', { method: 'POST', body: JSON.stringify({ chromePath, ...(normalizedGoal ? { goalText: normalizedGoal } : {}) }) })

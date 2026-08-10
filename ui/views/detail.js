@@ -14,13 +14,26 @@ export async function renderDetail({
     const recording = await api.getRecording(recordingId)
     container.innerHTML = detailMarkup(recording)
     const playable = ['complete', 'partial'].includes(recording.videoStatus)
-    const playerController = playable ? mountVideoPlayer({
-      container: container.querySelector('[data-video-player-slot]'),
-      src: `/api/recordings/${encodeURIComponent(recording.id)}/video`,
-      poster: `/api/recordings/${encodeURIComponent(recording.id)}/poster`,
-      durationMs: recording.durationMs,
-      title: recording.title
-    }) : null
+    const playerSlot = container.querySelector('[data-video-player-slot]')
+    let playerController = null
+    const showRuntimeVideoFailure = () => {
+      if (!playerSlot?.isConnected || playerSlot.querySelector('.video-unavailable')) return
+      playerController?.destroy()
+      playerController = null
+      playerSlot.innerHTML = videoUnavailable('unplayable')
+      const status = container.querySelector('[data-video-status-value]')
+      if (status) status.textContent = '不可播放'
+    }
+    if (playable) {
+      playerController = mountVideoPlayer({
+        container: playerSlot,
+        src: `/api/recordings/${encodeURIComponent(recording.id)}/video`,
+        poster: `/api/recordings/${encodeURIComponent(recording.id)}/poster`,
+        durationMs: recording.durationMs,
+        title: recording.title,
+        onMediaError: showRuntimeVideoFailure
+      })
+    }
     const titleInput = container.querySelector('[data-title-input]')
     let savedTitle = recording.title
     let renaming = false
@@ -90,7 +103,7 @@ export async function renderDetail({
   } catch (error) {
     container.innerHTML = `<section class="narrow-view"><button class="back-button" data-back>返回录制仓库</button><div class="inline-error" role="alert"><strong>无法打开录制</strong><span>${escapeHtml(error.message)}</span></div></section>`
     container.querySelector('[data-back]').addEventListener('click', onBack)
-    return null
+    return { loadError: error }
   }
 }
 
@@ -115,7 +128,7 @@ function detailMarkup(recording) {
           <dl class="evidence-strip" data-evidence-strip aria-label="录制证据摘要">
             <div><dt>时长</dt><dd>${formatDuration(recording.durationMs)}</dd></div>
             <div class="evidence-domains"><dt>域名</dt><dd title="${escapeAttribute(domainSummary)}">${escapeHtml(domainSummary)}</dd></div>
-            <div><dt>状态</dt><dd>${videoStatusLabel(recording.videoStatus)}</dd></div>
+            <div><dt>状态</dt><dd data-video-status-value>${videoStatusLabel(recording.videoStatus)}</dd></div>
             <div><dt>录制时间</dt><dd>${formatDate(recording.createdAt)}</dd></div>
           </dl>
           <div class="object-action-dock" data-object-actions aria-label="录制操作">
@@ -131,7 +144,7 @@ function formatDuration(value) { const seconds = Math.max(0, Math.floor(Number(v
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '时间未知' : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date) }
 export function formatBytes(value) { const bytes = Number(value); if (!Number.isFinite(bytes) || bytes < 0) return '计算中'; if (bytes < 1024) return `${bytes} B`; if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`; if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`; return `${(bytes / 1024 ** 3).toFixed(1)} GB` }
 function videoStatusLabel(status) { if (status === 'complete') return '完整'; if (status === 'partial') return '部分'; if (status === 'failed') return '失败'; return '缺失' }
-function videoUnavailable(status) { return `<div class="video-unavailable">${videoOffIcon()}<strong>${status === 'failed' ? '视频录制失败' : '没有可播放视频'}</strong><span>可以保留这段录制，稍后补充分析说明或重新录制。</span></div>` }
+function videoUnavailable(status) { return `<div class="video-unavailable" role="status">${videoOffIcon()}<strong>${status === 'failed' ? '视频录制失败' : status === 'unplayable' ? '视频无法播放' : '没有可播放视频'}</strong><span>${status === 'unplayable' ? '视频文件缺失或已损坏；说明、导出和删除操作仍然可用。' : '可以保留这段录制，稍后补充分析说明或重新录制。'}</span></div>` }
 function showNotice(container, message, tone) { const stack = container.querySelector('[data-notices]'); const notice = document.createElement('div'); notice.className = `notice ${tone}`; notice.textContent = message; stack.append(notice); setTimeout(() => notice.remove(), 5000) }
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]) }
 function escapeAttribute(value) { return escapeHtml(value) }

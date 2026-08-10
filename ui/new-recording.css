@@ -381,7 +381,10 @@
 @media (prefers-reduced-motion: reduce) {
   .record-start-action,
   .recording-primary-action {
-    transition: none;
+    transform: none !important;
+    transition-property: background-color, opacity;
+    transition-duration: 80ms;
+    transition-timing-function: cubic-bezier(.23, 1, .32, 1);
   }
 
   .record-start-action.is-busy::after,

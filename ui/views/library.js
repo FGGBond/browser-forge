@@ -1,3 +1,5 @@
+import { bindPosterFallbacks } from './poster.js'
+
 export async function renderLibrary({ container, api, state, onSelect }) {
   container.innerHTML = `
     <section class="library-view repository-view" aria-labelledby="library-title">
@@ -45,10 +47,13 @@ export async function renderLibrary({ container, api, state, onSelect }) {
 export async function loadLibrary({ api, state, list, count, onSelect }) {
   list.setAttribute('aria-busy', 'true')
   try {
-    const recordings = await api.listRecordings({ state: state.value.filter, query: state.value.query })
-    state.update({ recordings })
+    const filter = state.value.filter
+    const query = state.value.query
+    const recordings = await api.listRecordings({ state: filter, query })
+    if (filter === 'active' && !query) state.update({ recordings })
     count.textContent = `${recordings.length} 段录制`
     list.innerHTML = recordings.length ? recordings.map(recordingRow).join('') : emptyLibrary(state.value.query)
+    bindPosterFallbacks(list)
     list.querySelectorAll('[data-recording-id]').forEach(row => {
       row.addEventListener('click', event => {
         if (event.target.closest('button,input')) return
@@ -79,7 +84,7 @@ function recordingRow(recording) {
     <article class="recording-row" data-recording-id="${escapeAttribute(recording.id)}" tabindex="0" aria-labelledby="${rowId}">
       <div class="repository-preview">
         <div class="repository-preview-fallback" aria-hidden="true">${windowIcon()}</div>
-        <img src="/api/recordings/${encodeURIComponent(recording.id)}/poster" alt="" onerror="this.hidden=true">
+        <img src="/api/recordings/${encodeURIComponent(recording.id)}/poster" alt="" data-poster>
         <span class="repository-duration">${formatDuration(recording.durationMs)}</span>
       </div>
       <div class="recording-row-content">

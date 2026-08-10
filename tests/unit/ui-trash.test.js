@@ -51,7 +51,9 @@ describe('App recycle bin UI', () => {
     const row = page.locator('[data-trash-row]')
     await row.waitFor()
     expect(await page.locator('.trash-grid, .trash-detail').count()).toBe(0)
-    expect(await row.locator('img').getAttribute('src')).toContain(`/api/recordings/${id}/poster`)
+    const poster = row.locator('img')
+    expect(await poster.getAttribute('src')).toContain(`/api/recordings/${id}/poster`)
+    await expect.poll(() => poster.evaluate(image => ({ hidden: image.hidden, naturalWidth: image.naturalWidth }))).toEqual({ hidden: true, naturalWidth: 0 })
     await row.getByRole('heading', { name: '旧的订单录制' }).waitFor()
     expect(await row.textContent()).toContain('example.com')
     expect(await row.textContent()).toContain('2026')
@@ -78,6 +80,11 @@ describe('App recycle bin UI', () => {
 
     await row.getByRole('button', { name: '恢复录制' }).click()
     await expect.poll(() => requests.some(item => item.path.endsWith('/restore'))).toBe(true)
+    await page.locator('[data-title-input]').waitFor()
+    const sidebarRecording = page.locator(`[data-recording-nav="${id}"]`)
+    await sidebarRecording.waitFor()
+    expect(await sidebarRecording.getAttribute('aria-current')).toBe('page')
+    expect(await sidebarRecording.locator('strong').textContent()).toBe('旧的订单录制')
     await page.close()
   })
 

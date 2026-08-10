@@ -80,6 +80,8 @@ describe('workspace sidebar motion', () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
     await page.locator('[data-context-host] [data-guidance-editor-surface]').waitFor({ state: 'attached', timeout: 3000 })
+    await page.getByRole('button', { name: '全部录制', exact: true }).click()
+    await page.locator('.library-view').waitFor()
 
     await page.evaluate(() => {
       window.__shellBeforeDetail = document.querySelector('[data-app-shell]')
@@ -88,8 +90,8 @@ describe('workspace sidebar motion', () => {
       window.__editorBeforeDetail = document.querySelector('[data-context-host] [data-guidance-editor-surface]')
     })
 
-    await page.getByRole('button', { name: '去分析', exact: true }).click()
-    await page.locator('[data-video-player] video').waitFor({ timeout: 3000 })
+    await page.locator(`[data-recording-nav="${recording.id}"]`).click()
+    await page.locator('[data-analysis-workspace]').waitFor({ timeout: 3000 })
 
     const afterDetail = await page.evaluate(() => ({
       shell: window.__shellBeforeDetail === document.querySelector('[data-app-shell]'),

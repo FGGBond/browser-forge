@@ -49,9 +49,12 @@
 
 .guidance-chat-item {
   display: flex;
-  animation: guidanceMessageIn 170ms cubic-bezier(.2, .8, .2, 1);
   flex-direction: column;
   gap: 8px;
+}
+
+.guidance-chat-item.is-entering {
+  animation: guidanceMessageIn 170ms cubic-bezier(.23, 1, .32, 1);
 }
 
 .guidance-chat-question {
@@ -369,6 +372,11 @@
   to { opacity: 1; transform: none; }
 }
 
+@keyframes guidanceFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 .guidance-handoff-card[hidden] { display: none; }
 
 .guidance-handoff-copy strong {
@@ -455,12 +463,23 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .guidance-chat-item,
+  .guidance-chat-item.is-entering,
   .guidance-progress,
-  .guidance-handoff-card,
-  .guidance-composer,
+  .guidance-handoff-card {
+    animation: guidanceFadeIn 120ms cubic-bezier(.23, 1, .32, 1);
+  }
+
+  .guidance-composer {
+    transition-property: border-color, background-color;
+    transition-duration: 80ms;
+    transition-timing-function: cubic-bezier(.23, 1, .32, 1);
+  }
+
   .guidance-send {
+    transform: none !important;
     animation: none;
-    transition-duration: .01ms;
+    transition-property: opacity, background-color;
+    transition-duration: 80ms;
+    transition-timing-function: cubic-bezier(.23, 1, .32, 1);
   }
 }

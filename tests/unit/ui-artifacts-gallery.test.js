@@ -136,11 +136,23 @@ describe('recording status and responsive shell', () => {
       const rules = sheets.flatMap(sheet => Array.from(sheet.cssRules))
       const hover = rules.find(rule => rule.conditionText?.includes('hover: hover') && rule.conditionText?.includes('pointer: fine'))
       const button = getComputedStyle(document.querySelector('.button'))
-      return { hasHoverGate: Boolean(hover), transitionProperty: button.transitionProperty, transform: button.transform }
+      return { hasHoverGate: Boolean(hover), transitionProperty: button.transitionProperty, transitionDuration: button.transitionDuration, transform: button.transform }
     })
     expect(result.hasHoverGate).toBe(true)
+    expect(result.transitionProperty).toMatch(/background-color|opacity/)
     expect(result.transitionProperty).not.toContain('transform')
+    expect(Number.parseFloat(result.transitionDuration)).toBeGreaterThanOrEqual(.08)
     expect(result.transform).toBe('none')
+
+    await page.getByRole('button', { name: '新录制' }).first().click()
+    const recordAction = await page.locator('.record-start-action').evaluate(element => {
+      const style = getComputedStyle(element)
+      return { property: style.transitionProperty, duration: style.transitionDuration, transform: style.transform }
+    })
+    expect(recordAction.property).toContain('opacity')
+    expect(recordAction.property).not.toContain('transform')
+    expect(Number.parseFloat(recordAction.duration)).toBeGreaterThanOrEqual(.08)
+    expect(recordAction.transform).toBe('none')
     await page.close()
   })
 })

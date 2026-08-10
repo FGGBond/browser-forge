@@ -594,6 +594,39 @@ describe('window video lifecycle', () => {
     expect(sessionStops).toEqual([expect.objectContaining({ state: 'complete', sourcePath: '/tmp/browser-forge-video.mp4' })])
   })
 
+  it('marks stop failures as terminal after releasing the active recording resources', async () => {
+    class FakeRecordingSession {
+      constructor() { this._cdp = { getTargets: () => [], disconnect: async () => {} } }
+      async start() {}
+      async prepareForVideoStop() {}
+      async stop() { throw new Error('finalization failed') }
+      getLiveSummary() { return { type: 'summary', startedAt: 1, tabs: [], totals: {} } }
+    }
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      startupLogFile: null,
+      findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      waitForChromeDebugEndpoint: async () => {},
+      launchChrome: () => ({ pid: 4242, exitCode: null, once: () => {}, kill: () => {} }),
+      createVideoRecorder: () => ({
+        start: async () => ({ startEpochMs: 1_786_170_000_000, window: { pid: 4242, windowId: '99', title: 'Browser Forge Recording' } }),
+        stop: async () => ({ state: 'failed', durationMs: 0, coveredUntilOffsetMs: 0 })
+      }),
+      RecordingSession: FakeRecordingSession
+    })
+    const url = await recorderServer.listen()
+    await fetch(`${url}/api/start-recording`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outputDir: '/tmp/browser-forge-test', port: 9333 })
+    })
+
+    const stopped = await fetch(`${url}/api/stop-recording`, { method: 'POST' }).then(response => response.json())
+    const readiness = await fetch(`${url}/api/recording-ready`).then(response => response.json())
+
+    expect(stopped).toEqual({ ok: false, error: 'finalization failed', terminal: true })
+    expect(readiness).toEqual({ ready: false })
+  })
+
   it('returns and broadcasts the promoted result after Chrome stops automatically', async () => {
     const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
     const stagingPath = `/tmp/browser-forge-managed/staging/${id}`
