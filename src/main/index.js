@@ -113,9 +113,10 @@ export async function createWindow({
   })
   const url = await state.recorderServer.listen()
   const win = new BrowserWindow({
-    width: 1080,
+    useContentSize: true,
+    width: 1280,
     height: 760,
-    minWidth: 760,
+    minWidth: 1200,
     minHeight: 560,
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
@@ -124,7 +125,7 @@ export async function createWindow({
   })
   registerWindowCloseGuard({ win, state, closeFlushTimeoutMs, logger })
   win.loadURL(`${url}/?shell=electron`)
-  await telemetry?.track?.('app_window_created', { width: 1080, height: 760 })
+  await telemetry?.track?.('app_window_created', { width: 1280, height: 760 })
   return win
 }
 

@@ -459,10 +459,5 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px 
 .analysis-pane-close { position:absolute; z-index:3; top:14px; right:22px; }
 .analysis-prompt { padding:4px 16px 24px; }
 .analysis-pane .guidance-agent-status { padding-right:52px; }
-@media (max-width:1120px) {
-  .analysis-workspace,.analysis-workspace.analysis-pane-open { grid-template-columns:minmax(0,1fr); }
-  .analysis-pane { position:relative; top:auto; width:auto; height:auto; border-top:1px solid var(--line); border-left:0; }
-  .analysis-pane-inner { min-height:0; }
-}
 @media (max-width:700px) { .analysis-main { padding:22px 14px 40px; }.analysis-main .detail-header { align-items:stretch; } }
 @media (prefers-reduced-motion: reduce) { .analysis-pane-inner,.analysis-workspace.analysis-pane-open:not(.analysis-pane-closing) .analysis-pane-inner,.analysis-workspace.analysis-pane-closing .analysis-pane-inner { transform:none !important; transition-property:opacity !important; transition-duration:120ms !important; } }

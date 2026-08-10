@@ -112,11 +112,10 @@ describe('recording repository video-first layout', () => {
   })
 
   it.each([
-    { width: 1280, height: 800, stacked: false },
-    { width: 900, height: 760, stacked: true },
-    { width: 640, height: 760, stacked: true },
-    { width: 520, height: 760, stacked: true }
-  ])('keeps the $width px guidance pane beside or below the video without overlap', async ({ width, height, stacked }) => {
+    { width: 1200, height: 800 },
+    { width: 1280, height: 800 },
+    { width: 1440, height: 900 }
+  ])('keeps the $width px guidance pane beside the video without overlap', async ({ width, height }) => {
     const page = await browser.newPage({ viewport: { width, height } })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
     await page.getByRole('button', { name: '去分析', exact: true }).first().click()
@@ -139,18 +138,36 @@ describe('recording repository video-first layout', () => {
 
     expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.viewportWidth)
     expect(metrics.pane.right).toBeLessThanOrEqual(metrics.viewportWidth + 1)
-    if (stacked) {
-      expect(metrics.columns.split(' ')).toHaveLength(1)
-      expect(metrics.pane.y).toBeGreaterThanOrEqual(metrics.main.bottom - 1)
-      expect(['relative', 'static']).toContain(metrics.panePosition)
-    } else {
-      expect(metrics.columns.split(' ')).toHaveLength(2)
-      expect(metrics.main.width).toBeGreaterThanOrEqual(520)
-      expect(metrics.pane.width).toBeGreaterThanOrEqual(360)
-      expect(metrics.pane.width).toBeLessThanOrEqual(390)
-      expect(metrics.pane.x).toBeGreaterThanOrEqual(metrics.main.right - 1)
-      expect(metrics.panePosition).toBe('sticky')
-    }
+    expect(metrics.columns.split(' ')).toHaveLength(2)
+    expect(metrics.main.width).toBeGreaterThanOrEqual(520)
+    expect(metrics.pane.width).toBeGreaterThanOrEqual(360)
+    expect(metrics.pane.width).toBeLessThanOrEqual(390)
+    expect(metrics.pane.x).toBeGreaterThanOrEqual(metrics.main.right - 1)
+    expect(metrics.panePosition).toBe('sticky')
+    await page.close()
+  })
+
+  it('does not retain a max-width fallback that moves guidance below the video', async () => {
+    const page = await browser.newPage({ viewport: { width: 1120, height: 800 } })
+    await page.goto(baseUrl, { waitUntil: 'networkidle' })
+    await page.getByRole('button', { name: '去分析', exact: true }).first().click()
+    await page.locator('[data-toggle-analysis]').click()
+    await page.locator('[data-analysis-pane]').waitFor({ state: 'visible' })
+
+    const layout = await page.evaluate(() => {
+      const main = document.querySelector('.analysis-main').getBoundingClientRect()
+      const pane = document.querySelector('[data-analysis-pane]').getBoundingClientRect()
+      return {
+        columns: getComputedStyle(document.querySelector('[data-analysis-workspace]')).gridTemplateColumns,
+        mainRight: main.right,
+        paneX: pane.x,
+        panePosition: getComputedStyle(document.querySelector('[data-analysis-pane]')).position
+      }
+    })
+
+    expect(layout.columns.split(' ')).toHaveLength(2)
+    expect(layout.paneX).toBeGreaterThanOrEqual(layout.mainRight - 1)
+    expect(layout.panePosition).toBe('sticky')
     await page.close()
   })
 

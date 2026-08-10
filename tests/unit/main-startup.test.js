@@ -87,6 +87,22 @@ describe('Electron app startup', () => {
     expect(stubs.loadedUrls).toEqual(['http://127.0.0.1:3456/?shell=electron'])
   })
 
+  it('creates a content-sized window wide enough to keep recording guidance beside the video', async () => {
+    const stubs = createElectronStubs()
+
+    await startApp({
+      ...stubs,
+      createRecorderHttpServer: vi.fn(() => ({ listen: vi.fn(async () => 'http://127.0.0.1:4000'), close: vi.fn() })),
+      ensureAgentSkillsInstalled: vi.fn(async () => ({ results: [] }))
+    })
+
+    expect(stubs.windows[0].options).toMatchObject({
+      useContentSize: true,
+      width: 1280,
+      minWidth: 1200
+    })
+  })
+
   it('continues opening the recorder window when skill installation fails', async () => {
     const stubs = createElectronStubs()
     const errors = []
