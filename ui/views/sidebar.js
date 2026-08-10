@@ -22,6 +22,7 @@ export function renderSidebar({
   route,
   selectedId,
   collapsed = false,
+  analysisExpanded = false,
   locked = false,
   onNavigate,
   onNew,
@@ -29,22 +30,18 @@ export function renderSidebar({
 }) {
   container.innerHTML = `
     <aside class="app-sidebar${collapsed ? ' is-collapsed' : ''}" aria-label="录制工作区导航">
-      <div class="brand">
-        <span class="brand-mark">${brandIcon()}</span>
-        <span class="sidebar-label brand-copy"><strong>Browser Forge</strong></span>
-      </div>
-      <button class="button primary sidebar-new${route === 'new-recording' ? ' active' : ''}" type="button" data-new-recording ${locked ? 'disabled' : ''} title="新录制">
-        ${plusIcon()}<span class="sidebar-label">新录制</span>
-      </button>
-      <nav class="primary-nav" aria-label="录制导航">
-        <button type="button" data-nav="library" class="${route === 'library' ? 'active' : ''}" ${locked ? 'disabled' : ''} title="录制仓库">
-          ${libraryIcon()}<span class="sidebar-label">录制仓库</span>
+      <nav class="primary-nav" aria-label="主导航">
+        <button type="button" class="button sidebar-new${route === 'new-recording' ? ' active' : ''}" data-new-recording ${locked ? 'disabled' : ''} title="新录制">
+          ${composeIcon()}<span class="sidebar-label">新录制</span>
         </button>
       </nav>
       <section class="sidebar-recording-section" aria-labelledby="sidebar-recordings-title">
-        <div class="sidebar-section-heading sidebar-label" id="sidebar-recordings-title">最近录制</div>
+        <div class="sidebar-section-heading sidebar-label" id="sidebar-recordings-title">录制仓库</div>
+        <button type="button" data-nav="library" class="sidebar-recording sidebar-library-entry${route === 'library' ? ' active' : ''}" ${locked ? 'disabled' : ''} title="全部录制" aria-current="${route === 'library' ? 'page' : 'false'}">
+          ${libraryIcon()}<span class="recording-nav-copy sidebar-label"><strong>全部录制</strong></span>
+        </button>
         <div class="sidebar-recordings" data-sidebar-recordings>
-          ${recordings.length ? recordings.map(recording => recordingItem(recording, selectedId, route, locked)).join('') : `<p class="sidebar-empty sidebar-label">完成录制后会显示在这里</p>`}
+          ${recordings.length ? recordings.map(recording => recordingItem(recording, selectedId, route, locked, analysisExpanded)).join('') : `<p class="sidebar-empty sidebar-label">完成录制后会显示在这里</p>`}
         </div>
       </section>
       <nav class="secondary-nav" aria-label="录制管理">
@@ -52,9 +49,8 @@ export function renderSidebar({
           ${trashIcon()}<span class="sidebar-label">回收站</span>
         </button>
       </nav>
-      <div class="sidebar-note"><i></i><span class="sidebar-label">录制仅保存在这台设备</span></div>
-      <button class="sidebar-toggle" type="button" data-sidebar-toggle aria-label="${collapsed ? '展开侧边栏' : '收起侧边栏'}" title="${collapsed ? '展开侧边栏' : '收起侧边栏'}">
-        ${collapseIcon(collapsed)}<span class="sidebar-label">收起侧边栏</span>
+      <button class="sidebar-toggle" type="button" data-sidebar-toggle aria-label="${collapsed ? '显示侧边栏' : '收起侧边栏'}" title="${collapsed ? '显示侧边栏' : '收起侧边栏'}">
+        ${collapseIcon(collapsed)}<span class="sidebar-label sr-only">${collapsed ? '显示侧边栏' : '收起侧边栏'}</span>
       </button>
     </aside>`
 
@@ -70,13 +66,17 @@ export function renderSidebar({
   return () => { container.replaceChildren() }
 }
 
-function recordingItem(recording, selectedId, route, locked) {
+function recordingItem(recording, selectedId, route, locked, analysisExpanded = false) {
   const active = route === 'detail' && recording.id === selectedId
   const label = String(recording.title || '未命名录制')
+  const bubble = analysisExpanded && active
+    ? `<span class="sidebar-recording-chat" data-recording-chat="${escapeAttribute(recording.id)}" aria-hidden="true">${chatBubbleIcon()}</span>`
+    : ''
   return `
-    <button type="button" class="sidebar-recording${active ? ' active' : ''}" data-recording-nav="${escapeAttribute(recording.id)}" aria-current="${active ? 'page' : 'false'}" ${locked ? 'disabled' : ''} title="${escapeAttribute(label)}">
+    <button type="button" class="sidebar-recording${active ? ' active' : ''}${bubble ? ' has-chat' : ''}" data-recording-nav="${escapeAttribute(recording.id)}" aria-current="${active ? 'page' : 'false'}" ${locked ? 'disabled' : ''} title="${escapeAttribute(label)}">
       <span class="recording-folder" data-recording-folder="${active ? 'open' : 'closed'}" aria-hidden="true">${folderIcon(active)}</span>
       <span class="sidebar-label recording-nav-copy"><strong>${escapeHtml(label)}</strong></span>
+      ${bubble}
     </button>`
 }
 
@@ -85,11 +85,11 @@ function escapeHtml(value) {
 }
 
 function escapeAttribute(value) { return escapeHtml(value) }
+function chatBubbleIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5h12v9H8l-3.2 2.6A.75.75 0 0 1 3.5 16V5.5Z"/></svg>' }
 function folderIcon(open) { return open
   ? '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 7V5.5h5l1.5 2h6.5v2"/><path d="M3 9.5h14l-1.5 6H4.5l-1.5-6Z"/></svg>'
   : '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 5.5h5l1.5 2h6.5v8h-13v-10Z"/></svg>' }
-function brandIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="4"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01M8 14h8M12 11v6"/></svg>' }
 function libraryIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="3"/><path d="M3 8h14M7 3v14"/></svg>' }
 function trashIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 3h4l1 3H7l1-3ZM6 6l1 11h6l1-11"/></svg>' }
-function plusIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>' }
+function composeIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11.5 4.5 15 8l-7.4 7.4-3.9.4.4-3.9 7.4-7.4ZM13 6l1.5-1.5a1.4 1.4 0 0 1 2 2L15 8"/></svg>' }
 function collapseIcon(collapsed) { return `<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 4h12v12H4zM9 4v12M${collapsed ? '12 7l3 3-3 3' : '15 7l-3 3 3 3'}"/></svg>` }

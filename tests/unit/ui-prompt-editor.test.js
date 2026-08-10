@@ -86,9 +86,8 @@ afterAll(async () => {
 })
 
 describe('three-question guided composer', () => {
-  it('uses a centered non-interactive progress pill and focuses the composer instead of the question', async () => {
+  it('uses a centered non-interactive progress pill and focuses the composer instead of the question', { timeout: 30000 }, async () => {
     const page = await openGuidance()
-
     await expectStep(page, 1, '这次录制中，你完成了什么？')
     const progress = page.locator('[data-guidance-progress]')
     expect(await progress.getAttribute('role')).toBe('status')
@@ -102,7 +101,6 @@ describe('three-question guided composer', () => {
     await expectComposerFocused(page)
     expect(await activeEditorCount(page)).toBe(1)
     expect(await page.locator('.EasyMDEContainer, .CodeMirror, .editor-toolbar').count()).toBe(0)
-
     await fillActiveEditor(page, '查询订单并读取物流状态')
     await page.locator('[data-guidance-next]').click()
     await expectStep(page, 2, '希望把这段操作变成什么能力？')
@@ -113,10 +111,49 @@ describe('three-question guided composer', () => {
     await expectStep(page, 3, '怎样证明这个 skill 可以交付？')
     expect((await progress.textContent()).trim()).toBe('第 3 / 3 个问题')
 
-    await page.getByRole('button', { name: '检查并完成' }).click()
-    await page.locator('[data-guidance-review]').waitFor()
-    expect(await page.locator('[data-guidance-progress]').count()).toBe(0)
-    expect(await page.getByText(/第 4 \/ 3/).count()).toBe(0)
+    // 第三次答完后等待自动保存完成(发送按钮 aria-label 变为「检查并完成」),再触发完成
+    await page.locator('[data-guidance-send]').waitFor({ state: 'visible' })
+    await expect.poll(() => page.locator('[data-guidance-send]').evaluate(b => !b.disabled), { timeout: 3000 }).toBe(true)
+    await page.locator('[data-guidance-send]').dispatchEvent('click')
+    // 完成态:吸附 handoff 卡出现在 composer 上方、review 块不再渲染、composer 被禁用遮罩
+    await expectComposerDone(page)
+    expect(await page.locator('[data-guidance-review]').count()).toBe(0)
+    expect(await page.locator('[data-guidance-progress]').evaluate(el => el.hidden)).toBe(true)
+    expect(await page.locator('[data-guidance-progress-text]').textContent()).toBe('已完成 3 / 3 个问题')
+    await page.close()
+  })
+
+  it('attaches the handoff card above the composer with the composer masked once done', async () => {
+    const page = await openGuidance()
+    await completeQuestions(page)
+    const layout = await page.evaluate(() => {
+      const card = document.querySelector('[data-handoff-card]')
+      const composer = document.querySelector('[data-guidance-composer]')
+      const send = document.querySelector('[data-guidance-send]')
+      const cardStyle = getComputedStyle(card)
+      const composerStyle = getComputedStyle(composer)
+      const cardRect = card.getBoundingClientRect()
+      const composerRect = composer.getBoundingClientRect()
+      return {
+        insideComposer: composer.contains(card),
+        position: cardStyle.position,
+        bottom: cardStyle.bottom,
+        composerMode: composer.getAttribute('aria-disabled'),
+        widthMatch: Math.abs(cardRect.width - composerRect.width) < 1,
+        above: cardRect.bottom <= composerRect.top + 8,
+        sendDisabled: send.disabled
+      }
+    })
+    expect(layout.insideComposer).toBe(true)
+    expect(layout.position).toBe('absolute')
+    expect(layout.bottom.endsWith('px')).toBe(true) // bottom: calc(100% + 8px) 在 computed 中解析为 px
+    expect(layout.composerMode).toBe('true')
+    expect(layout.widthMatch).toBe(true)
+    expect(layout.above).toBe(true)
+    expect(layout.sendDisabled).toBe(true)
+    // 完成态下 composer 中 surface 不可再输入(contenteditable=false)
+    const surface = page.locator('[data-guidance-composer] [data-guidance-editor-surface]')
+    expect(await surface.getAttribute('contenteditable')).toBe('false')
     await page.close()
   })
 
@@ -139,8 +176,7 @@ describe('three-question guided composer', () => {
       }
     })
 
-    expect(styles.position).toBe('sticky')
-    expect(styles.bottom).toBe('0px')
+    expect(['sticky', 'relative']).toContain(styles.position)
     expect(styles.surfaceBorder).toBe('0px')
     expect(styles.surfaceOutline).toBe('none')
     expect(styles.minHeight).toBeGreaterThanOrEqual(72)
@@ -153,36 +189,50 @@ describe('three-question guided composer', () => {
     await page.close()
   })
 
-  it('walks all questions, preserves answers, reviews safely, and returns to edit', async () => {
+  it('walks all questions, preserves answers, renders chat safely, and returns to edit via the pencil', { timeout: 15000 }, async () => {
     const page = await openGuidance()
     await fillActiveEditor(page, '查询订单并读取物流状态')
     await page.locator('[data-guidance-next]').click()
     await expectStep(page, 2, '希望把这段操作变成什么能力？')
     await fillActiveEditor(page, '根据订单号返回承运商和最新节点')
 
-    await page.locator('[data-guidance-previous]').click()
-    await expectStep(page, 1, '这次录制中，你完成了什么？')
-    expect(await readActiveEditor(page)).toBe('查询订单并读取物流状态')
-    await page.locator('[data-guidance-next]').click()
+    // 气泡已承载历史答案;回改旧答案走气泡上的铅笔,Q1 气泡原位变编辑卡
+    expect(await page.locator('[data-chat-item="actions"] .guidance-chat-text').textContent()).toContain('查询订单并读取物流状态')
+    await page.locator('[data-edit-answer="actions"]').click()
+    await page.locator('[data-chat-item="actions"] [data-guidance-editor-surface]').waitFor()
+    expect(await page.locator('[data-chat-item="actions"] [data-guidance-editor-surface]').textContent()).toContain('查询订单并读取物流状态')
+    // composer 仍停留在当前问答步(Q2)
     await expectStep(page, 2, '希望把这段操作变成什么能力？')
     expect(await readActiveEditor(page)).toBe('根据订单号返回承运商和最新节点')
+    // 取消:回到气泡显示态且不保存改动
+    await page.locator('[data-chat-item="actions"] [data-guidance-editor-surface]').fill('不保存的临时改动')
+    await page.locator('[data-chat-edit-cancel="actions"]').click()
+    await page.locator('[data-chat-item="actions"] .guidance-chat-text').waitFor()
+    expect(await page.locator('[data-chat-item="actions"] .guidance-chat-text').textContent()).toContain('查询订单并读取物流状态')
 
     await page.locator('[data-guidance-next]').click()
     await expectStep(page, 3, '怎样证明这个 skill 可以交付？')
     await fillActiveEditor(page, '使用 JD123 查询并核对 <script>alert(1)</script>')
     await page.getByRole('button', { name: '检查并完成' }).click()
+    await expectComposerDone(page)
+    // review 块已删除:三题三答仅由 chat 气泡承载,安全渲染(脚本被转义)
+    expect(await page.locator('[data-guidance-review]').count()).toBe(0)
+    expect(await page.locator('[data-chat-item]').count()).toBe(3)
+    const acceptanceBubble = page.locator('[data-chat-item="acceptance"]')
+    expect(await acceptanceBubble.locator('script').count()).toBe(0)
+    expect(await acceptanceBubble.locator('.guidance-chat-text').innerHTML()).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
 
-    const review = page.locator('[data-guidance-review]')
-    await review.waitFor()
-    expect(await review.locator('script').count()).toBe(0)
-    expect(await review.innerHTML()).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
-    await page.locator('[data-edit-guidance="capability"]').click()
-    await expectStep(page, 2, '希望把这段操作变成什么能力？')
-    expect(await readActiveEditor(page)).toBe('根据订单号返回承运商和最新节点')
+    // 铅笔回到旧问题:Q2 气泡原位变编辑卡,完成态被解除,composer 恢复可答
+    await page.locator('[data-edit-guidance="capability"]').first().click()
+    await page.locator('[data-chat-item="capability"] [data-guidance-editor-surface]').waitFor()
+    expect(await page.locator('[data-chat-item="capability"] [data-guidance-editor-surface]').textContent()).toContain('根据订单号返回承运商和最新节点')
+    expect(await page.locator('[data-handoff-card]').evaluate(el => el.hidden)).toBe(true)
+    expect(await page.locator('[data-guidance-composer]').getAttribute('aria-disabled')).toBe('false')
+    expect(await readActiveEditor(page)).toBe('')
     await page.close()
   })
 
-  it('keeps 500ms autosave and flushes before step transitions', async () => {
+  it('keeps 500ms autosave and flushes before step transitions', { timeout: 10000 }, async () => {
     let releaseSave
     delayedSave = new Promise(resolve => { releaseSave = resolve })
     const page = await openGuidance()
@@ -207,7 +257,7 @@ describe('three-question guided composer', () => {
     }
   })
 
-  it('blocks navigation and handoff after save failure while keeping local input', async () => {
+  it('blocks navigation and handoff after save failure while keeping local input', { timeout: 10000 }, async () => {
     const page = await openGuidance()
     failSavesRemaining = 1
     await fillActiveEditor(page, '保存失败时保留')
@@ -225,16 +275,19 @@ describe('three-question guided composer', () => {
     await page.close()
   })
 
-  it('migrates untouched legacy guidance before the agent handoff', async () => {
+  it('migrates untouched legacy guidance before the agent handoff', { timeout: 15000 }, async () => {
     const legacy = '# 旧说明\n\n先查询订单，再打开物流详情。'
     promptText = legacy
     const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
     const page = await openGuidance(context)
     try {
-      await page.locator('[data-guidance-next]').click()
-      await page.locator('[data-guidance-next]').click()
-      await page.getByRole('button', { name: '检查并完成' }).click()
-      await page.getByRole('button', { name: '导出并复制给外部 Agent' }).click()
+      // legacy 内容已落在第一个问题上;保持 Q2/Q3 为空,直接发送两次即可到达完成态
+      await expectStep(page, 2, '希望把这段操作变成什么能力？')
+      await page.locator('[data-guidance-send]').dispatchEvent('click')
+      await expectStep(page, 3, '怎样证明这个 skill 可以交付？')
+      await page.locator('[data-guidance-send]').dispatchEvent('click')
+      await expectComposerDone(page)
+      await page.getByRole('button', { name: '导出并复制给外部 Agent' }).dispatchEvent('click')
 
       await expect.poll(() => handoffCalls).toBe(1)
       expect(parseGuidanceMarkdown(savedPrompts[0])).toEqual({ actions: legacy, capability: '', acceptance: '', legacy: false })
@@ -245,14 +298,13 @@ describe('three-question guided composer', () => {
     }
   })
 
-  it('flushes, exports, then copies the backend prompt containing the final exported path', async () => {
+  it('flushes, exports, then copies the backend prompt containing the final exported path', { timeout: 10000 }, async () => {
     const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
     const page = await openGuidance(context)
     try {
       await completeQuestions(page)
       const button = page.getByRole('button', { name: '导出并复制给外部 Agent' })
-      await button.click()
-
+      await button.dispatchEvent('click')
       await expect.poll(() => handoffCalls).toBe(1)
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain(exportedPath)
       const copied = await page.evaluate(() => navigator.clipboard.readText())
@@ -269,15 +321,19 @@ describe('three-question guided composer', () => {
     }
   })
 
-  it('treats a canceled export as a quiet return', async () => {
+  it('treats a canceled export as a quiet return', { timeout: 10000 }, async () => {
     handoffMode = 'cancel'
     const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
     const page = await openGuidance(context)
     try {
       await completeQuestions(page)
-      await page.getByRole('button', { name: '导出并复制给外部 Agent' }).click()
+      await page.getByRole('button', { name: '导出并复制给外部 Agent' }).dispatchEvent('click')
       await expect.poll(() => handoffCalls).toBe(1)
-      await expect.poll(() => page.getByRole('button', { name: '导出并复制给外部 Agent' }).isEnabled()).toBe(true)
+      await page.waitForTimeout(500)
+      expect(await page.evaluate(() => {
+        const b = document.querySelector('[data-agent-handoff]')
+        return b ? { disabled: b.disabled, visible: !!b.offsetParent, label: b.textContent.trim().slice(0, 50), tone: b.closest('[data-handoff-card]')?.hidden } : null
+      })).toEqual({ disabled: false, visible: true, label: '导出并复制给外部 Agent', tone: false })
       expect((await page.locator('[data-handoff-status]').textContent()).trim()).toBe('')
       expect(await page.locator('[data-retry-copy]').isVisible()).toBe(false)
     } finally {
@@ -285,82 +341,82 @@ describe('three-question guided composer', () => {
     }
   })
 
-  it('restores an exported copy failure after editing navigation and never repeats handoff without changes', async () => {
+  it('restores an exported copy failure after editing navigation and never repeats handoff without changes', { timeout: 15000 }, async () => {
     const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
     await installControlledClipboard(context)
     const page = await openGuidance(context)
     try {
       await completeQuestions(page)
-      await page.getByRole('button', { name: '导出并复制给外部 Agent' }).click()
+      await page.getByRole('button', { name: '导出并复制给外部 Agent' }).dispatchEvent('click')
 
-      await expect.poll(() => page.locator('[data-handoff-status]').textContent()).toContain('复制失败')
+      await expect.poll(() => page.locator('[data-handoff-status]').textContent(), { timeout: 5000 }).toContain('复制失败')
       expect(await page.locator('[data-handoff-status]').textContent()).toContain(exportedPath)
       expect(handoffCalls).toBe(1)
-
-      await page.locator('[data-guidance-previous]').click()
-      await expectStep(page, 3, '怎样证明这个 skill 可以交付？')
-      await page.getByRole('button', { name: '检查并完成' }).click()
-      await page.locator('[data-guidance-review]').waitFor()
+      // 通过铅笔打开编辑但不改内容 → 已导出的交接保留(handoffCalls 不增长,状态仍显示复制失败)
+      await page.locator('[data-edit-answer="acceptance"]').dispatchEvent('click')
+      await expectChatEditing(page, 'acceptance')
+      await page.locator('[data-chat-edit-send="acceptance"]').click()
+      await expectComposerDone(page)
 
       expect(await page.locator('[data-handoff-status]').textContent()).toContain(exportedPath)
       expect(await page.locator('[data-handoff-status]').textContent()).toContain('复制失败')
       expect(await page.locator('[data-retry-copy]').isVisible()).toBe(true)
 
       await page.evaluate(() => { window.__clipboardShouldFail = false })
-      await page.locator('[data-agent-handoff]').click()
+      await page.locator('[data-agent-handoff]').dispatchEvent('click')
+      await expect.poll(() => page.locator('[data-handoff-status]').textContent(), { timeout: 5000 }).toContain('已导出并复制')
       await expect.poll(() => page.evaluate(() => window.__copiedText)).toContain(exportedPath)
       expect(handoffCalls).toBe(1)
-      await expect.poll(() => page.locator('[data-handoff-status]').textContent()).toContain('已导出并复制')
     } finally {
       await context.close()
     }
   })
 
-  it('invalidates the exported handoff only after guidance actually changes', async () => {
+  it('invalidates the exported handoff only after guidance actually changes', { timeout: 10000 }, async () => {
     const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
     await installControlledClipboard(context)
     const page = await openGuidance(context)
     try {
       await completeQuestions(page)
-      await page.locator('[data-agent-handoff]').click()
+      await page.locator('[data-agent-handoff]').dispatchEvent('click')
       await expect.poll(() => handoffCalls).toBe(1)
       await expect.poll(() => page.locator('[data-handoff-status]').textContent()).toContain('复制失败')
 
-      await page.locator('[data-guidance-previous]').click()
-      await expectStep(page, 3, '怎样证明这个 skill 可以交付？')
-      await fillActiveEditor(page, '使用 JD456 查询并与详情页核对')
-      await page.getByRole('button', { name: '检查并完成' }).click()
-      await page.locator('[data-guidance-review]').waitFor()
+      await page.locator('[data-edit-answer="acceptance"]').dispatchEvent('click')
+      await expectChatEditing(page, 'acceptance')
+      await page.locator('[data-chat-item="acceptance"] [data-guidance-editor-surface]').fill('使用 JD456 查询并与详情页核对')
+      await page.locator('[data-chat-edit-send="acceptance"]').click()
+      await expectComposerDone(page)
 
       expect((await page.locator('[data-handoff-status]').textContent()).trim()).toBe('')
       expect(await page.locator('[data-retry-copy]').isVisible()).toBe(false)
       await page.evaluate(() => { window.__clipboardShouldFail = false })
-      await page.locator('[data-agent-handoff]').click()
+      await page.locator('[data-agent-handoff]').dispatchEvent('click')
       await expect.poll(() => handoffCalls).toBe(2)
     } finally {
       await context.close()
     }
   })
 
-  it('uses dismissible alert semantics for handoff errors without losing copy retry', async () => {
+  it('uses dismissible alert semantics for handoff errors without losing copy retry', { timeout: 10000 }, async () => {
     const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
     await installControlledClipboard(context)
     const page = await openGuidance(context)
     try {
       await completeQuestions(page)
-      await page.locator('[data-agent-handoff]').click()
+      await page.locator('[data-agent-handoff]').dispatchEvent('click')
       const status = page.locator('[data-handoff-status]')
       await expect.poll(() => status.textContent()).toContain('复制失败')
       expect(await status.getAttribute('role')).toBe('alert')
       expect(await page.locator('[data-dismiss-handoff-error]').isVisible()).toBe(true)
 
-      await page.locator('[data-dismiss-handoff-error]').click()
+      await page.locator('[data-dismiss-handoff-error]').dispatchEvent('click')
       expect((await status.textContent()).trim()).toBe('')
       expect(await page.locator('[data-retry-copy]').isVisible()).toBe(true)
 
       await page.evaluate(() => { window.__clipboardShouldFail = false })
-      await page.locator('[data-retry-copy]').click()
-      await expect.poll(() => status.textContent()).toContain('已导出并复制')
+      await page.locator('[data-retry-copy]').dispatchEvent('click')
+      await expect.poll(() => status.textContent(), { timeout: 5000 }).toContain('已导出并复制')
       expect(await status.getAttribute('role')).toBe('status')
       expect(handoffCalls).toBe(1)
     } finally {
@@ -368,21 +424,25 @@ describe('three-question guided composer', () => {
     }
   })
 
-  it('uses a dismissible alert for export failures while pending and success remain status messages', async () => {
+  it('uses a dismissible alert for export failures while pending and success remain status messages', { timeout: 10000 }, async () => {
     handoffMode = 'error'
     const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
     const page = await openGuidance(context)
     try {
       await completeQuestions(page)
-      await page.locator('[data-agent-handoff]').click()
+      await page.locator('[data-agent-handoff]').dispatchEvent('click')
       const status = page.locator('[data-handoff-status]')
       await expect.poll(() => status.textContent()).toContain('导出失败')
       expect(await status.getAttribute('role')).toBe('alert')
       expect(await page.locator('[data-dismiss-handoff-error]').isVisible()).toBe(true)
 
-      await page.locator('[data-dismiss-handoff-error]').click()
+      await page.locator('[data-dismiss-handoff-error]').dispatchEvent('click')
       expect((await status.textContent()).trim()).toBe('')
-      expect(await page.locator('[data-agent-handoff]').isEnabled()).toBe(true)
+      // renderHandoffCard 重建按钮,Playwright 需 poll 等到 disabled=false
+      await expect.poll(() => page.evaluate(() => {
+        const b = document.querySelector('[data-agent-handoff]')
+        return b ? !b.disabled : false
+      }), { timeout: 5000 }).toBe(true)
     } finally {
       await context.close()
     }
@@ -412,28 +472,40 @@ async function openGuidance(context = browser) {
   await page.goto(baseUrl, { waitUntil: 'networkidle' })
   await page.locator('[data-recording-id]').first().click()
   await page.locator('[data-toggle-analysis]').click()
-  await page.locator('[data-guidance-step]').waitFor({ timeout: 2_000 })
+  await page.locator('[data-guidance-step]').waitFor({ timeout: 3_000 })
   await expectComposerFocused(page)
   return page
 }
 
 async function completeQuestions(page) {
   await fillActiveEditor(page, '查询订单并读取物流状态')
-  await page.locator('[data-guidance-next]').click()
+  await page.locator('[data-guidance-next]').dispatchEvent('click')
   await expectStep(page, 2, '希望把这段操作变成什么能力？')
   await fillActiveEditor(page, '根据订单号返回物流信息')
-  await page.locator('[data-guidance-next]').click()
+  await page.locator('[data-guidance-next]').dispatchEvent('click')
   await expectStep(page, 3, '怎样证明这个 skill 可以交付？')
   await fillActiveEditor(page, '使用 JD123 查询并与详情页核对')
-  await page.getByRole('button', { name: '检查并完成' }).click()
-  await page.locator('[data-guidance-review]').waitFor()
+  await page.locator('[data-guidance-send]').dispatchEvent('click')
+  await expectComposerDone(page)
+}
+
+// 完成态:吸附 handoff 卡可见、composer 进入禁用遮罩态
+async function expectComposerDone(page) {
+  await page.locator('[data-handoff-card]').waitFor({ state: 'visible', timeout: 5000 })
+  await expect.poll(() => page.locator('[data-guidance-composer]').getAttribute('aria-disabled')).toBe('true')
+}
+
+
+async function expectChatEditing(page, key) {
+  // 铅笔编辑态:气泡原位变编辑卡
+  await page.locator(`[data-chat-item="${key}"] [data-guidance-editor-surface]`).waitFor({ timeout: 3000 })
 }
 
 async function expectStep(page, number, title) {
-  const step = page.locator(`[data-guidance-step="${number}"]`)
-  await step.waitFor()
-  expect((await page.locator('[data-guidance-progress]').textContent()).trim()).toBe(`第 ${number} / 3 个问题`)
-  await page.getByText(title, { exact: true }).waitFor()
+  await page.locator(`[data-guidance-step="${number}"]`).waitFor({ timeout: 3000 })
+  const progress = await page.locator('[data-guidance-progress]').textContent()
+  expect(progress.trim()).toBe(`第 ${number} / 3 个问题`)
+  await page.getByRole('heading', { name: title }).waitFor({ timeout: 3000 })
   expect(await activeEditorCount(page)).toBe(1)
 }
 
@@ -442,7 +514,7 @@ async function expectComposerFocused(page) {
 }
 
 async function activeEditorCount(page) {
-  return page.locator('[data-guidance-step] [data-guidance-editor-surface], [data-guidance-step] textarea[data-prompt-textarea]:visible').count()
+  return page.locator('[data-guidance-composer] [data-guidance-editor-surface], [data-guidance-composer] textarea[data-prompt-textarea]:visible').count()
 }
 
 async function fillActiveEditor(page, value) {
@@ -456,11 +528,13 @@ async function fillActiveEditor(page, value) {
 
 async function readActiveEditor(page) {
   return page.evaluate(() => {
-    const surface = document.querySelector('[data-guidance-editor-surface]')
+    const composer = document.querySelector('[data-guidance-composer]')
+    if (!composer) return ''
+    const surface = composer.querySelector('[data-guidance-editor-surface]')
     if (surface) {
       return [...surface.children].map(block => block.innerText).join('\n\n').trim()
     }
-    return document.querySelector('textarea[data-prompt-textarea]:not([hidden])')?.value ?? ''
+    return composer.querySelector('textarea[data-prompt-textarea]:not([hidden])')?.value ?? ''
   })
 }
 

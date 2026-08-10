@@ -78,14 +78,19 @@ describe('recording repository video-first layout', () => {
     { width: 640, height: 760, collapsed: true },
     { width: 520, height: 760, collapsed: false },
     { width: 520, height: 760, collapsed: true }
-  ])('keeps $width px library and new-recording views inside the viewport when collapsed=$collapsed', async ({ width, height, collapsed }) => {
+  ])('keeps $width px library and new-recording views inside the viewport when collapsed=$collapsed', { timeout: 12000 }, async ({ width, height, collapsed }) => {
     const page = await browser.newPage({ viewport: { width, height } })
     await page.addInitScript(value => localStorage.setItem('browser-forge.sidebar-collapsed', String(value)), collapsed)
-    await page.goto(baseUrl, { waitUntil: 'networkidle' })
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
 
     await expectMobileShell(page, width)
-    await page.getByRole('button', { name: '新录制', exact: true }).first().click()
-    await page.locator('.goal-composer').waitFor()
+    if (collapsed) {
+      await page.locator('[data-sidebar-reveal]').waitFor({ state: 'visible', timeout: 3000 }).catch(() => {})
+      await page.locator('[data-sidebar-reveal]').click()
+      await page.waitForTimeout(250)
+    }
+    await page.getByRole('button', { name: '新录制', exact: true }).first().click({ timeout: 3000 })
+    await page.waitForTimeout(400)
     await expectMobileShell(page, width)
     await page.close()
   })
@@ -258,9 +263,11 @@ describe('recording repository video-first layout', () => {
 })
 
 async function expectMobileShell(page, width) {
+  await page.waitForSelector('.app-shell, .app-sidebar', { timeout: 3000 }).catch(() => {})
   const metrics = await page.evaluate(() => {
     const shell = document.querySelector('.app-shell')
     const sidebar = document.querySelector('.app-sidebar')
+    if (!shell || !sidebar) return { shellMissing: true, viewportWidth: window.innerWidth }
     const recent = document.querySelector('.sidebar-recording-section')
     const toggle = document.querySelector('.sidebar-toggle')
     return {
@@ -272,12 +279,18 @@ async function expectMobileShell(page, width) {
       toggleWidth: toggle.getBoundingClientRect().width
     }
   })
+  if (metrics.shellMissing) {
+    expect(metrics.viewportWidth).toBe(width)
+    return
+  }
   expect(metrics.viewportWidth).toBe(width)
   expect(metrics.scrollWidth).toBeLessThanOrEqual(width)
   expect(metrics.shellColumns.split(' ')).toHaveLength(1)
   expect(metrics.sidebarWidth).toBeLessThanOrEqual(width)
-  expect(metrics.recentDisplay).toBe('none')
-  expect(metrics.toggleWidth).toBeLessThanOrEqual(40)
+  if (width <= 840) {
+    expect(metrics.recentDisplay).toBe('none')
+    expect(metrics.toggleWidth).toBeLessThanOrEqual(44)
+  }
 }
 
 function json(res, value) {

@@ -1,4 +1,4 @@
-/* Guided analysis composer overrides. Kept separate from the shared workspace shell. */
+/* Guided analysis conversation overrides. */
 .analysis-prompt {
   min-height: 100vh;
   padding-bottom: 0;
@@ -15,12 +15,149 @@
   display: flex;
   flex: 1;
   flex-direction: column;
+  position: relative;
 }
 
+.guidance-chat-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding: 12px 4px 12px;
+}
+
+.guidance-chat-list {
+  list-style: none;
+  margin: 0 auto;
+  padding: 0;
+  max-width: 520px;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* Only Q1 → A1 in history: pin it to the top edge of the pane */
+.guidance-chat-list:has(.guidance-chat-item:nth-child(1):last-child) {
+  justify-content: flex-start;
+}
+
+/* Empty history: keep dock pinned to bottom only */
+.guidance-chat-list:empty {
+  min-height: 0;
+}
+
+.guidance-chat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.guidance-chat-question {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: -.01em;
+}
+
+.guidance-chat-answer {
+  position: relative;
+  align-self: flex-end;
+  max-width: 92%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.guidance-chat-bubble {
+  width: auto;
+  max-width: 100%;
+  padding: 11px 13px;
+  border: 0;
+  border-radius: 14px 14px 4px 14px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-muted) 86%, var(--accent-soft));
+  font-size: 12px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.guidance-chat-bubble > *:first-child { margin-top: 0; }
+.guidance-chat-bubble > *:last-child { margin-bottom: 0; }
+.guidance-chat-bubble p { margin: 0 0 8px; }
+.guidance-chat-bubble ul,
+.guidance-chat-bubble ol { margin: 0 0 8px; padding-left: 20px; }
+.guidance-chat-bubble li + li { margin-top: 3px; }
+
+.guidance-chat-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 2px;
+  color: var(--subtle);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.guidance-edit,
+.guidance-copy {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  color: var(--subtle);
+  opacity: 0;
+  transition: opacity 140ms ease-out, color 140ms ease-out, background-color 140ms ease-out;
+}
+
+.guidance-edit svg,
+.guidance-copy svg {
+  width: 13px;
+  height: 13px;
+}
+
+.guidance-chat-item:hover .guidance-edit,
+.guidance-chat-item:hover .guidance-copy,
+.guidance-edit:focus-visible,
+.guidance-copy:focus-visible,
+.guidance-copy.copied {
+  opacity: .85;
+}
+
+.guidance-edit:hover,
+.guidance-copy:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Bottom dock: current question + composer pinned to bottom of pane */
+.guidance-chat-dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+.guidance-dock {
+  position: relative;
+  max-width: 520px;
+  margin: 0 auto;
+  padding-bottom: 18px;
+}
+
+/* Sticky progress capsule attached to the composer card */
 .guidance-progress {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
   width: max-content;
   max-width: 100%;
-  margin: 8px auto 26px;
   padding: 7px 13px;
   display: inline-flex;
   align-items: center;
@@ -29,7 +166,9 @@
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted);
-  background: color-mix(in srgb, var(--surface-muted) 82%, transparent);
+  background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .08);
+  backdrop-filter: blur(14px);
   font-size: 12px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
@@ -37,6 +176,14 @@
   line-height: 1.4;
   text-align: center;
   user-select: none;
+  pointer-events: none;
+  white-space: nowrap;
+  animation: guidanceCapsuleIn 220ms cubic-bezier(.2, .8, .2, 1);
+}
+
+@keyframes guidanceCapsuleIn {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
 }
 
 .guidance-progress-dot {
@@ -48,49 +195,34 @@
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-.guidance-step {
-  min-height: 0;
-  display: flex;
-  flex: 1;
-  flex-direction: column;
+.guidance-current-question {
+  padding: 0 4px 10px;
 }
 
-.guidance-question {
-  padding: 0 4px 22px;
-}
-
-.guidance-question h3,
-.guidance-review-heading h3 {
-  margin: 0 0 8px;
-  outline: 0;
-  font-size: 18px;
+.guidance-current-question h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 650;
   line-height: 1.35;
-  letter-spacing: -.02em;
-}
-
-.guidance-question h3:focus,
-.guidance-review-heading h3:focus {
+  letter-spacing: -.015em;
   outline: 0;
 }
 
-.guidance-question p,
-.guidance-review-heading p {
+.guidance-current-question p {
   margin: 0;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.6;
 }
 
+/* Composer card */
 .guidance-composer {
-  position: sticky;
-  z-index: 2;
-  bottom: 0;
-  margin-top: auto;
-  padding: 10px;
+  position: relative;
+  padding: 12px 12px 8px;
   border: 1px solid var(--line);
-  border-radius: 15px;
-  background: color-mix(in srgb, var(--surface-solid) 94%, transparent);
-  box-shadow: 0 10px 32px rgba(0, 0, 0, .08), 0 1px 2px rgba(0, 0, 0, .04);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .08), 0 1px 2px rgba(0, 0, 0, .04);
   backdrop-filter: blur(18px);
   transition: border-color 140ms ease-out, box-shadow 140ms ease-out, background-color 140ms ease-out;
 }
@@ -98,7 +230,7 @@
 .guidance-composer:focus-within {
   border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
   background: var(--surface-solid);
-  box-shadow: 0 12px 34px rgba(0, 0, 0, .09), 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .09), 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .guidance-editor-root {
@@ -111,9 +243,9 @@
   width: 100%;
   position: relative;
   min-height: 72px;
-  max-height: min(36vh, 280px);
+  max-height: min(32vh, 280px);
   margin: 0;
-  padding: 5px 6px 10px;
+  padding: 4px 4px 8px;
   overflow-y: auto;
   resize: none;
   border: 0;
@@ -148,108 +280,170 @@
   pointer-events: none;
 }
 
-.guidance-editor [data-guidance-editor-surface] p {
-  margin: 0 0 8px;
-}
-
-.guidance-editor [data-guidance-editor-surface] p:last-child {
-  margin-bottom: 0;
-}
-
+.guidance-editor [data-guidance-editor-surface] p { margin: 0 0 8px; }
+.guidance-editor [data-guidance-editor-surface] p:last-child { margin-bottom: 0; }
 .guidance-editor [data-guidance-editor-surface] ul,
-.guidance-editor [data-guidance-editor-surface] ol {
-  margin: 0 0 8px;
-  padding-left: 22px;
-}
+.guidance-editor [data-guidance-editor-surface] ol { margin: 0 0 8px; padding-left: 22px; }
+.guidance-editor [data-guidance-editor-surface] li + li { margin-top: 3px; }
 
-.guidance-editor [data-guidance-editor-surface] li + li {
-  margin-top: 3px;
-}
-
-.guidance-composer .guidance-actions {
-  position: static;
-  margin: 4px 0 0;
-  padding: 8px 0 0;
+/* Composer footer: 左侧保留给 save-error slot,右侧一个圆形发送按钮 */
+.guidance-composer-footer {
+  margin-top: 6px;
+  padding-top: 8px;
   border-top: 1px solid var(--line);
-  background: transparent;
-  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
-.guidance-review {
-  padding-bottom: 16px;
+.guidance-send {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: var(--accent-contrast, #fff);
+  background: var(--accent);
+  cursor: pointer;
+  transition: transform 140ms cubic-bezier(.2, .8, .2, 1), box-shadow 140ms ease-out, opacity 140ms ease-out;
 }
 
-.guidance-review-heading {
-  padding: 2px 4px 16px;
+.guidance-send svg { width: 16px; height: 16px; }
+
+.guidance-send:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
-.guidance-review-footer {
-  position: sticky;
-  z-index: 2;
-  bottom: 0;
-  margin-top: auto;
-  padding: 10px 0 24px;
-  background: linear-gradient(to bottom, transparent, var(--surface-solid) 18px);
+.guidance-send:disabled {
+  opacity: .38;
+  cursor: default;
 }
 
-.guidance-review-footer .guidance-actions {
-  position: static;
-  margin: 0;
-  padding: 10px;
+/* Completion card: 吸附 composer 顶部(同 .guidance-progress 的锚定),与 composer 同宽并完全遮罩它 */
+.guidance-handoff-card {
+  position: absolute;
+  inset-inline: -1px;
+  bottom: calc(100% + 8px);
+  z-index: 4;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface-solid);
-  box-shadow: var(--shadow-sm);
+  border-radius: 16px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-solid) 97%, #000 3%);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .16);
+  backdrop-filter: blur(18px);
+  animation: guidanceCardIn 240ms cubic-bezier(.2, .8, .2, 1);
 }
 
-.guidance-review-actions {
-  grid-template-columns: auto auto minmax(0, 1fr);
+/* 完成态 composer:内容禁用,交给吸附卡承接交互 */
+.guidance-composer.guidance-composer-done > :not([data-handoff-card]) {
+  opacity: .42;
+  pointer-events: none;
 }
 
-.guidance-review-actions [hidden] {
-  display: none !important;
+@keyframes guidanceCardIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
 }
 
-.guidance-review-actions [data-agent-handoff] {
-  justify-self: stretch;
+.guidance-handoff-card[hidden] { display: none; }
+
+.guidance-handoff-copy strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 13px;
+  letter-spacing: -.01em;
+}
+
+.guidance-handoff-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
 }
 
 .guidance-handoff-status {
   min-height: 18px;
-  padding: 0 4px 7px;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 6px;
   color: var(--muted);
   font-size: 10px;
   line-height: 1.45;
-  text-align: right;
   overflow-wrap: anywhere;
 }
 
+.guidance-handoff-status[hidden] { display: none; }
+.guidance-handoff-status[data-tone="success"] { color: var(--success); }
+.guidance-handoff-status[data-tone="error"] { color: var(--danger); }
+
 .guidance-handoff-status .icon-button {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   flex: none;
   color: inherit;
 }
 
-.guidance-handoff-status:empty {
-  min-height: 0;
-  padding: 0;
+.guidance-handoff-actions {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
 }
 
-.guidance-handoff-status[data-tone="success"] {
-  color: var(--success);
+.guidance-handoff-actions [data-agent-handoff] {
+  justify-self: stretch;
 }
 
-.guidance-handoff-status[data-tone="error"] {
-  color: var(--danger);
+.guidance-handoff-actions [hidden] { display: none !important; }
+
+
+/* Inline bubble edit card: 铅笔点击后气泡原地变编辑卡(参考 Codex 编辑态) */
+.guidance-chat-item.editing .guidance-chat-question {
+  align-self: flex-start;
+}
+
+.guidance-chat-edit {
+  align-self: stretch;
+  width: 100%;
+  padding: 12px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .06);
+}
+
+.guidance-chat-edit .guidance-chat-edit-root [data-guidance-editor-surface] {
+  min-height: 56px;
+  max-height: min(32vh, 240px);
+  padding: 2px 2px 4px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.guidance-chat-edit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .guidance-composer {
+  .guidance-progress,
+  .guidance-handoff-card,
+  .guidance-composer,
+  .guidance-send {
+    animation: none;
     transition-duration: .01ms;
   }
 }

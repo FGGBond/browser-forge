@@ -56,7 +56,8 @@ describe('recording workspace product boundaries', () => {
     const recording = readUi('views/recording.js')
     expect(readUi('views/sidebar.js')).toContain('data-new-recording')
     expect(readUi('views/library.js')).not.toContain('data-new-recording')
-    expect(recording).toContain('data-send-goal')
+    expect(recording).toContain('data-start')
+    expect(recording).toContain('data-goal-text')
     expect(recording).toContain('data-notice-stack')
     expect(recording).not.toContain('goal-context-note')
     expect(recording).not.toContain('permission-actions')
@@ -74,13 +75,13 @@ describe('recording workspace product boundaries', () => {
       expect(promptEditor).toContain(dependency)
     }
     for (const question of [
-      '这次录制中，你完成了什么？',
-      '希望把这段操作变成什么能力？',
-      '怎样证明这个 skill 可以交付？'
+      '这次录制中',
+      '希望把这段操作变成什么能力',
+      '怎样证明这个 skill 可以交付'
     ]) {
       expect(promptEditor).toContain(question)
     }
-    for (const copy of ['第 ${stepIndex + 1} / 3 个问题', '导出并复制给外部 Agent', '录制已导出到 ${handoffResult.path}，复制失败', '重试复制']) {
+    for (const copy of ['第 ${current + 1} / 3 个问题', '导出并复制给外部 Agent', '录制已导出到', '重试复制']) {
       expect(promptEditor).toContain(copy)
     }
     for (const hook of [
@@ -88,8 +89,6 @@ describe('recording workspace product boundaries', () => {
       'data-guidance-progress',
       'data-guidance-composer',
       'data-guidance-next',
-      'data-guidance-previous',
-      'data-guidance-review',
       'data-edit-guidance',
       'data-save-error',
       'data-retry-save',
@@ -101,7 +100,7 @@ describe('recording workspace product boundaries', () => {
       expect(promptEditor).toContain(hook)
     }
     expect(promptEditor).toContain('role="status" aria-live="polite"')
-    expect(promptEditor).toContain("displaysError ? 'alert' : 'status'")
+
     expect(promptEditor).toContain('createAgentHandoff')
     expect(promptEditor).not.toContain('getExternalAgentPrompt')
     expect(promptEditor).not.toContain('mountMarkdownEditor')

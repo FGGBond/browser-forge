@@ -1,8 +1,15 @@
 import { renderPromptEditor } from './prompt-editor.js'
+import { mountSplitHandle } from './split-resize.js'
 import { mountVideoPlayer } from './video-player.js'
+import { readNumberPreference, writeNumberPreference } from '../layout-prefs.js'
 
 const PANE_EXIT_DURATION_MS = 140
 const REDUCED_MOTION_EXIT_DURATION_MS = 120
+const PANE_MIN_WIDTH = 300
+const PANE_MAX_WIDTH = 680
+const PANE_DEFAULT_WIDTH = 380
+const MAIN_MIN_WIDTH = 520
+const PANE_WIDTH_KEY = 'analysis-pane-width'
 
 export async function renderDetail({
   container,
@@ -12,7 +19,8 @@ export async function renderDetail({
   onTrashed,
   onRecordingUpdated = () => {},
   analysisPaneOpen = false,
-  onAnalysisPaneChange = () => {}
+  onAnalysisPaneChange = () => {},
+  onToggleSidebar = () => {}
 }) {
   container.innerHTML = `<section class="detail-loading"><div class="loading-ring"></div><span>正在读取录制…</span></section>`
   try {
@@ -37,6 +45,74 @@ export async function renderDetail({
     const paneExitDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
       ? REDUCED_MOTION_EXIT_DURATION_MS
       : PANE_EXIT_DURATION_MS
+
+    const clampPaneWidth = width => Math.min(Math.max(width, PANE_MIN_WIDTH), PANE_MAX_WIDTH)
+    const applyPaneWidth = width => {
+      const clamped = clampPaneWidth(width)
+      workspace.style.setProperty('--pane-w', `${Math.round(clamped)}px`)
+      workspace.style.removeProperty('--pane-w-auto-eq')
+      return clamped
+    }
+    const readPaneWidth = () => {
+      const rect = pane.getBoundingClientRect()
+      if (rect.width > 1) return rect.width
+      return clampPaneWidth(readNumberPreference(PANE_WIDTH_KEY, PANE_DEFAULT_WIDTH))
+    }
+    applyPaneWidth(readNumberPreference(PANE_WIDTH_KEY, PANE_DEFAULT_WIDTH))
+
+    const paneResizeHandle = document.createElement('div')
+    paneResizeHandle.className = 'pane-resize-handle'
+    paneResizeHandle.setAttribute('role', 'separator')
+    paneResizeHandle.setAttribute('aria-orientation', 'vertical')
+    paneResizeHandle.setAttribute('aria-label', '调整分析栏宽度(方向键,Home 最窄,End 最宽)')
+    paneResizeHandle.setAttribute('aria-valuemin', String(PANE_MIN_WIDTH))
+    paneResizeHandle.setAttribute('aria-valuemax', String(PANE_MAX_WIDTH))
+    paneResizeHandle.setAttribute('aria-valuenow', String(Math.round(readPaneWidth())))
+    paneResizeHandle.tabIndex = 0
+    workspace.insertBefore(paneResizeHandle, pane)
+    const maxPaneWidth = () => {
+      const bounds = workspace.getBoundingClientRect().width
+      if (!Number.isFinite(bounds) || bounds <= 0) return PANE_MAX_WIDTH
+      return Math.max(PANE_MIN_WIDTH, Math.min(PANE_MAX_WIDTH, Math.floor(bounds - MAIN_MIN_WIDTH)))
+    }
+    const widenObserver = typeof ResizeObserver === 'function'
+      ? new ResizeObserver(() => {
+        const current = clampPaneWidth(readPaneWidth())
+        const limited = Math.min(current, maxPaneWidth())
+        if (limited < current) {
+          applyPaneWidth(limited)
+          writeNumberPreference(PANE_WIDTH_KEY, limited)
+          paneResizeHandle.setAttribute('aria-valuenow', String(Math.round(limited)))
+        }
+      })
+      : null
+    widenObserver?.observe(workspace)
+    const detachPaneResize = mountSplitHandle({
+      handle: paneResizeHandle,
+      getWidth: readPaneWidth,
+      setWidth: width => {
+        const applied = Math.min(applyPaneWidth(width), maxPaneWidth())
+        paneResizeHandle.setAttribute('aria-valuenow', String(Math.round(applied)))
+        return applied
+      },
+      invert: true,
+      min: PANE_MIN_WIDTH,
+      max: PANE_MAX_WIDTH,
+      storageKey: PANE_WIDTH_KEY,
+      onDragStart: width => {
+        workspace.classList.add('pane-resizing')
+        paneResizeHandle.setAttribute('aria-valuenow', String(Math.round(width)))
+      },
+      onDragEnd: width => {
+        workspace.classList.remove('pane-resizing')
+        paneResizeHandle.setAttribute('aria-valuenow', String(Math.round(width)))
+      },
+      onReset: () => {
+        const applied = applyPaneWidth(PANE_DEFAULT_WIDTH)
+        paneResizeHandle.setAttribute('aria-valuenow', String(Math.round(applied)))
+        return applied
+      }
+    })
     let savedTitle = recording.title
     let renaming = false
     let destroyed = false
@@ -93,6 +169,9 @@ export async function renderDetail({
         workspace.classList.add('analysis-pane-open')
         togglePane.setAttribute('aria-expanded', 'true')
         onAnalysisPaneChange(true)
+        // 仅在用户没有手动收起侧栏时，让应用侧自动决定是否需要为过场视图收起侧栏
+        onToggleSidebar(true) // request-auto-collapse if not already collapsed
+
         if (promptReady) refreshPromptLayout(paneOpenSequence)
         return
       }
@@ -222,6 +301,8 @@ export async function renderDetail({
         promptLoadToken.active = false
         closeSequence += 1
         if (closeTimer !== null) clearTimeout(closeTimer)
+        widenObserver?.disconnect()
+        detachPaneResize()
         playerController?.destroy()
         promptController.destroy()
       }
@@ -271,7 +352,7 @@ function detailMarkup(recording, analysisPaneOpen) {
             <p><span>${escapeHtml(visitedHosts.join(' · ') || '未知网站')}</span><span>·</span><time>${formatDate(recording.createdAt)}</time></p>
           </div>
           <div class="detail-actions">
-            <button class="button" type="button" data-toggle-analysis aria-controls="recording-analysis-guidance" aria-expanded="${analysisPaneOpen}">${analysisIcon()}<span>去分析</span></button>
+            <button class="button primary" type="button" data-toggle-analysis aria-controls="recording-analysis-guidance" aria-expanded="${analysisPaneOpen}">${analysisIcon()}<span>去分析</span></button>
             <button class="button" type="button" data-export>${exportIcon()}<span>导出</span></button>
             <button class="button danger quiet" type="button" data-trash>${trashIcon()}<span>移入回收站</span></button>
           </div>

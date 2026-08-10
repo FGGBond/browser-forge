@@ -116,20 +116,16 @@ describe('managed start recording UI', () => {
     const page = await openNewRecording()
 
     expect(await page.locator('#output-dir').count()).toBe(0)
-    expect(await page.getByRole('heading', { name: '有什么想要完成的浏览器操作？' }).count()).toBe(1)
+    expect(await page.getByRole('heading', { name: '这次想记录哪个页面的操作？' }).count()).toBe(1)
     const composer = page.locator('.goal-composer')
     expect(await composer.locator('.goal-context-note, .advanced-settings, .permission-actions').count()).toBe(0)
+    // 当前对齐 Codex:左【+】+ 右【开始录制】,无单独「发送目标」按钮;目标直接输入随开始录制一起提交
     expect(await composer.getByRole('button').count()).toBe(2)
-    expect(await composer.getByRole('button', { name: '发送目标' }).isDisabled()).toBe(true)
+    const startButton = composer.getByRole('button', { name: '开始录制' })
     await page.locator('[data-goal-text]').fill('  查询订单状态  ')
-    const send = composer.getByRole('button', { name: '发送目标' })
-    expect(await send.isDisabled()).toBe(false)
-    await send.click()
-    expect(await page.getByText('目标已记下，会随录制一起保存。').isVisible()).toBe(true)
-
     await Promise.all([
       page.waitForResponse(response => response.url().endsWith('/api/start-recording')),
-      page.getByRole('button', { name: '开始录制' }).click()
+      startButton.click()
     ])
 
     expect(startRequests).toEqual([{ chromePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', goalText: '查询订单状态' }])

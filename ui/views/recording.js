@@ -1,23 +1,63 @@
 let inspectorSocket
 
+const QUICK_SUGGESTIONS = [
+  {
+    id: 'search',
+    tone: 'blue',
+    title: '搜索信息',
+    prompt: '搜索信息：在网站里检索并筛选需要的内容',
+    icon: () => '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>'
+  },
+  {
+    id: 'form',
+    tone: 'purple',
+    title: '填写表单',
+    prompt: '填写表单：完成一次表单填写与提交',
+    icon: () => '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 19.5 1-4L16 5a2 2 0 0 1 3 3L8.5 18.5l-4 1Z"/><path d="m14.5 6.5 3 3"/></svg>'
+  },
+  {
+    id: 'flow',
+    tone: 'green',
+    title: '点击流程',
+    prompt: '点击流程：完成一串连续的页面点击操作',
+    icon: () => '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 3.5 7.5 16.5 2-6.5 6.5-1.5L6 3.5Z"/></svg>'
+  },
+  {
+    id: 'scrape',
+    tone: 'orange',
+    title: '抓取数据',
+    prompt: '抓取数据：把页面上的列表或表格数据整理下来',
+    icon: () => '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 10h17M10 10v9"/></svg>'
+  }
+]
+
 export async function renderNewRecording({ container, api, onStarted }) {
+  ensureRecordingStylesheet()
   container.innerHTML = `
     <section class="recording-setup new-recording-view" aria-labelledby="new-recording-title">
-      <div class="new-recording-hero">
-        <h1 id="new-recording-title">有什么想要完成的浏览器操作？</h1>
+      <div class="nr-hero">
+        <span class="nr-mark" aria-hidden="true">${forgeIcon()}</span>
+        <h1 id="new-recording-title">这次想记录哪个页面的操作？</h1>
+        <div class="nr-suggestions">
+          ${QUICK_SUGGESTIONS.map(suggestion => `
+          <button class="nr-suggestion" type="button" data-suggestion="${suggestion.id}" data-tone="${suggestion.tone}">
+            <span class="nr-card-icon">${suggestion.icon()}</span>
+            <span class="nr-card-text">${suggestion.title}</span>
+          </button>`).join('')}
+        </div>
       </div>
-      <div class="new-recording-stage">
+      <div class="nr-composer-zone">
         <div class="composer-notice-stack" data-notice-stack aria-live="polite"></div>
         <div class="goal-composer">
           <label class="sr-only" for="recording-goal">录制目标</label>
-          <textarea id="recording-goal" data-goal-text class="goal-textarea" rows="5" placeholder="描述你想完成的浏览器操作…"></textarea>
+          <textarea id="recording-goal" data-goal-text class="goal-textarea" rows="2" placeholder="简短描述意图（可选）"></textarea>
           <input data-chrome-path type="hidden">
           <div class="goal-composer-toolbar">
-            <button class="record-start-action" type="button" data-start disabled>
-              ${recordIcon()}<span>开始录制</span>
+            <button class="nr-plus-action" type="button" aria-label="添加（即将支持）" title="添加（即将支持）" disabled>
+              ${plusIcon()}
             </button>
-            <button class="send-goal-action" type="button" data-send-goal aria-label="发送目标" title="发送目标" disabled>
-              ${sendIcon()}
+            <button class="record-start-action" type="button" data-start disabled>
+              ${recordDot()}<span>开始录制</span>
             </button>
           </div>
         </div>
@@ -27,7 +67,6 @@ export async function renderNewRecording({ container, api, onStarted }) {
   const input = container.querySelector('[data-chrome-path]')
   const goalInput = container.querySelector('[data-goal-text]')
   const startButton = container.querySelector('[data-start]')
-  const sendButton = container.querySelector('[data-send-goal]')
   const noticeStack = container.querySelector('[data-notice-stack]')
   const noticeTimers = new Map()
   let permission
@@ -99,7 +138,6 @@ export async function renderNewRecording({ container, api, onStarted }) {
     const supported = permission?.supported !== false
     startButton.disabled = busy || !permissionLoaded || !chromeLoaded || !input.value.trim() || !supported
     startButton.classList.toggle('is-busy', busy)
-    sendButton.disabled = busy || !goalInput.value.trim()
   }
 
   const setBusy = value => {
@@ -233,11 +271,15 @@ export async function renderNewRecording({ container, api, onStarted }) {
   }
 
   goalInput.addEventListener('input', updateActions)
-  sendButton.addEventListener('click', () => {
-    const goal = goalInput.value.trim()
-    if (!goal) return
-    showNotice({ id: 'goal', message: '目标已记下，会随录制一起保存。', tone: 'success', timeout: 2400 })
-  })
+  for (const card of container.querySelectorAll('[data-suggestion]')) {
+    card.addEventListener('click', () => {
+      const suggestion = QUICK_SUGGESTIONS.find(item => item.id === card.dataset.suggestion)
+      if (!suggestion) return
+      goalInput.value = suggestion.prompt
+      goalInput.focus()
+      updateActions()
+    })
+  }
   startButton.addEventListener('click', beginRecording)
   window.addEventListener('focus', checkPermissionOnFocus)
 
@@ -390,11 +432,22 @@ function disconnectInspector() {
 
 function hostname(url) { try { return new URL(url).hostname } catch { return '新标签页' } }
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]) }
-function recordIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M3 9h18"/></svg>' }
-function sendIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V5m0 0L6.5 8.5M10 5l3.5 3.5"/></svg>' }
+
 function closeIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 6 8 8m0-8-8 8"/></svg>' }
 function checkIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.5 10 3 3 6-6"/></svg>' }
 function alertIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 6.5v4M10 13.5h.01"/></svg>' }
 function statusIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 9v4M10 6.5h.01"/></svg>' }
 function recordDot() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="4" fill="currentColor" stroke="none"/></svg>' }
 function stopIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="8" height="8" rx="1"/></svg>' }
+function forgeIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><rect x="8.5" y="8.5" width="7" height="3" rx="1.5"/><path d="M12 15v3"/><path d="M10 18h4"/></svg>' }
+function plusIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4.5v11M4.5 10h11"/></svg>' }
+
+function ensureRecordingStylesheet() {
+  const id = 'bf-new-recording-css'
+  if (document.getElementById(id)) return
+  const link = document.createElement('link')
+  link.id = id
+  link.rel = 'stylesheet'
+  link.href = '/new-recording.css'
+  document.head.append(link)
+}

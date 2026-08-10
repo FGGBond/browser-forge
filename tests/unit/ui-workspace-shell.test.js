@@ -34,7 +34,9 @@ describe('recording workspace shell', () => {
     expect(source).toContain('data-recording-folder')
     expect(source).toContain("active ? 'open' : 'closed'")
     expect(source).toContain("aria-current=\"${active ? 'page' : 'false'}\"")
-    expect(source).toContain('<strong>Browser Forge</strong>')
+    expect(source).not.toContain('Browser Forge')
+    expect(source).toContain('全部录制')
+    expect(source).not.toContain('最近录制')
     expect(source).not.toContain('<small>')
     expect(source).not.toContain('site.slice(0, 1)')
     expect(source).not.toContain('<small>${escapeHtml(site)}</small>')
@@ -43,8 +45,7 @@ describe('recording workspace shell', () => {
   it('collapses nonessential sidebar content into a clean mobile toolbar', () => {
     const css = readUi('styles.css')
     expect(css).toMatch(/@media \(max-width: 840px\)[\s\S]*?\.sidebar-recording-section \{ display: none;/)
-    expect(css).toContain('.primary-nav span, .secondary-nav span, .sidebar-toggle span, .sidebar-note { display: none; }')
-    expect(css).toMatch(/@media \(max-width: 620px\)[\s\S]*?\.brand-copy \{ display: none;/)
+    expect(css).toContain('.primary-nav span, .secondary-nav span, .sidebar-new span, .sidebar-toggle { display: none; }')
     const shellRule = css.match(/\.app-shell \{[^}]*\}/s)?.[0] || ''
     expect(shellRule).not.toMatch(/transition:[^;}]*grid-template-columns/)
     expect(css).not.toMatch(/\.analysis-workspace[^}]*transition:[^;}]*grid-template-columns/s)

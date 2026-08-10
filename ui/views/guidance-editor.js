@@ -12,6 +12,7 @@ export function mountGuidanceEditor({
   labelledBy = '',
   describedBy = '',
   onChange = () => {},
+  onSubmit = null,
   forceTextarea = false
 } = {}) {
   if (forceTextarea || !supportsContenteditable(root)) {
@@ -21,7 +22,8 @@ export function mountGuidanceEditor({
       placeholder,
       labelledBy,
       describedBy,
-      onChange
+      onChange,
+      onSubmit
     })
   }
 
@@ -33,7 +35,8 @@ export function mountGuidanceEditor({
       placeholder,
       labelledBy,
       describedBy,
-      onChange
+      onChange,
+      onSubmit
     })
   } catch {
     return mountTextareaFallback({
@@ -42,7 +45,8 @@ export function mountGuidanceEditor({
       placeholder,
       labelledBy,
       describedBy,
-      onChange
+      onChange,
+      onSubmit
     })
   }
 }
@@ -54,7 +58,8 @@ function mountContenteditable({
   placeholder,
   labelledBy,
   describedBy,
-  onChange
+  onChange,
+  onSubmit
 }) {
   const document = root.ownerDocument
   const surface = document.createElement('div')
@@ -120,6 +125,13 @@ function mountContenteditable({
     const primaryModifier = event.metaKey || event.ctrlKey
     if (primaryModifier && !event.altKey && ['b', 'i', 'u'].includes(event.key.toLowerCase())) {
       event.preventDefault()
+      return
+    }
+    if (primaryModifier && !event.altKey && !event.shiftKey && event.key === 'Enter') {
+      if (typeof onSubmit === 'function') {
+        event.preventDefault()
+        onSubmit()
+      }
       return
     }
     if (!conversionUndo) return
@@ -213,7 +225,7 @@ function mountContenteditable({
   }
 }
 
-function mountTextareaFallback({ textarea, initialMarkdown, placeholder, labelledBy, describedBy, onChange }) {
+function mountTextareaFallback({ textarea, initialMarkdown, placeholder, labelledBy, describedBy, onChange, onSubmit }) {
   if (!textarea?.addEventListener) throw new TypeError('A textarea is required when contenteditable is unavailable')
   textarea.hidden = false
   textarea.removeAttribute?.('hidden')
