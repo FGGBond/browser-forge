@@ -72,7 +72,7 @@ afterAll(async () => {
   await new Promise(resolve => server.close(resolve))
 })
 
-describe('recording repository video-first layout', () => {
+describe('recording repository compact workspace layout', () => {
   it.each([
     { width: 640, height: 760, collapsed: false },
     { width: 640, height: 760, collapsed: true },
@@ -84,18 +84,13 @@ describe('recording repository video-first layout', () => {
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
 
     await expectMobileShell(page, width)
-    if (collapsed) {
-      await page.locator('[data-sidebar-reveal]').waitFor({ state: 'visible', timeout: 3000 }).catch(() => {})
-      await page.locator('[data-sidebar-reveal]').click()
-      await page.waitForTimeout(250)
-    }
     await page.getByRole('button', { name: '新录制', exact: true }).first().click({ timeout: 3000 })
     await page.waitForTimeout(400)
     await expectMobileShell(page, width)
     await page.close()
   })
 
-  it('does not animate shell or analysis grid column changes', async () => {
+  it('does not animate shell grid column changes', async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
     const shellTransitions = await page.evaluate(() => {
@@ -104,15 +99,6 @@ describe('recording repository video-first layout', () => {
       return shell.getAnimations({ subtree: false }).map(animation => animation.transitionProperty)
     })
     expect(shellTransitions).not.toContain('grid-template-columns')
-
-    await page.getByRole('button', { name: '去分析', exact: true }).first().click()
-    await page.locator('[data-toggle-analysis]').waitFor()
-    const workspaceTransitions = await page.evaluate(() => {
-      const workspace = document.querySelector('[data-analysis-workspace]')
-      document.querySelector('[data-toggle-analysis]').click()
-      return workspace.getAnimations({ subtree: false }).map(animation => animation.transitionProperty)
-    })
-    expect(workspaceTransitions).not.toContain('grid-template-columns')
     await page.close()
   })
 
@@ -120,57 +106,56 @@ describe('recording repository video-first layout', () => {
     { width: 1200, height: 800 },
     { width: 1280, height: 800 },
     { width: 1440, height: 900 }
-  ])('keeps the $width px guidance pane beside the video without overlap', async ({ width, height }) => {
+  ])('keeps the $width px persistent context pane beside recording evidence without overlap', async ({ width, height }) => {
     const page = await browser.newPage({ viewport: { width, height } })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
     await page.getByRole('button', { name: '去分析', exact: true }).first().click()
-    await page.locator('[data-toggle-analysis]').click()
+    await page.locator('[data-title-input]').waitFor()
     await page.locator('[data-analysis-pane]').waitFor({ state: 'visible' })
 
     const metrics = await page.evaluate(() => {
       const main = document.querySelector('.analysis-main').getBoundingClientRect()
       const pane = document.querySelector('[data-analysis-pane]').getBoundingClientRect()
-      const workspace = document.querySelector('[data-analysis-workspace]')
+      const shell = document.querySelector('.app-shell')
       return {
         viewportWidth: window.innerWidth,
         scrollWidth: document.documentElement.scrollWidth,
-        main: { x: main.x, y: main.y, right: main.right, bottom: main.bottom, width: main.width },
-        pane: { x: pane.x, y: pane.y, right: pane.right, bottom: pane.bottom, width: pane.width },
-        columns: getComputedStyle(workspace).gridTemplateColumns,
-        panePosition: getComputedStyle(document.querySelector('[data-analysis-pane]')).position
+        main: { x: main.x, right: main.right, width: main.width },
+        pane: { x: pane.x, right: pane.right, width: pane.width },
+        columns: getComputedStyle(shell).gridTemplateColumns,
+        panePosition: getComputedStyle(document.querySelector('.workspace-context-host')).position
       }
     })
 
     expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.viewportWidth)
     expect(metrics.pane.right).toBeLessThanOrEqual(metrics.viewportWidth + 1)
-    expect(metrics.columns.split(' ')).toHaveLength(2)
-    expect(metrics.main.width).toBeGreaterThanOrEqual(520)
-    expect(metrics.pane.width).toBeGreaterThanOrEqual(360)
-    expect(metrics.pane.width).toBeLessThanOrEqual(390)
+    expect(metrics.columns.split(' ')).toHaveLength(3)
+    expect(metrics.main.width).toBeGreaterThanOrEqual(560)
+    expect(metrics.pane.width).toBeGreaterThanOrEqual(470)
+    expect(metrics.pane.width).toBeLessThanOrEqual(480)
     expect(metrics.pane.x).toBeGreaterThanOrEqual(metrics.main.right - 1)
     expect(metrics.panePosition).toBe('sticky')
     await page.close()
   })
 
-  it('does not retain a max-width fallback that moves guidance below the video', async () => {
+  it('keeps context in the shell at the 1120 px rail breakpoint', async () => {
     const page = await browser.newPage({ viewport: { width: 1120, height: 800 } })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
     await page.getByRole('button', { name: '去分析', exact: true }).first().click()
-    await page.locator('[data-toggle-analysis]').click()
-    await page.locator('[data-analysis-pane]').waitFor({ state: 'visible' })
+    await page.locator('[data-title-input]').waitFor()
 
     const layout = await page.evaluate(() => {
       const main = document.querySelector('.analysis-main').getBoundingClientRect()
       const pane = document.querySelector('[data-analysis-pane]').getBoundingClientRect()
       return {
-        columns: getComputedStyle(document.querySelector('[data-analysis-workspace]')).gridTemplateColumns,
+        columns: getComputedStyle(document.querySelector('.app-shell')).gridTemplateColumns,
         mainRight: main.right,
         paneX: pane.x,
-        panePosition: getComputedStyle(document.querySelector('[data-analysis-pane]')).position
+        panePosition: getComputedStyle(document.querySelector('.workspace-context-host')).position
       }
     })
 
-    expect(layout.columns.split(' ')).toHaveLength(2)
+    expect(layout.columns.split(' ')).toHaveLength(3)
     expect(layout.paneX).toBeGreaterThanOrEqual(layout.mainRight - 1)
     expect(layout.panePosition).toBe('sticky')
     await page.close()
@@ -181,73 +166,64 @@ describe('recording repository video-first layout', () => {
     { width: 900, height: 700 },
     { width: 640, height: 760 },
     { width: 520, height: 760 }
-  ])('keeps the $width px card video dominant with compact metadata below it', async viewport => {
+  ])('keeps the $width px repository compact, horizontal, and evidence-first', async viewport => {
     const page = await browser.newPage({ viewport })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
     const row = page.locator('.recording-row').first()
     await row.waitFor()
 
-    const rowBox = await row.boundingBox()
-    const videoBox = await row.locator('.repository-video').boundingBox()
-    const contentBox = await row.locator('.recording-row-content').boundingBox()
+    const metrics = await row.evaluate(element => {
+      const preview = element.querySelector('.repository-preview').getBoundingClientRect()
+      const content = element.querySelector('.recording-row-content').getBoundingClientRect()
+      const box = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      return {
+        row: { x: box.x, y: box.y, width: box.width, height: box.height },
+        preview: { x: preview.x, y: preview.y, width: preview.width, height: preview.height },
+        content: { x: content.x, y: content.y, width: content.width, height: content.height },
+        radius: parseFloat(style.borderTopLeftRadius),
+        shadow: style.boxShadow
+      }
+    })
 
-    expect(videoBox.width / rowBox.width).toBeGreaterThan(.95)
-    expect(videoBox.y).toBeLessThan(contentBox.y)
-    expect(contentBox.height / videoBox.height).toBeLessThan(viewport.width > 640 ? .35 : .5)
-    expect(await row.locator('.recording-row-meta').count()).toBe(0)
+    expect(metrics.row.height).toBeLessThanOrEqual(viewport.width > 600 ? 124 : 142)
+    expect(metrics.preview.x).toBeLessThan(metrics.content.x)
+    expect(metrics.preview.width / metrics.row.width).toBeLessThan(.4)
+    expect(metrics.preview.width / metrics.preview.height).toBeGreaterThan(1.7)
+    expect(metrics.radius).toBeLessThanOrEqual(12)
+    expect(metrics.shadow).toBe('none')
+    expect(await row.locator('.recording-row-evidence').count()).toBe(1)
     expect(await row.getByRole('button', { name: '去分析' }).count()).toBe(1)
     await page.close()
   })
 
-  it('renders complete, partial, and failed cards with the minimal card contract and preserved navigation', async () => {
+  it('renders truthful evidence metadata without turning repository rows into competing player cards', async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
 
     const rows = page.locator('[data-recording-id]')
     await expect.poll(() => rows.count()).toBe(3)
+    const firstBox = await rows.first().boundingBox()
+    const lastBox = await rows.last().boundingBox()
+    expect(lastBox.y + lastBox.height - firstBox.y).toBeLessThan(390)
+
     for (const recording of recordings) {
       const row = page.locator(`[data-recording-id="${recording.id}"]`)
-      const footer = row.locator('.recording-row-content')
       await row.waitFor()
       expect(await row.getAttribute('data-recording-id')).toBe(recording.id)
-      expect(await footer.getByRole('heading', { name: recording.title }).count()).toBe(1)
-      expect(await footer.locator('time').count()).toBe(1)
-      expect(await footer.getByRole('button', { name: '去分析' }).count()).toBe(1)
-      expect(await footer.locator('button').count()).toBe(1)
-      expect(await footer.locator('p, .recording-row-summary, .status-pill').count()).toBe(0)
-      const footerText = await footer.textContent()
-      expect(footerText).not.toContain(recording.startHost)
-      expect(footerText).not.toContain('02:43')
-      expect(footerText).not.toMatch(/视频可用|视频部分可用|分析说明待补充|已有分析说明/)
+      expect(await row.getByRole('heading', { name: recording.title }).count()).toBe(1)
+      expect(await row.locator('time').count()).toBe(1)
+      expect(await row.getByRole('button', { name: '去分析' }).count()).toBe(1)
+      expect(await row.locator('button').count()).toBe(1)
+      expect(await row.locator('[data-video-player], video').count()).toBe(0)
+      expect(await row.locator('.repository-preview img').getAttribute('src')).toContain(`/api/recordings/${recording.id}/poster`)
+      const text = await row.textContent()
+      expect(text).toContain(recording.startHost)
+      expect(text).toContain(recording.durationMs === 163000 ? '02:43' : recording.durationMs === 68000 ? '01:08' : '00:42')
     }
-
-    for (const playable of recordings.slice(0, 2)) {
-      const video = page.locator(`[data-recording-id="${playable.id}"] .repository-video`)
-      expect(await video.locator('[data-video-player]').count()).toBe(1)
-      expect(await video.locator('.repository-video-placeholder').count()).toBe(0)
-    }
-    const failedVideo = page.locator(`[data-recording-id="${recordings[2].id}"] .repository-video`)
-    expect(await failedVideo.locator('[data-video-player]').count()).toBe(0)
-    expect(await failedVideo.locator('.repository-video-placeholder').count()).toBe(1)
-    expect(await failedVideo.textContent()).toContain('视频录制失败')
-    await page.emulateMedia({ colorScheme: 'dark' })
-    const darkTextColors = await page.evaluate(failedId => {
-      const probe = document.createElement('span')
-      probe.style.color = 'var(--muted)'
-      document.body.append(probe)
-      const muted = getComputedStyle(probe).color
-      probe.remove()
-      return {
-        muted,
-        time: getComputedStyle(document.querySelector(`[data-recording-id="${failedId}"] time`)).color,
-        placeholder: getComputedStyle(document.querySelector(`[data-recording-id="${failedId}"] .repository-video-placeholder span`)).color
-      }
-    }, recordings[2].id)
-    expect(darkTextColors.time).toBe(darkTextColors.muted)
-    expect(darkTextColors.placeholder).toBe(darkTextColors.muted)
-    const playableVideoBox = await page.locator(`[data-recording-id="${recordings[0].id}"] .repository-video`).boundingBox()
-    const failedVideoBox = await failedVideo.boundingBox()
-    expect(failedVideoBox.height).toBeLessThan(playableVideoBox.height * .55)
+    expect(await page.locator(`[data-recording-id="${recordings[0].id}"]`).textContent()).toContain('视频可用')
+    expect(await page.locator(`[data-recording-id="${recordings[1].id}"]`).textContent()).toContain('视频部分可用')
+    expect(await page.locator(`[data-recording-id="${recordings[2].id}"]`).textContent()).toContain('视频录制失败')
 
     await page.locator(`[data-recording-id="${recordings[1].id}"] [data-analyze]`).click()
     await expect.poll(() => page.locator('[data-title-input]').inputValue()).toBe(recordings[1].title)
@@ -285,12 +261,9 @@ async function expectMobileShell(page, width) {
   }
   expect(metrics.viewportWidth).toBe(width)
   expect(metrics.scrollWidth).toBeLessThanOrEqual(width)
-  expect(metrics.shellColumns.split(' ')).toHaveLength(1)
-  expect(metrics.sidebarWidth).toBeLessThanOrEqual(width)
-  if (width <= 840) {
-    expect(metrics.recentDisplay).toBe('none')
-    expect(metrics.toggleWidth).toBeLessThanOrEqual(44)
-  }
+  expect(metrics.shellColumns.split(' ')).toHaveLength(2)
+  expect(metrics.sidebarWidth).toBeLessThanOrEqual(68)
+  if (width <= 840) expect(metrics.toggleWidth).toBeLessThanOrEqual(48)
 }
 
 function json(res, value) {
