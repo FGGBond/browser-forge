@@ -1,6 +1,9 @@
 import { spawn as spawnProcess } from 'child_process'
 import { join } from 'path'
+import { rm } from 'fs/promises'
 import { resolveNativeToolPath } from './native-tools.js'
+
+const FRAME_QUANTIZATION_TOLERANCE_MS = 100
 
 export function selectPosterOffset({ durationMs, coveredUntilOffsetMs = durationMs, timeline = [], internalOrigins = [] } = {}) {
   const duration = Math.max(0, Number(durationMs) || 0)
@@ -19,7 +22,9 @@ export function selectPosterOffset({ durationMs, coveredUntilOffsetMs = duration
     try { parsed = new URL(String(event.url || event.documentUrl || event.pageUrl || '')) } catch { continue }
     if (!['http:', 'https:'].includes(parsed.protocol)) continue
     if (internal.has(parsed.origin) || parsed.pathname.endsWith('/recording-start.html')) continue
-    return Math.max(0, Math.round(Math.min(maxOffset, offset)))
+    const roundedOffset = Math.round(offset)
+    if (roundedOffset > maxOffset) continue
+    return roundedOffset
   }
   return null
 }
@@ -51,6 +56,15 @@ export async function generatePoster({
     if (!Number.isFinite(nativeRequestedOffsetMs) || nativeRequestedOffsetMs < 0 || !Number.isFinite(actualOffsetMs) || actualOffsetMs < 0) {
       throw new Error('Native frame extractor did not report valid offsets')
     }
+    if (nativeRequestedOffsetMs !== requestedOffsetMs) {
+      throw new Error(`Native frame extractor requested offset ${nativeRequestedOffsetMs}ms does not match ${requestedOffsetMs}ms`)
+    }
+    const duration = Math.max(0, Number(durationMs) || 0)
+    const coverage = Math.min(duration, Math.max(0, Number(coveredUntilOffsetMs) || 0))
+    const maximumQuantizedOffset = Math.min(duration, coverage + FRAME_QUANTIZATION_TOLERANCE_MS)
+    if (actualOffsetMs > maximumQuantizedOffset) {
+      throw new Error(`Native frame extractor returned ${actualOffsetMs}ms beyond captured coverage ${coverage}ms`)
+    }
     return {
       status: 'complete',
       path: output,
@@ -61,6 +75,7 @@ export async function generatePoster({
       ...(Number.isFinite(Number(extracted.height)) ? { height: Math.round(Number(extracted.height)) } : {})
     }
   } catch (error) {
+    await rm(output, { force: true }).catch(() => {})
     return { status: 'failed', error }
   }
 }

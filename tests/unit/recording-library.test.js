@@ -246,27 +246,31 @@ describe('RecordingLibrary prompts', () => {
     await expect(library.getPrompt(firstId)).rejects.toMatchObject({ code: 'CORRUPT_MATERIAL' })
   })
 
-  it('parses persisted v2 guidance into three external prompt sections without leaking framing', async () => {
+  it('builds the external prompt only after export using persisted v2 guidance', async () => {
     await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders' })
-    const library = new RecordingLibrary({ root, now })
-    await library.initialize()
-    const fields = {
-      actions: '查询订单并打开物流详情',
-      capability: '根据订单号返回最新物流节点',
-      acceptance: '使用 JD123 核对承运商和更新时间'
-    }
-    const guidance = serializeGuidanceMarkdown(fields)
+    const exportRoot = await mkdtemp(join(tmpdir(), 'bf-handoff-guidance-'))
+    try {
+      const library = new RecordingLibrary({ root, now })
+      await library.initialize()
+      const fields = {
+        actions: '查询订单并打开物流详情',
+        capability: '根据订单号返回最新物流节点',
+        acceptance: '使用 JD123 核对承运商和更新时间'
+      }
+      const guidance = serializeGuidanceMarkdown(fields)
 
-    await library.savePrompt(firstId, guidance)
-    const result = await library.getExternalAgentPrompt(firstId)
+      await library.savePrompt(firstId, guidance)
+      const result = await library.createAgentHandoff(firstId, exportRoot)
 
-    expect(result.text).toContain(`### 本次录制中的动作与意图\n${fields.actions}`)
-    expect(result.text).toContain(`### 希望提取的 skill 能力\n${fields.capability}`)
-    expect(result.text).toContain(`### Skill 验收标准\n${fields.acceptance}`)
-    expect(result.text).not.toContain('browser-forge-guidance:v2')
-    expect(result.text).not.toContain('<!-- /browser-forge-guidance -->')
-    for (const heading of ['本次录制中的动作与意图', '希望提取的 skill 能力', 'Skill 验收标准']) {
-      expect(result.text).not.toContain(`### ${heading}\n未提供`)
+      expect(result.text).toContain(`### 本次录制中的动作与意图\n${fields.actions}`)
+      expect(result.text).toContain(`### 希望提取的 skill 能力\n${fields.capability}`)
+      expect(result.text).toContain(`### Skill 验收标准\n${fields.acceptance}`)
+      expect(result.text).toContain(result.path)
+      expect(result.text).not.toContain(join(paths.active, firstId))
+      expect(result.text).not.toContain('browser-forge-guidance:v2')
+      expect(result.text).not.toContain('<!-- /browser-forge-guidance -->')
+    } finally {
+      await rm(exportRoot, { recursive: true, force: true })
     }
   })
 
@@ -292,27 +296,16 @@ describe('RecordingLibrary prompts', () => {
       acceptance: '验收标准\t',
       legacy: false
     })
-    const external = await library.getExternalAgentPrompt(firstId)
-    expect(external.text).toContain('### 本次录制中的动作与意图\n第一行\n第二行')
-    expect(external.text).toContain('### 希望提取的 skill 能力\n能力说明')
-    expect(external.text).toContain('### Skill 验收标准\n验收标准')
-    expect(external.text).not.toContain('browser-forge-guidance:v2')
   })
 
-  it('derives the complete external prompt only for active managed recordings', async () => {
+  it('does not expose a public prompt builder that can serialize the managed recording path', async () => {
     await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Orders' })
-    await seedRecording({ parent: paths.trash, id: secondId, createdAt: '2026-08-08T12:10:00.000Z', title: 'Trashed', state: 'trashed' })
     const library = new RecordingLibrary({ root, now })
     await library.initialize()
-    await library.savePrompt(firstId, '查询订单状态')
 
-    const result = await library.getExternalAgentPrompt(firstId)
-    expect(result.text).toContain(join(paths.active, firstId))
-    expect(result.text).toContain('查询订单状态')
-    expect(result.recordingId).toBe(firstId)
-    expect(await readFile(join(paths.active, firstId, 'prompt.md'), 'utf8')).not.toContain(paths.root)
-    await expect(library.getExternalAgentPrompt(secondId)).rejects.toMatchObject({ code: 'INVALID_STATE' })
+    expect(library.getExternalAgentPrompt).toBeUndefined()
   })
+
 })
 
 describe('RecordingLibrary recycle bin and export', () => {
@@ -613,6 +606,28 @@ describe('RecordingLibrary media resolution', () => {
     await library.initialize()
 
     expect((await library.get(firstId)).sizeBytes).toBeGreaterThanOrEqual(2048)
+  })
+
+  it('returns a neutral built-in PNG when poster metadata marks an unavailable external page', async () => {
+    await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Guide only' })
+    await mkdir(join(paths.active, firstId, 'video'), { recursive: true })
+    await writeFile(join(paths.active, firstId, 'video', 'recording.mp4'), 'playable-video')
+    await atomicWriteJson(join(paths.active, firstId, 'video', 'poster.json'), {
+      status: 'unavailable',
+      reason: 'no-stable-external-page'
+    })
+    const library = new RecordingLibrary({ root, now })
+    await library.initialize()
+
+    const poster = await library.getPoster(firstId)
+
+    expect(poster).toMatchObject({ status: 'unavailable-placeholder', size: expect.any(Number) })
+    expect(poster.handle).toBeUndefined()
+    expect(Buffer.isBuffer(poster.data)).toBe(true)
+    expect(poster.data.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    expect(poster.data.readUInt32BE(16)).toBe(16)
+    expect(poster.data.readUInt32BE(20)).toBe(9)
+    expect(poster.data).not.toEqual(Buffer.from('internal-guide-frame'))
   })
 
   it('rejects symlinked media and missing posters', async () => {

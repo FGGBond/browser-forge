@@ -893,7 +893,6 @@ describe('recording library HTTP API', () => {
       getPoster: vi.fn(async () => ({ path: posterPath, size: 3, handle: await openFile(posterPath, 'r') })),
       getPrompt: vi.fn(async () => ({ text: '', status: 'empty', updatedAt: null })),
       savePrompt: vi.fn(async (_id, text) => ({ text, status: 'draft', updatedAt: '2026-08-08T12:20:00.000Z' })),
-      getExternalAgentPrompt: vi.fn(async () => ({ recordingId: id, text: 'complete prompt' })),
       createAgentHandoff: vi.fn(async (_id, destination) => ({ recordingId: id, path: join(destination, 'Orders'), text: 'handoff prompt' })),
       trash: vi.fn(async () => ({ ...recording, state: 'trashed' })),
       restore: vi.fn(async () => recording),
@@ -928,6 +927,26 @@ describe('recording library HTTP API', () => {
     expect(recordingLibrary.rename).toHaveBeenCalledWith(id, 'Renamed')
   })
 
+  it('serves an unavailable poster as a neutral PNG placeholder with explicit metadata', async () => {
+    const placeholder = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0])
+    const { url } = await createLibraryServer({
+      recordingLibrary: {
+        getPoster: vi.fn(async () => ({
+          data: placeholder,
+          size: placeholder.length,
+          status: 'unavailable-placeholder'
+        }))
+      }
+    })
+
+    const response = await fetch(`${url}/api/recordings/${id}/poster`)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('image/png')
+    expect(response.headers.get('x-browser-forge-poster-status')).toBe('unavailable-placeholder')
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(placeholder)
+  })
+
   it('serves a seekable MP4 with byte ranges', async () => {
     const { url } = await createLibraryServer()
     const response = await fetch(`${url}/api/recordings/${id}/video`, { headers: { Range: 'bytes=10-19' } })
@@ -955,12 +974,15 @@ describe('recording library HTTP API', () => {
     expect(await response.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'missing' } })
   })
 
-  it('persists and derives prompts without accepting paths', async () => {
+  it('persists prompts without accepting paths and disables the legacy managed-path prompt route', async () => {
     const { url, recordingLibrary } = await createLibraryServer()
     const saved = await fetch(`${url}/api/recordings/${id}/prompt`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'guidance', path: '/tmp/ignored' }) }).then(r => r.json())
     expect(saved.status).toBe('draft')
     expect(recordingLibrary.savePrompt).toHaveBeenCalledWith(id, 'guidance')
-    expect(await fetch(`${url}/api/recordings/${id}/external-agent-prompt`).then(r => r.json())).toEqual({ recordingId: id, text: 'complete prompt' })
+
+    const legacy = await fetch(`${url}/api/recordings/${id}/external-agent-prompt`)
+    expect(legacy.status).toBe(404)
+    expect(await legacy.text()).not.toContain('/Library/Application Support/Browser Forge')
   })
 
   it('uses the Electron directory adapter and ignores a renderer destination path', async () => {
@@ -1005,7 +1027,7 @@ describe('recording library HTTP API', () => {
 
     expect(response.status).toBe(500)
     expect((await response.json()).error.code).toBe('FILESYSTEM_FAILURE')
-    expect(recordingLibrary.getExternalAgentPrompt).not.toHaveBeenCalled()
+    expect(recordingLibrary).not.toHaveProperty('getExternalAgentPrompt')
   })
 
   it('supports trash, restore, permanent delete, and export cancellation', async () => {

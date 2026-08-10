@@ -550,6 +550,11 @@ function registerRecordingLibraryRoutes({ app, recordingLibrary, chooseExportDir
     const media = await recordingLibrary.getPoster(req.params.id)
     res.type('png')
     res.setHeader('Content-Length', String(media.size))
+    if (media.status) res.setHeader('X-Browser-Forge-Poster-Status', media.status)
+    if (Buffer.isBuffer(media.data)) {
+      res.end(media.data)
+      return
+    }
     await pipeOpenedMedia(res, media)
   }))
 
@@ -559,10 +564,6 @@ function registerRecordingLibraryRoutes({ app, recordingLibrary, chooseExportDir
 
   app.put('/api/recordings/:id/prompt', asyncRoute(async (req, res) => {
     res.json(await recordingLibrary.savePrompt(req.params.id, req.body?.text))
-  }))
-
-  app.get('/api/recordings/:id/external-agent-prompt', asyncRoute(async (req, res) => {
-    res.json(await recordingLibrary.getExternalAgentPrompt(req.params.id))
   }))
 
   app.post('/api/recordings/:id/agent-handoff', asyncRoute(async (req, res) => {

@@ -21,6 +21,11 @@ import {
 const LIST_STATES = new Set(['active', 'trashed'])
 const LOCATION_DIRECTORY = { active: 'active', trashed: 'trash' }
 
+const UNAVAILABLE_POSTER_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAJCAYAAAA7KqwyAAAAFklEQVR42mN4+vz1f0oww6gBowYAMQCfpxZ/Zv+OygAAAABJRU5ErkJggg==',
+  'base64'
+)
+
 export class RecordingLibrary {
   constructor({ root, fs = defaultFs, now = () => new Date(), randomUUID = defaultRandomUUID, logger = console, copyTree } = {}) {
     if (!root) throw libraryError('INVALID_INPUT', 'RecordingLibrary requires a root')
@@ -156,8 +161,22 @@ export class RecordingLibrary {
     this.#requireInitialized()
     const recording = await this.#resolve(id, ['active', 'trashed'])
     const media = await this.#openSafeFile(recording.path, join('video', 'poster.png'), { required: false, message: 'Poster material is invalid' })
-    if (!media) throw libraryError('NOT_FOUND', 'Poster was not generated')
-    return media
+    if (media) return { ...media, status: 'generated' }
+
+    const metadata = await this.#readSafeJson(join(recording.path, 'video', 'poster.json'), {
+      required: false,
+      message: 'Poster metadata is invalid'
+    })
+    if (['complete', 'partial'].includes(recording.metadata.video.status) && metadata?.status === 'unavailable') {
+      const data = Buffer.from(UNAVAILABLE_POSTER_PNG)
+      return {
+        data,
+        size: data.length,
+        status: 'unavailable-placeholder',
+        reason: metadata.reason ?? 'no-stable-external-page'
+      }
+    }
+    throw libraryError('NOT_FOUND', 'Poster was not generated')
   }
 
   async getPrompt(id) {
@@ -200,17 +219,6 @@ export class RecordingLibrary {
     })
   }
 
-  async getExternalAgentPrompt(id) {
-    this.#requireInitialized()
-    const recording = await this.#resolveActive(id)
-    const prompt = recording.metadata.prompt.status === 'draft'
-      ? await this.#readPromptText(recording.path)
-      : ''
-    return {
-      recordingId: recording.metadata.id,
-      text: buildExternalAgentPrompt({ recordingPath: recording.path, guidance: prompt })
-    }
-  }
 
   async trash(id) {
     this.#requireInitialized()

@@ -10,7 +10,7 @@ describe('external Agent prompt domain', () => {
   })
 
   it('builds complete instructions from a path and user guidance', () => {
-    const recordingPath = '/Users/me/Library/Application Support/Browser Forge/recordings/active/3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
+    const recordingPath = '/Users/me/Desktop/Orders-20260808-121500'
     const result = buildExternalAgentPrompt({ recordingPath, guidance: '查询订单状态' })
 
     expect(result).toContain('browser-forge skill')

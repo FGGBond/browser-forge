@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises'
+import { access, mkdir, mkdtemp, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { generatePoster, selectPosterOffset } from '../../src/main/recorder/poster-generator.js'
@@ -41,12 +41,21 @@ describe('generatePoster', () => {
     })).toBe(3_000)
   })
 
-  it('clamps a stable candidate to captured video coverage', () => {
+  it('skips stable candidates outside the safe captured coverage instead of clamping them', () => {
     expect(selectPosterOffset({
       durationMs: 4_000,
       coveredUntilOffsetMs: 3_500,
-      timeline: [{ type: 'navigation-stable', url: 'https://example.com', videoOffsetMs: 3_700 }]
-    })).toBe(3_400)
+      timeline: [
+        { type: 'navigation-stable', url: 'https://outside.example', videoOffsetMs: 3_700 },
+        { type: 'navigation-stable', url: 'https://inside.example', videoOffsetMs: 3_200 }
+      ]
+    })).toBe(3_200)
+
+    expect(selectPosterOffset({
+      durationMs: 4_000,
+      coveredUntilOffsetMs: 3_500,
+      timeline: [{ type: 'navigation-stable', url: 'https://outside.example', videoOffsetMs: 3_700 }]
+    })).toBeNull()
   })
 
   it('returns null instead of choosing the guide page or an arbitrary early frame', () => {
@@ -84,6 +93,68 @@ describe('generatePoster', () => {
       actualOffsetMs: 2_960,
       width: 1280,
       height: 720
+    })
+  })
+
+  it('rejects native output when requestedOffsetMs does not match the requested frame', async () => {
+    const result = await generatePoster({
+      recordingDir,
+      durationMs: 5_000,
+      coveredUntilOffsetMs: 3_500,
+      timeline: [{ type: 'navigation-stable', url: 'https://example.com', videoOffsetMs: 3_000 }],
+      nativeToolPathOptions: { platform: 'darwin', arch: 'arm64', projectRoot: '/project' },
+      spawn: vi.fn(successfulSpawn({ requestedOffsetMs: 2_999, actualOffsetMs: 2_960 }))
+    })
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      error: expect.objectContaining({ message: expect.stringContaining('requested offset') })
+    })
+  })
+
+  it('removes an extracted poster when native offset validation fails', async () => {
+    const posterPath = join(recordingDir, 'video', 'poster.png')
+    await writeFile(posterPath, 'misaligned-frame')
+
+    const result = await generatePoster({
+      recordingDir,
+      durationMs: 5_000,
+      coveredUntilOffsetMs: 3_500,
+      timeline: [{ type: 'navigation-stable', url: 'https://example.com', videoOffsetMs: 3_000 }],
+      nativeToolPathOptions: { platform: 'darwin', arch: 'arm64', projectRoot: '/project' },
+      spawn: vi.fn(successfulSpawn({ requestedOffsetMs: 2_999, actualOffsetMs: 2_960 }))
+    })
+
+    expect(result.status).toBe('failed')
+    await expect(access(posterPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('accepts at most 100ms of native frame quantization beyond captured coverage', async () => {
+    const result = await generatePoster({
+      recordingDir,
+      durationMs: 4_000,
+      coveredUntilOffsetMs: 3_500,
+      timeline: [{ type: 'navigation-stable', url: 'https://example.com', videoOffsetMs: 3_400 }],
+      nativeToolPathOptions: { platform: 'darwin', arch: 'arm64', projectRoot: '/project' },
+      spawn: vi.fn(successfulSpawn({ requestedOffsetMs: 3_400, actualOffsetMs: 3_600 }))
+    })
+
+    expect(result).toMatchObject({ status: 'complete', requestedOffsetMs: 3_400, actualOffsetMs: 3_600 })
+  })
+
+  it('rejects native frames more than 100ms beyond captured coverage', async () => {
+    const result = await generatePoster({
+      recordingDir,
+      durationMs: 4_000,
+      coveredUntilOffsetMs: 3_500,
+      timeline: [{ type: 'navigation-stable', url: 'https://example.com', videoOffsetMs: 3_400 }],
+      nativeToolPathOptions: { platform: 'darwin', arch: 'arm64', projectRoot: '/project' },
+      spawn: vi.fn(successfulSpawn({ requestedOffsetMs: 3_400, actualOffsetMs: 3_601 }))
+    })
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      error: expect.objectContaining({ message: expect.stringContaining('captured coverage') })
     })
   })
 
