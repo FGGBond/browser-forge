@@ -1,4 +1,5 @@
 const PLAYBACK_RATES = [0.5, 1, 1.5, 2]
+const CONTROLS_IDLE_MS = 1600
 
 export function mountVideoPlayer({ container, src, poster = '', durationMs = 0, compact = false, title = '' }) {
   const fallbackDuration = Math.max(0, Number(durationMs) || 0) / 1000
@@ -24,10 +25,32 @@ export function mountVideoPlayer({ container, src, poster = '', durationMs = 0, 
   const durationLabel = root.querySelector('[data-player-duration]')
   const rateButton = root.querySelector('[data-player-rate]')
   const abortController = new AbortController()
+  let controlsIdleTimer = null
   const listen = (target, type, handler) => target?.addEventListener(type, handler, { signal: abortController.signal })
 
   const duration = () => Number.isFinite(video.duration) && video.duration > 0 ? video.duration : fallbackDuration
   const clamp = value => Math.min(duration() || Math.max(0, Number(value) || 0), Math.max(0, Number(value) || 0))
+  const clearControlsIdleTimer = () => {
+    if (controlsIdleTimer === null) return
+    clearTimeout(controlsIdleTimer)
+    controlsIdleTimer = null
+  }
+  const showControls = () => {
+    clearControlsIdleTimer()
+    root.classList.remove('controls-hidden')
+  }
+  const scheduleControlsHide = (delay = CONTROLS_IDLE_MS) => {
+    clearControlsIdleTimer()
+    if (video.paused || video.ended || root.matches(':focus-within')) return
+    controlsIdleTimer = setTimeout(() => {
+      controlsIdleTimer = null
+      if (!video.paused && !video.ended && !root.matches(':focus-within')) root.classList.add('controls-hidden')
+    }, delay)
+  }
+  const revealControls = () => {
+    showControls()
+    scheduleControlsHide()
+  }
   const syncTime = () => {
     const total = duration()
     progress.max = String(total || 0)
@@ -38,6 +61,8 @@ export function mountVideoPlayer({ container, src, poster = '', durationMs = 0, 
   const syncPlayback = () => {
     const playing = !video.paused && !video.ended
     root.classList.toggle('is-playing', playing)
+    if (playing) scheduleControlsHide()
+    else showControls()
     root.querySelectorAll('[data-player-toggle]').forEach(button => {
       button.setAttribute('aria-label', playing ? '暂停' : '播放')
       button.innerHTML = playing ? pauseIcon() : playIcon()
@@ -55,6 +80,13 @@ export function mountVideoPlayer({ container, src, poster = '', durationMs = 0, 
   }
 
   root.querySelectorAll('[data-player-toggle]').forEach(button => listen(button, 'click', togglePlayback))
+  listen(root, 'pointermove', revealControls)
+  listen(root, 'pointerenter', revealControls)
+  listen(root, 'pointerleave', () => scheduleControlsHide(240))
+  listen(root, 'focusin', showControls)
+  listen(root, 'focusout', () => queueMicrotask(() => {
+    if (!root.contains(document.activeElement)) scheduleControlsHide()
+  }))
   listen(root.querySelector('[data-player-back]'), 'click', () => seekBy(-10))
   listen(root.querySelector('[data-player-forward]'), 'click', () => seekBy(10))
   listen(progress, 'input', () => { video.currentTime = clamp(progress.value); syncTime() })
@@ -88,6 +120,7 @@ export function mountVideoPlayer({ container, src, poster = '', durationMs = 0, 
     element: video,
     root,
     destroy() {
+      clearControlsIdleTimer()
       abortController.abort()
       video.pause?.()
       container.replaceChildren()

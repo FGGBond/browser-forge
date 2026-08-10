@@ -15,7 +15,7 @@ beforeAll(async () => {
     const url = new URL(req.url, 'http://localhost')
     if (url.pathname === '/') {
       res.setHeader('content-type', 'text/html')
-      return res.end(`<!doctype html><html><body><div id="player"></div><script type="module">
+      return res.end(`<!doctype html><html><head><link rel="stylesheet" href="/styles.css"></head><body><div id="player"></div><script type="module">
         import { mountVideoPlayer } from '/views/video-player.js'
         window.controller = mountVideoPlayer({ container: document.querySelector('#player'), src: '/video.mp4', poster: '/poster.png', durationMs: 42000, title: '订单查询' })
       </script></body></html>`)
@@ -77,4 +77,59 @@ describe('custom Browser Forge video player', () => {
     expect(await page.evaluate(() => window.fullscreenRequested)).toBe(true)
     await page.close()
   })
+
+  it('hides controls only after playing idle and reveals them immediately for pointer or keyboard focus', { timeout: 12000 }, async () => {
+    const page = await browser.newPage()
+    await page.goto(baseUrl, { waitUntil: 'networkidle' })
+    const root = page.locator('[data-video-player]')
+    const controls = page.locator('.player-controls')
+    await page.evaluate(() => {
+      const video = document.querySelector('video')
+      window.playerIsPlaying = false
+      Object.defineProperty(video, 'paused', { configurable: true, get: () => !window.playerIsPlaying })
+      video.play = async () => { window.playerIsPlaying = true; video.dispatchEvent(new Event('play')) }
+      video.pause = () => { window.playerIsPlaying = false; video.dispatchEvent(new Event('pause')) }
+    })
+
+    await page.locator('.player-surface-toggle').click()
+    await page.evaluate(() => document.activeElement?.blur())
+    await expect.poll(() => root.evaluate(element => element.classList.contains('controls-hidden')), { timeout: 2600 }).toBe(true)
+
+    await root.dispatchEvent('pointermove', { clientX: 20, clientY: 20 })
+    expect(await root.evaluate(element => element.classList.contains('controls-hidden'))).toBe(false)
+    const showMotion = await controls.evaluate(element => {
+      const style = getComputedStyle(element)
+      return { duration: style.transitionDuration, property: style.transitionProperty }
+    })
+    expect(showMotion.property.split(',').map(value => value.trim())).toEqual(['opacity', 'transform'])
+    expect(showMotion.duration.split(',').map(value => value.trim())).toEqual(['0.08s', '0.08s'])
+
+    await page.getByRole('button', { name: '播放速度 1 倍' }).focus()
+    await page.waitForTimeout(1800)
+    expect(await root.evaluate(element => element.classList.contains('controls-hidden'))).toBe(false)
+
+    await page.evaluate(() => document.activeElement?.blur())
+    await expect.poll(() => root.evaluate(element => element.classList.contains('controls-hidden')), { timeout: 2600 }).toBe(true)
+    const hideMotion = await controls.evaluate(element => getComputedStyle(element).transitionDuration)
+    expect(hideMotion.split(',').map(value => value.trim())).toEqual(['0.15s', '0.15s'])
+
+    await page.evaluate(() => document.querySelector('video').pause())
+    expect(await root.evaluate(element => element.classList.contains('controls-hidden'))).toBe(false)
+    await page.close()
+  })
+
+  it('removes control translation in reduced-motion mode without losing visibility feedback', async () => {
+    const page = await browser.newPage({ reducedMotion: 'reduce' })
+    await page.goto(baseUrl, { waitUntil: 'networkidle' })
+    await page.locator('[data-video-player]').evaluate(element => element.classList.add('controls-hidden'))
+    const reduced = await page.locator('.player-controls').evaluate(element => {
+      const style = getComputedStyle(element)
+      return { transform: style.transform, property: style.transitionProperty, duration: style.transitionDuration }
+    })
+    expect(reduced.transform).toBe('none')
+    expect(reduced.property).toBe('opacity')
+    expect(Number.parseFloat(reduced.duration)).toBeLessThanOrEqual(.08)
+    await page.close()
+  })
+
 })

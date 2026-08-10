@@ -15,7 +15,7 @@ let promptText = ''
 let promptSaveDelayMs = 0
 let promptSaveShouldFail = false
 const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
-const recording = { id, title: '订单查询', state: 'active', createdAt: '2026-08-08T12:15:00.000Z', durationMs: 42_000, startHost: 'example.com', videoStatus: 'complete', promptStatus: 'empty', sizeBytes: 1048576 }
+const recording = { id, title: '订单查询', state: 'active', createdAt: '2026-08-08T12:15:00.000Z', durationMs: 42_000, startHost: 'example.com', visitedHosts: ['example.com', 'checkout.example.com'], videoStatus: 'complete', promptStatus: 'empty', sizeBytes: 1048576 }
 const contentTypes = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' }
 
 beforeAll(async () => {
@@ -144,16 +144,35 @@ describe('recording detail UI', () => {
     expect(geometry.paneWidth).toBeLessThanOrEqual(482)
     expect(geometry.centerWidth).toBeGreaterThan(760)
     expect(geometry.titlebarHeight).toBeGreaterThanOrEqual(42)
-    expect(geometry.titlebarHeight).toBeLessThanOrEqual(48)
+    expect(geometry.titlebarHeight).toBeLessThanOrEqual(44)
     expect(geometry.videoWidth / geometry.centerWidth).toBeGreaterThan(0.82)
     expect(geometry.videoWidth / geometry.centerWidth).toBeLessThan(0.92)
     expect(geometry.actionsTop).toBeGreaterThanOrEqual(geometry.videoBottom)
 
-    expect(await page.locator('[data-evidence-strip]').count()).toBe(1)
+    const evidenceText = await page.locator('[data-evidence-strip]').textContent()
+    expect(evidenceText).toContain('0:42')
+    expect(evidenceText).toContain('example.com')
+    expect(evidenceText).toContain('checkout.example.com')
+    expect(evidenceText).toContain('视频可用')
+    expect(evidenceText).toContain('2026')
     expect(await page.locator('[data-object-actions]').count()).toBe(1)
     expect(await page.getByRole('button', { name: '导出录制' }).count()).toBe(1)
     expect(await page.getByRole('button', { name: '移入回收站' }).count()).toBe(1)
     expect(await page.locator('[data-analysis-pane][hidden]').count()).toBe(0)
+    await pane.evaluate(element => {
+      const scroll = element.querySelector('[data-guidance-chat-scroll]')
+      const history = element.querySelector('[data-guidance-chat-list]')
+      history.style.minHeight = '1400px'
+      scroll.scrollTop = scroll.scrollHeight
+    })
+    await page.waitForTimeout(50)
+    const stickyComposer = await page.evaluate(() => {
+      const pane = document.querySelector('[data-analysis-pane]').getBoundingClientRect()
+      const composer = document.querySelector('[data-guidance-composer]').getBoundingClientRect()
+      return { paneTop: pane.top, paneBottom: pane.bottom, composerTop: composer.top, composerBottom: composer.bottom }
+    })
+    expect(stickyComposer.composerTop).toBeGreaterThanOrEqual(stickyComposer.paneTop)
+    expect(stickyComposer.composerBottom).toBeLessThanOrEqual(stickyComposer.paneBottom + 1)
     await page.close()
   }, 20_000)
 
