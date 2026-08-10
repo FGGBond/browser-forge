@@ -70,7 +70,6 @@ root.innerHTML = `
 const shell = root.querySelector('[data-app-shell]')
 const sidebarHost = root.querySelector('[data-sidebar-host]')
 const main = root.querySelector('[data-main]')
-let cleanupSidebar
 let cleanupView
 let beforeNavigate
 let navigating = false
@@ -89,24 +88,153 @@ window.addEventListener('pagehide', () => {
   if (window.__browserForgeBeforeClose === beforeCloseHook) delete window.__browserForgeBeforeClose
 }, { once: true })
 
-function renderWorkspaceSidebar(value = state.value) {
-  cleanupSidebar?.()
-  shell.classList.toggle('sidebar-collapsed', value.sidebarCollapsed)
-  cleanupSidebar = renderSidebar({
-    container: sidebarHost,
+const SIDEBAR_LABEL_ENTER_DURATION_MS = 170
+const SIDEBAR_LABEL_EXIT_DURATION_MS = 110
+const SIDEBAR_REDUCED_MOTION_DURATION_MS = 80
+let sidebarElement = null
+let sidebarStructureKey = ''
+let sidebarTargetCollapsed = null
+let sidebarMotionRevision = 0
+let sidebarMotionTimer = null
+let sidebarMotionFrames = []
+
+const sidebarActions = {
+  onNew: () => navigate('new-recording'),
+  onNavigate: (route, id) => id ? navigate('detail', { selectedId: id }) : navigate(route),
+  onToggle: () => {
+    const sidebarCollapsed = !state.value.sidebarCollapsed
+    writeSidebarCollapsed(sidebarCollapsed)
+    state.update({ sidebarCollapsed })
+  }
+}
+
+function sidebarKey(value) {
+  return JSON.stringify([
+    value.route,
+    value.selectedId,
+    value.route === 'recording',
+    value.recordings.map(recording => [recording.id, recording.title, recording.state])
+  ])
+}
+
+function sidebarRenderOptions(container, value) {
+  return {
+    container,
     recordings: value.recordings,
     route: value.route,
     selectedId: value.selectedId,
     collapsed: value.sidebarCollapsed,
     locked: value.route === 'recording',
-    onNew: () => navigate('new-recording'),
-    onNavigate: (route, id) => id ? navigate('detail', { selectedId: id }) : navigate(route),
-    onToggle: () => {
-      const sidebarCollapsed = !state.value.sidebarCollapsed
-      writeSidebarCollapsed(sidebarCollapsed)
-      state.update({ sidebarCollapsed })
-    }
+    ...sidebarActions
+  }
+}
+
+function renderSidebarStructure(value) {
+  const nextKey = sidebarKey(value)
+  if (sidebarElement && nextKey === sidebarStructureKey) return
+  sidebarStructureKey = nextKey
+
+  if (!sidebarElement) {
+    renderSidebar(sidebarRenderOptions(sidebarHost, value))
+    sidebarElement = sidebarHost.querySelector('.app-sidebar')
+    return
+  }
+
+  const staging = document.createElement('div')
+  renderSidebar(sidebarRenderOptions(staging, value))
+  const nextSidebar = staging.querySelector('.app-sidebar')
+  if (!nextSidebar) return
+  sidebarElement.replaceChildren(...nextSidebar.childNodes)
+}
+
+function setSidebarMotionPhase(phase) {
+  shell.setAttribute('data-sidebar-motion', phase)
+}
+
+function cancelSidebarMotion() {
+  sidebarMotionRevision += 1
+  if (sidebarMotionTimer !== null) clearTimeout(sidebarMotionTimer)
+  sidebarMotionTimer = null
+  for (const frame of sidebarMotionFrames) cancelAnimationFrame(frame)
+  sidebarMotionFrames = []
+  return sidebarMotionRevision
+}
+
+function scheduleSidebarFrame(callback) {
+  const frame = requestAnimationFrame(() => {
+    sidebarMotionFrames = sidebarMotionFrames.filter(value => value !== frame)
+    callback()
   })
+  sidebarMotionFrames.push(frame)
+}
+
+function sidebarMotionDuration(normalDuration) {
+  return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    ? SIDEBAR_REDUCED_MOTION_DURATION_MS
+    : normalDuration
+}
+
+function updateSidebarToggle(collapsed) {
+  const toggle = sidebarElement?.querySelector('[data-sidebar-toggle]')
+  if (!toggle) return
+  const label = collapsed ? '展开侧边栏' : '收起侧边栏'
+  toggle.setAttribute('aria-label', label)
+  toggle.setAttribute('title', label)
+  const copy = toggle.querySelector('.sidebar-label')
+  if (copy) copy.textContent = label
+  const direction = toggle.querySelector('svg path:last-child')
+  if (direction) direction.setAttribute('d', collapsed ? 'M12 7l3 3-3 3' : 'M15 7l-3 3 3 3')
+}
+
+function initializeSidebarMotion(collapsed) {
+  sidebarTargetCollapsed = collapsed
+  shell.classList.toggle('sidebar-collapsed', collapsed)
+  sidebarElement.classList.toggle('is-collapsed', collapsed)
+  sidebarElement.classList.toggle('sidebar-labels-hidden', collapsed)
+  updateSidebarToggle(collapsed)
+  setSidebarMotionPhase(collapsed ? 'collapsed' : 'expanded')
+}
+
+function transitionSidebar(collapsed) {
+  const revision = cancelSidebarMotion()
+  sidebarTargetCollapsed = collapsed
+  updateSidebarToggle(collapsed)
+
+  if (collapsed) {
+    setSidebarMotionPhase('collapsing')
+    sidebarElement.classList.add('sidebar-labels-hidden')
+    sidebarMotionTimer = setTimeout(() => {
+      if (revision !== sidebarMotionRevision || !sidebarTargetCollapsed) return
+      shell.classList.add('sidebar-collapsed')
+      sidebarElement.classList.add('is-collapsed')
+      setSidebarMotionPhase('collapsed')
+      sidebarMotionTimer = null
+    }, sidebarMotionDuration(SIDEBAR_LABEL_EXIT_DURATION_MS))
+    return
+  }
+
+  shell.classList.remove('sidebar-collapsed')
+  sidebarElement.classList.remove('is-collapsed')
+  sidebarElement.classList.add('sidebar-labels-hidden')
+  setSidebarMotionPhase('expanding')
+  scheduleSidebarFrame(() => scheduleSidebarFrame(() => {
+    if (revision !== sidebarMotionRevision || sidebarTargetCollapsed) return
+    sidebarElement.classList.remove('sidebar-labels-hidden')
+    sidebarMotionTimer = setTimeout(() => {
+      if (revision !== sidebarMotionRevision || sidebarTargetCollapsed) return
+      setSidebarMotionPhase('expanded')
+      sidebarMotionTimer = null
+    }, sidebarMotionDuration(SIDEBAR_LABEL_ENTER_DURATION_MS))
+  }))
+}
+
+function renderWorkspaceSidebar(value = state.value) {
+  renderSidebarStructure(value)
+  if (sidebarTargetCollapsed === null) {
+    initializeSidebarMotion(value.sidebarCollapsed)
+    return
+  }
+  if (value.sidebarCollapsed !== sidebarTargetCollapsed) transitionSidebar(value.sidebarCollapsed)
 }
 
 state.subscribe(renderWorkspaceSidebar)

@@ -50,6 +50,23 @@ describe('recording workspace shell', () => {
     expect(css).not.toMatch(/\.analysis-workspace[^}]*transition:[^;}]*grid-template-columns/s)
   })
 
+  it('defines an interruptible compositor-only sidebar motion contract', () => {
+    const app = readUi('app.js')
+    const css = readUi('styles.css')
+
+    expect(app).toContain('data-sidebar-motion')
+    expect(app).toContain('requestAnimationFrame')
+    expect(app).toContain('sidebar-labels-hidden')
+    expect(app).not.toContain('cleanupSidebar?.()')
+    expect(css).toMatch(/\.sidebar-label \{[^}]*opacity:1[^}]*transform:/s)
+    expect(css).toMatch(/\.sidebar-labels-hidden \.sidebar-label \{[^}]*opacity:0[^}]*translateX\(-6px\)/s)
+    expect(css).not.toMatch(/\.app-sidebar\.is-collapsed \.sidebar-label \{[^}]*display\s*:\s*none/s)
+    expect(css).toContain('--sidebar-label-enter-duration: 170ms')
+    expect(css).toContain('--sidebar-label-exit-duration: 110ms')
+    expect(css).not.toMatch(/transition[^;}]*\b(?:width|padding|grid-template-columns)\b/)
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sidebar-label[^}]*transform:none\s*!important/)
+  })
+
   it('stores shell collapse state separately from recording data', () => {
     const app = readUi('app.js')
     expect(app).toContain("sidebarCollapsed: readSidebarCollapsed()")
