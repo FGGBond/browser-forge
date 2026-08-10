@@ -294,6 +294,51 @@ export class RecordingLibrary {
     }
   }
 
+  async createAgentHandoff(id, destinationRoot) {
+    this.#requireInitialized()
+    const recordingId = assertRecordingId(id)
+    const snapshot = await this.#enqueue(async () => {
+      this.#assertNotBusy(recordingId)
+      const recording = await this.#resolveInState(recordingId, 'active')
+      this.busyRecordings.add(recordingId)
+      try {
+        const guidance = recording.metadata.prompt.status === 'draft'
+          ? await this.#readPromptText(recording.path)
+          : ''
+        return { recording, guidance }
+      } catch (error) {
+        this.busyRecordings.delete(recordingId)
+        throw error
+      }
+    })
+
+    let temporaryPath
+    try {
+      const safeDestination = await assertSafeDirectory(destinationRoot)
+      return await this.#withExportDestinationLock(safeDestination, async () => {
+        const finalPath = await this.#nextExportPath(safeDestination, snapshot.recording.metadata)
+        temporaryPath = `${finalPath}.browser-forge-exporting`
+        await this.fs.rm(temporaryPath, { recursive: true, force: true })
+        await this.copyTree(snapshot.recording.path, temporaryPath)
+        await atomicWriteText(join(temporaryPath, 'prompt.md'), snapshot.guidance ? `${snapshot.guidance}\n` : '')
+        await atomicWriteText(join(temporaryPath, 'EXPORT.md'), exportReadme())
+        await this.fs.rename(temporaryPath, finalPath)
+        temporaryPath = null
+        return {
+          recordingId,
+          path: finalPath,
+          text: buildExternalAgentPrompt({ recordingPath: finalPath, guidance: snapshot.guidance })
+        }
+      })
+    } catch (error) {
+      if (temporaryPath) await this.fs.rm(temporaryPath, { recursive: true, force: true }).catch(() => {})
+      if (error?.code && ['INVALID_INPUT', 'INVALID_STATE', 'NOT_FOUND', 'BUSY', 'CORRUPT_MATERIAL'].includes(error.code)) throw error
+      throw toLibraryError(error, 'FILESYSTEM_FAILURE', 'Could not create agent handoff')
+    } finally {
+      this.busyRecordings.delete(recordingId)
+    }
+  }
+
   async rename(id, title) {
     this.#requireInitialized()
     const trimmed = String(title ?? '').trim()

@@ -535,6 +535,16 @@ function registerRecordingLibraryRoutes({ app, recordingLibrary, chooseExportDir
     res.json(await recordingLibrary.getExternalAgentPrompt(req.params.id))
   }))
 
+  app.post('/api/recordings/:id/agent-handoff', asyncRoute(async (req, res) => {
+    if (!chooseExportDirectory) throw apiError('UNSUPPORTED_SHELL', 'Agent handoff requires the Electron App')
+    const destination = await chooseExportDirectory({ recordingId: req.params.id, purpose: 'agent-handoff' })
+    if (!destination) {
+      res.status(204).end()
+      return
+    }
+    res.json(await recordingLibrary.createAgentHandoff(req.params.id, destination))
+  }))
+
   app.post('/api/recordings/:id/trash', asyncRoute(async (req, res) => {
     res.json(await recordingLibrary.trash(req.params.id))
   }))

@@ -372,6 +372,127 @@ describe('RecordingLibrary recycle bin and export', () => {
     }
   })
 
+  it('creates an atomic agent handoff from the latest guidance snapshot and final export path', async () => {
+    await seedMaterial()
+    const exportRoot = await mkdtemp(join(tmpdir(), 'bf-handoff-'))
+    try {
+      const copyDestinations = []
+      const library = new RecordingLibrary({
+        root,
+        now,
+        copyTree: async (source, destination) => {
+          copyDestinations.push(destination)
+          await mkdir(destination)
+          await mkdir(join(destination, 'video'))
+          await writeFile(join(destination, 'prompt.md'), await readFile(join(source, 'prompt.md')))
+          await writeFile(join(destination, 'video', 'recording.mp4'), await readFile(join(source, 'video', 'recording.mp4')))
+          await writeFile(join(destination, 'recording.json'), await readFile(join(source, 'recording.json')))
+          await writeFile(join(destination, 'timeline.json'), await readFile(join(source, 'timeline.json')))
+        }
+      })
+      await library.initialize()
+      await library.savePrompt(firstId, '最新的三问 guidance')
+
+      const result = await library.createAgentHandoff(firstId, exportRoot)
+
+      expect(result).toEqual({
+        recordingId: firstId,
+        path: join(exportRoot, '订单-查询-20260808-121500'),
+        text: expect.any(String)
+      })
+      expect(copyDestinations).toEqual([`${result.path}.browser-forge-exporting`])
+      expect(result.text).toContain(result.path)
+      expect(result.text).toContain('最新的三问 guidance')
+      expect(result.text).not.toContain(join(paths.active, firstId))
+      expect(await readFile(join(result.path, 'prompt.md'), 'utf8')).toBe('最新的三问 guidance\n')
+      expect(await readFile(join(result.path, 'EXPORT.md'), 'utf8')).toContain('browser-forge')
+      await expect(access(`${result.path}.browser-forge-exporting`)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(exportRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('writes an explicit empty prompt snapshot when guidance has not been provided', async () => {
+    await seedRecording({ parent: paths.active, id: firstId, createdAt: '2026-08-08T12:15:00.000Z', title: 'Empty guidance' })
+    const exportRoot = await mkdtemp(join(tmpdir(), 'bf-handoff-'))
+    try {
+      const library = new RecordingLibrary({ root, now })
+      await library.initialize()
+
+      const result = await library.createAgentHandoff(firstId, exportRoot)
+
+      expect(await readFile(join(result.path, 'prompt.md'), 'utf8')).toBe('')
+      expect(result.text).toContain('向用户确认关键目标')
+    } finally {
+      await rm(exportRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the recording busy for the complete agent handoff snapshot and copy', async () => {
+    await seedMaterial()
+    const exportRoot = await mkdtemp(join(tmpdir(), 'bf-handoff-'))
+    let releaseCopy
+    let copyStarted
+    const enteredCopy = new Promise(resolve => { copyStarted = resolve })
+    const copyTree = vi.fn(async (_source, destination) => {
+      await mkdir(destination)
+      copyStarted()
+      await new Promise(resolve => { releaseCopy = resolve })
+    })
+    try {
+      const library = new RecordingLibrary({ root, now, copyTree })
+      await library.initialize()
+      const handoff = library.createAgentHandoff(firstId, exportRoot)
+      await enteredCopy
+
+      await expect(library.savePrompt(firstId, 'too late')).rejects.toMatchObject({ code: 'BUSY' })
+      await expect(library.trash(firstId)).rejects.toMatchObject({ code: 'BUSY' })
+      releaseCopy()
+      const result = await handoff
+      expect(result.text).toContain('查询订单')
+      expect(await readFile(join(result.path, 'prompt.md'), 'utf8')).toBe('查询订单\n')
+    } finally {
+      releaseCopy?.()
+      await rm(exportRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('does not leave an export or build a handoff result when snapshot export fails', async () => {
+    await seedMaterial()
+    const exportRoot = await mkdtemp(join(tmpdir(), 'bf-handoff-'))
+    try {
+      const library = new RecordingLibrary({
+        root,
+        now,
+        copyTree: async (_source, destination) => {
+          await mkdir(destination)
+          throw new Error('copy failed')
+        }
+      })
+      await library.initialize()
+
+      await expect(library.createAgentHandoff(firstId, exportRoot)).rejects.toMatchObject({ code: 'FILESYSTEM_FAILURE' })
+      expect(await import('fs/promises').then(({ readdir }) => readdir(exportRoot))).toEqual([])
+    } finally {
+      await rm(exportRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves symlink protection for agent handoff exports', async () => {
+    await seedMaterial()
+    await symlink(join(outside, 'secret'), join(paths.active, firstId, 'escape'))
+    const exportRoot = await mkdtemp(join(tmpdir(), 'bf-handoff-'))
+    try {
+      const library = new RecordingLibrary({ root, now })
+      await library.initialize()
+
+      await expect(library.createAgentHandoff(firstId, exportRoot)).rejects.toMatchObject({ code: 'CORRUPT_MATERIAL' })
+      expect(await import('fs/promises').then(({ readdir }) => readdir(exportRoot))).toEqual([])
+    } finally {
+      await rm(exportRoot, { recursive: true, force: true })
+    }
+  })
+
   it('serializes export-name allocation across different recordings', async () => {
     await seedMaterial()
     const secondMetadata = await seedRecording({ parent: paths.active, id: secondId, createdAt: '2026-08-08T12:15:00.000Z', title: '订单 查询' })

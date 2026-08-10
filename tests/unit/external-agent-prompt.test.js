@@ -55,6 +55,16 @@ describe('external Agent prompt domain', () => {
     expect(result).toContain(`### Skill 验收标准\n未提供`)
   })
 
+  it('uses the final exported directory verbatim without leaking the managed recording path', () => {
+    const exportedPath = '/Users/me/Desktop/订单-查询-20260808-121500'
+    const managedPath = '/Users/me/Library/Application Support/Browser Forge/recordings/active/private-id'
+    const result = buildExternalAgentPrompt({ recordingPath: exportedPath, guidance: '导出后分析' })
+
+    expect(result).toContain(`录制物料绝对路径：\n${exportedPath}`)
+    expect(result).not.toContain(managedPath)
+    expect(result).toContain('导出后分析')
+  })
+
   it('provides actionable fallback guidance when the persisted prompt is empty', () => {
     expect(buildExternalAgentPrompt({ recordingPath: '/managed/recording', guidance: '' })).toContain('向用户确认关键目标')
   })

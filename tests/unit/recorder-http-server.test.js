@@ -817,6 +817,7 @@ describe('recording library HTTP API', () => {
       getPrompt: vi.fn(async () => ({ text: '', status: 'empty', updatedAt: null })),
       savePrompt: vi.fn(async (_id, text) => ({ text, status: 'draft', updatedAt: '2026-08-08T12:20:00.000Z' })),
       getExternalAgentPrompt: vi.fn(async () => ({ recordingId: id, text: 'complete prompt' })),
+      createAgentHandoff: vi.fn(async (_id, destination) => ({ recordingId: id, path: join(destination, 'Orders'), text: 'handoff prompt' })),
       trash: vi.fn(async () => ({ ...recording, state: 'trashed' })),
       restore: vi.fn(async () => recording),
       deletePermanently: vi.fn(async () => ({ id, deleted: true })),
@@ -893,6 +894,41 @@ describe('recording library HTTP API', () => {
     expect(chooseExportDirectory).toHaveBeenCalledWith(expect.objectContaining({ recordingId: id }))
     expect(recordingLibrary.export).toHaveBeenCalledWith(id, '/Users/example/Desktop')
     expect(result.path).toBe('/Users/example/Desktop/Orders')
+  })
+
+  it('creates an agent handoff through the main-process chooser and ignores renderer destinations', async () => {
+    const chooseExportDirectory = vi.fn(async () => '/Users/example/Desktop')
+    const { url, recordingLibrary } = await createLibraryServer({ chooseExportDirectory })
+    const result = await fetch(`${url}/api/recordings/${id}/agent-handoff`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ destination: '/tmp/attacker', guidance: 'renderer must not bypass persisted snapshot' })
+    }).then(response => response.json())
+
+    expect(chooseExportDirectory).toHaveBeenCalledWith(expect.objectContaining({ recordingId: id, purpose: 'agent-handoff' }))
+    expect(recordingLibrary.createAgentHandoff).toHaveBeenCalledWith(id, '/Users/example/Desktop')
+    expect(result).toEqual({ recordingId: id, path: '/Users/example/Desktop/Orders', text: 'handoff prompt' })
+  })
+
+  it('returns a quiet result when the agent handoff directory chooser is canceled', async () => {
+    const chooseExportDirectory = vi.fn(async () => null)
+    const { url, recordingLibrary } = await createLibraryServer({ chooseExportDirectory })
+    const response = await fetch(`${url}/api/recordings/${id}/agent-handoff`, { method: 'POST' })
+
+    expect(response.status).toBe(204)
+    expect(await response.text()).toBe('')
+    expect(recordingLibrary.createAgentHandoff).not.toHaveBeenCalled()
+  })
+
+  it('does not derive a separate prompt when agent handoff export fails', async () => {
+    const failure = Object.assign(new Error('copy failed'), { code: 'FILESYSTEM_FAILURE' })
+    const createAgentHandoff = vi.fn(async () => { throw failure })
+    const { url, recordingLibrary } = await createLibraryServer({ recordingLibrary: { createAgentHandoff } })
+    const response = await fetch(`${url}/api/recordings/${id}/agent-handoff`, { method: 'POST' })
+
+    expect(response.status).toBe(500)
+    expect((await response.json()).error.code).toBe('FILESYSTEM_FAILURE')
+    expect(recordingLibrary.getExternalAgentPrompt).not.toHaveBeenCalled()
   })
 
   it('supports trash, restore, permanent delete, and export cancellation', async () => {
