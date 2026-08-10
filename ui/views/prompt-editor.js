@@ -66,6 +66,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   const chatList = flow.querySelector('[data-guidance-chat-list]')
   const chatScroll = flow.querySelector('[data-guidance-chat-scroll]')
   const dock = flow.querySelector('[data-guidance-dock]')
+  const currentQuestion = flow.querySelector('[data-guidance-current-question]')
   const handoffCard = flow.querySelector('[data-handoff-card]')
   const progressText = flow.querySelector('[data-guidance-progress-text]')
   const questionTitle = flow.querySelector('[data-guidance-question-title]')
@@ -198,7 +199,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     const items = []
     QUESTIONS.forEach((question, index) => {
       if (!submitted[index]) return
-      const questionLabel = `<p class="guidance-chat-question">${escapeHtml(question.title)}</p>`
+      const questionLabel = `<p class="guidance-chat-question">${escapeHtml(question.title)}<small>${escapeHtml(question.description)}</small></p>`
       if (editingSubmittedKey === question.key) {
         // 编辑态:气泡原地变成宽编辑卡,挂载点由 mountChatEditor 填充
         items.push(`
@@ -250,9 +251,21 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   }
 
   // 完成态:handoff 卡吸附在 composer 顶部并完全遮罩它;composer 禁用交互
+  const composerEditorRoot = composer.querySelector('[data-guidance-editor-root]')
+  const composerFooter = composer.querySelector('.guidance-composer-footer')
+
+  // 完成态锁定 composer;铅笔编辑进行中也视为可交互
+  const syncComposerInteractivity = () => {
+    const locked = done && editingSubmittedKey === null
+    composer.classList.toggle('guidance-composer-done', locked)
+    composer.setAttribute('aria-disabled', locked ? 'true' : 'false')
+    if (currentQuestion) currentQuestion.hidden = done
+    if (composerEditorRoot) composerEditorRoot.hidden = locked
+    if (composerFooter) composerFooter.hidden = locked
+  }
+
   const applyCompletionLayout = () => {
-    composer.classList.toggle('guidance-composer-done', done)
-    composer.setAttribute('aria-disabled', done ? 'true' : 'false')
+    syncComposerInteractivity()
     const surface = composer.querySelector('[data-guidance-editor-surface]')
     if (surface) surface.contentEditable = done ? 'false' : 'true'
     renderHandoffCard()
@@ -356,6 +369,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     const root = chatList.querySelector('[data-chat-edit-root]')
     if (editor) focusChatEditor(root)
     updateProgress()
+    syncComposerInteractivity()
   }
 
   const cancelEdit = key => {
@@ -377,7 +391,8 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     refreshSendState()
     if (!done && !activeEditor && !destroyed) mountQuestionEditor()
     focusComposer()
-  }
+    syncComposerInteractivity()
+}
 
   const handleChatEditSend = async () => {
     if (transitionPending || editingSubmittedKey === null) return
@@ -421,7 +436,8 @@ export async function renderPromptEditor({ container, recordingId, api }) {
       refreshSendState()
       if (done) refreshHandoffButtons()
     }
-  }
+    syncComposerInteractivity()
+}
 
   const copyAnswer = async button => {
     const key = button.dataset.copyAnswer
