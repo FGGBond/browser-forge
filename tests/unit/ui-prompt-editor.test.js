@@ -285,32 +285,29 @@ describe('three-question guided composer', () => {
     }
   })
 
-  it('retries clipboard failure without exporting a second time', async () => {
+  it('restores an exported copy failure after editing navigation and never repeats handoff without changes', async () => {
     const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
-    await context.addInitScript(() => {
-      window.__clipboardShouldFail = true
-      window.__copiedText = ''
-      Object.defineProperty(navigator, 'clipboard', {
-        configurable: true,
-        value: {
-          writeText: async text => {
-            if (window.__clipboardShouldFail) throw new Error('clipboard denied')
-            window.__copiedText = text
-          },
-          readText: async () => window.__copiedText
-        }
-      })
-    })
+    await installControlledClipboard(context)
     const page = await openGuidance(context)
     try {
       await completeQuestions(page)
       await page.getByRole('button', { name: '导出并复制给外部 Agent' }).click()
 
-      await expect.poll(() => page.locator('[data-handoff-status]').textContent()).toContain('录制已导出，复制失败')
+      await expect.poll(() => page.locator('[data-handoff-status]').textContent()).toContain('复制失败')
+      expect(await page.locator('[data-handoff-status]').textContent()).toContain(exportedPath)
       expect(handoffCalls).toBe(1)
-      await page.evaluate(() => { window.__clipboardShouldFail = false })
-      await page.getByRole('button', { name: '重试复制' }).click()
 
+      await page.locator('[data-guidance-previous]').click()
+      await expectStep(page, 3, '怎样证明这个 skill 可以交付？')
+      await page.getByRole('button', { name: '检查并完成' }).click()
+      await page.locator('[data-guidance-review]').waitFor()
+
+      expect(await page.locator('[data-handoff-status]').textContent()).toContain(exportedPath)
+      expect(await page.locator('[data-handoff-status]').textContent()).toContain('复制失败')
+      expect(await page.locator('[data-retry-copy]').isVisible()).toBe(true)
+
+      await page.evaluate(() => { window.__clipboardShouldFail = false })
+      await page.locator('[data-agent-handoff]').click()
       await expect.poll(() => page.evaluate(() => window.__copiedText)).toContain(exportedPath)
       expect(handoffCalls).toBe(1)
       await expect.poll(() => page.locator('[data-handoff-status]').textContent()).toContain('已导出并复制')
@@ -318,7 +315,97 @@ describe('three-question guided composer', () => {
       await context.close()
     }
   })
+
+  it('invalidates the exported handoff only after guidance actually changes', async () => {
+    const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
+    await installControlledClipboard(context)
+    const page = await openGuidance(context)
+    try {
+      await completeQuestions(page)
+      await page.locator('[data-agent-handoff]').click()
+      await expect.poll(() => handoffCalls).toBe(1)
+      await expect.poll(() => page.locator('[data-handoff-status]').textContent()).toContain('复制失败')
+
+      await page.locator('[data-guidance-previous]').click()
+      await expectStep(page, 3, '怎样证明这个 skill 可以交付？')
+      await fillActiveEditor(page, '使用 JD456 查询并与详情页核对')
+      await page.getByRole('button', { name: '检查并完成' }).click()
+      await page.locator('[data-guidance-review]').waitFor()
+
+      expect((await page.locator('[data-handoff-status]').textContent()).trim()).toBe('')
+      expect(await page.locator('[data-retry-copy]').isVisible()).toBe(false)
+      await page.evaluate(() => { window.__clipboardShouldFail = false })
+      await page.locator('[data-agent-handoff]').click()
+      await expect.poll(() => handoffCalls).toBe(2)
+    } finally {
+      await context.close()
+    }
+  })
+
+  it('uses dismissible alert semantics for handoff errors without losing copy retry', async () => {
+    const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
+    await installControlledClipboard(context)
+    const page = await openGuidance(context)
+    try {
+      await completeQuestions(page)
+      await page.locator('[data-agent-handoff]').click()
+      const status = page.locator('[data-handoff-status]')
+      await expect.poll(() => status.textContent()).toContain('复制失败')
+      expect(await status.getAttribute('role')).toBe('alert')
+      expect(await page.locator('[data-dismiss-handoff-error]').isVisible()).toBe(true)
+
+      await page.locator('[data-dismiss-handoff-error]').click()
+      expect((await status.textContent()).trim()).toBe('')
+      expect(await page.locator('[data-retry-copy]').isVisible()).toBe(true)
+
+      await page.evaluate(() => { window.__clipboardShouldFail = false })
+      await page.locator('[data-retry-copy]').click()
+      await expect.poll(() => status.textContent()).toContain('已导出并复制')
+      expect(await status.getAttribute('role')).toBe('status')
+      expect(handoffCalls).toBe(1)
+    } finally {
+      await context.close()
+    }
+  })
+
+  it('uses a dismissible alert for export failures while pending and success remain status messages', async () => {
+    handoffMode = 'error'
+    const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
+    const page = await openGuidance(context)
+    try {
+      await completeQuestions(page)
+      await page.locator('[data-agent-handoff]').click()
+      const status = page.locator('[data-handoff-status]')
+      await expect.poll(() => status.textContent()).toContain('导出失败')
+      expect(await status.getAttribute('role')).toBe('alert')
+      expect(await page.locator('[data-dismiss-handoff-error]').isVisible()).toBe(true)
+
+      await page.locator('[data-dismiss-handoff-error]').click()
+      expect((await status.textContent()).trim()).toBe('')
+      expect(await page.locator('[data-agent-handoff]').isEnabled()).toBe(true)
+    } finally {
+      await context.close()
+    }
+  })
 })
+
+
+async function installControlledClipboard(context) {
+  await context.addInitScript(() => {
+    window.__clipboardShouldFail = true
+    window.__copiedText = ''
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async text => {
+          if (window.__clipboardShouldFail) throw new Error('clipboard denied')
+          window.__copiedText = text
+        },
+        readText: async () => window.__copiedText
+      }
+    })
+  })
+}
 
 async function openGuidance(context = browser) {
   const page = await context.newPage()

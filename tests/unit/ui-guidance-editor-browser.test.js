@@ -224,6 +224,31 @@ describe('guided composer in Chromium', () => {
     await page.close()
   })
 
+  it('preserves the automatic list conversion checkpoint through native text undo', async () => {
+    for (const scenario of [
+      { marker: '- ', list: 'ul', converted: '- ', restored: '-' },
+      { marker: '1. ', list: 'ol', converted: '1. ', restored: '1.' }
+    ]) {
+      const page = await openEditor()
+      try {
+        const surface = await replaceEditorText(page)
+        await page.keyboard.type(scenario.marker)
+        await page.keyboard.insertText('item')
+        expect(await surface.locator(`${scenario.list} > li`).count()).toBe(1)
+
+        await page.keyboard.press('Meta+z')
+        await expect.poll(() => page.evaluate(() => window.editor.getMarkdown())).toBe(scenario.converted)
+        expect(await surface.locator(`${scenario.list} > li`).count()).toBe(1)
+
+        await page.keyboard.press('Meta+z')
+        await expect.poll(() => page.evaluate(() => window.editor.getMarkdown())).toBe(scenario.restored)
+        expect(await surface.locator(scenario.list).count()).toBe(0)
+      } finally {
+        await page.close()
+      }
+    }
+  })
+
   it('destroys listeners and preserves silent programmatic updates', async () => {
     const page = await openEditor()
     await page.evaluate(() => {

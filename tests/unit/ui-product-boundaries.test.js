@@ -80,7 +80,7 @@ describe('recording workspace product boundaries', () => {
     ]) {
       expect(promptEditor).toContain(question)
     }
-    for (const copy of ['第 ${stepIndex + 1} / 3 个问题', '导出并复制给外部 Agent', '录制已导出，复制失败', '重试复制']) {
+    for (const copy of ['第 ${stepIndex + 1} / 3 个问题', '导出并复制给外部 Agent', '录制已导出到 ${handoffResult.path}，复制失败', '重试复制']) {
       expect(promptEditor).toContain(copy)
     }
     for (const hook of [
@@ -95,11 +95,13 @@ describe('recording workspace product boundaries', () => {
       'data-retry-save',
       'data-dismiss-save-error',
       'data-prompt-textarea',
-      'data-retry-copy'
+      'data-retry-copy',
+      'data-dismiss-handoff-error'
     ]) {
       expect(promptEditor).toContain(hook)
     }
     expect(promptEditor).toContain('role="status" aria-live="polite"')
+    expect(promptEditor).toContain("displaysError ? 'alert' : 'status'")
     expect(promptEditor).toContain('createAgentHandoff')
     expect(promptEditor).not.toContain('getExternalAgentPrompt')
     expect(promptEditor).not.toContain('mountMarkdownEditor')

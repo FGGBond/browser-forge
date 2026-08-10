@@ -49,7 +49,13 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   let destroyed = false
   let saveErrorVisible = false
   let handoffResult = null
+  let handoffStatus = emptyHandoffStatus()
   let focusSequence = 0
+
+  const invalidateHandoff = () => {
+    handoffResult = null
+    handoffStatus = emptyHandoffStatus()
+  }
 
   const syncActiveEditor = () => {
     if (!activeEditor || reviewOpen) return
@@ -59,7 +65,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     fields[question.key] = value
     editRevision += 1
     dirty = true
-    handoffResult = null
+    invalidateHandoff()
   }
 
   const destroyActiveEditor = () => {
@@ -131,7 +137,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     fields[key] = value
     editRevision += 1
     dirty = true
-    handoffResult = null
+    invalidateHandoff()
     clearTimeout(timer)
     timer = setTimeout(saveNow, 500)
   }
@@ -189,13 +195,17 @@ export async function renderPromptEditor({ container, recordingId, api }) {
         </div>
       </section>
       <div class="guidance-review-footer">
-        <div class="guidance-handoff-status" data-handoff-status role="status" aria-live="polite"></div>
+        <div class="guidance-handoff-status" data-handoff-status role="status" aria-live="polite" hidden>
+          <span data-handoff-message></span>
+          <button class="icon-button" type="button" data-dismiss-handoff-error aria-label="关闭导出或复制错误" hidden>${closeIcon()}</button>
+        </div>
         <div class="guidance-actions guidance-review-actions">
           <button class="button quiet" type="button" data-guidance-previous ${transitionPending ? 'disabled' : ''}>返回修改</button>
           <button class="button quiet" type="button" data-retry-copy hidden ${transitionPending ? 'disabled' : ''}>重试复制</button>
           <button class="button primary" type="button" data-agent-handoff ${transitionPending ? 'disabled' : ''}>${copyIcon()}<span data-handoff-label>导出并复制给外部 Agent</span></button>
         </div>
       </div>`
+    renderHandoffStatus()
   }
 
   const renderView = ({ forceFocus = false } = {}) => {
@@ -233,17 +243,38 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     renderView({ forceFocus: true })
   }
 
-  const setHandoffStatus = ({ message = '', tone = '', retry = false, label = '' } = {}) => {
+  function renderHandoffStatus() {
     if (destroyed || !reviewOpen) return
     const status = flow.querySelector('[data-handoff-status]')
+    const message = flow.querySelector('[data-handoff-message]')
+    const dismissButton = flow.querySelector('[data-dismiss-handoff-error]')
     const retryButton = flow.querySelector('[data-retry-copy]')
     const handoffLabel = flow.querySelector('[data-handoff-label]')
+    const displayedMessage = handoffStatus.dismissed ? '' : handoffStatus.message
+    const displaysError = Boolean(displayedMessage && handoffStatus.tone === 'error')
+
     if (status) {
-      status.textContent = message
-      status.dataset.tone = tone
+      status.hidden = !displayedMessage
+      status.dataset.tone = displayedMessage ? handoffStatus.tone : ''
+      status.setAttribute('role', displaysError ? 'alert' : 'status')
+      if (displaysError) status.removeAttribute('aria-live')
+      else status.setAttribute('aria-live', 'polite')
     }
-    if (retryButton) retryButton.hidden = !retry
-    if (handoffLabel) handoffLabel.textContent = label || '导出并复制给外部 Agent'
+    if (message) message.textContent = displayedMessage
+    if (dismissButton) dismissButton.hidden = !displaysError
+    if (retryButton) retryButton.hidden = !handoffStatus.retry
+    if (handoffLabel) handoffLabel.textContent = handoffStatus.label || '导出并复制给外部 Agent'
+  }
+
+  const setHandoffStatus = ({ message = '', tone = '', retry = false, label = '' } = {}) => {
+    handoffStatus = { message, tone, retry, label, dismissed: false }
+    renderHandoffStatus()
+  }
+
+  const dismissHandoffError = () => {
+    if (handoffStatus.tone !== 'error') return
+    handoffStatus = { ...handoffStatus, dismissed: true }
+    renderHandoffStatus()
   }
 
   const copyHandoffText = async () => {
@@ -251,16 +282,26 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     setHandoffStatus({ message: '正在复制提示词…', label: '正在复制…' })
     try {
       await copyText(handoffResult.text)
-      setHandoffStatus({ message: '已导出并复制', tone: 'success', label: '已导出并复制' })
+      setHandoffStatus({
+        message: `已导出并复制：${handoffResult.path}`,
+        tone: 'success',
+        label: '已导出并复制'
+      })
       return true
     } catch {
-      setHandoffStatus({ message: '录制已导出，复制失败', tone: 'error', retry: true })
+      setHandoffStatus({
+        message: `录制已导出到 ${handoffResult.path}，复制失败`,
+        tone: 'error',
+        retry: true,
+        label: '录制已导出'
+      })
       return false
     }
   }
 
   const createAgentHandoff = async () => {
     if (transitionPending) return
+    if (handoffResult) return retryCopy()
     transitionPending = true
     updateTransitionButtons()
     setHandoffStatus({ message: '正在导出录制…', label: '正在导出…' })
@@ -339,7 +380,11 @@ export async function renderPromptEditor({ container, recordingId, api }) {
       void createAgentHandoff()
       return
     }
-    if (button.matches('[data-retry-copy]')) void retryCopy()
+    if (button.matches('[data-retry-copy]')) {
+      void retryCopy()
+      return
+    }
+    if (button.matches('[data-dismiss-handoff-error]')) dismissHandoffError()
   }
 
   container.addEventListener('click', handleClick)
@@ -359,6 +404,10 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     get dirty() { return dirty || requiresMigration },
     get savedText() { return savedText }
   }
+}
+
+function emptyHandoffStatus() {
+  return { message: '', tone: '', retry: false, label: '', dismissed: false }
 }
 
 function renderReviewCard(question, value, disabled = false) {

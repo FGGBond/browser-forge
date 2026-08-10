@@ -109,9 +109,9 @@ function mountContenteditable({
 
   const handleInput = () => {
     if (destroyed || composing || internalEdit) return
-    if (conversionUndo && guidanceElementToMarkdown(surface) !== conversionUndo.afterMarkdown) {
-      conversionUndo = null
-    }
+    // Keep the structural conversion checkpoint while Chromium unwinds the
+    // native text edits inside the list. Once native undo returns to the empty
+    // converted list, the next Cmd/Ctrl+Z can restore the original marker.
     emitChange()
   }
 
@@ -125,7 +125,8 @@ function mountContenteditable({
     if (!conversionUndo) return
     if (!primaryModifier || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'z') return
     if (guidanceElementToMarkdown(surface) !== conversionUndo.afterMarkdown) {
-      conversionUndo = null
+      // Let Chromium undo ordinary text first. Keep the conversion checkpoint
+      // so a later undo can restore the marker once the list is empty again.
       return
     }
 

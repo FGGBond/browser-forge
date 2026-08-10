@@ -217,10 +217,22 @@
 .guidance-handoff-status {
   min-height: 18px;
   padding: 0 4px 7px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
   color: var(--muted);
   font-size: 10px;
   line-height: 1.45;
   text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.guidance-handoff-status .icon-button {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  color: inherit;
 }
 
 .guidance-handoff-status:empty {

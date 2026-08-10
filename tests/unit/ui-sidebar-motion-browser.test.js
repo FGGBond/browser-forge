@@ -139,15 +139,56 @@ describe('workspace sidebar motion', () => {
     await page.close()
   })
 
-  it('removes label displacement when reduced motion is requested', async () => {
+  it('fades reduced-motion labels for 80ms before hiding them and committing the collapsed track', async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
-    await page.locator('[data-sidebar-toggle]').click()
-    await page.waitForTimeout(20)
 
-    const transform = await page.locator('.sidebar-label').first().evaluate(element => getComputedStyle(element).transform)
-    expect(transform).toBe('none')
+    const initial = await sidebarMetrics(page)
+    expect(initial.visibility).toBe('visible')
+    expect(initial.opacity).toBe(1)
+    expect(initial.transform).toBe('none')
+
+    const samples = await page.evaluate(async () => {
+      const shell = document.querySelector('[data-app-shell]')
+      const label = document.querySelector('.sidebar-label')
+      const read = () => ({
+        width: Number.parseFloat(getComputedStyle(shell).gridTemplateColumns),
+        opacity: Number.parseFloat(getComputedStyle(label).opacity),
+        visibility: getComputedStyle(label).visibility,
+        transitionProperties: getComputedStyle(label).transitionProperty.split(',').map(value => value.trim()),
+        transitionDurations: getComputedStyle(label).transitionDuration.split(',').map(value => value.trim()),
+        transitionDelays: getComputedStyle(label).transitionDelay.split(',').map(value => value.trim())
+      })
+      document.querySelector('[data-sidebar-toggle]').click()
+      const values = [read()]
+      const startedAt = performance.now()
+      await new Promise(resolve => {
+        const sample = () => {
+          values.push(read())
+          if (performance.now() - startedAt >= 140) resolve()
+          else requestAnimationFrame(sample)
+        }
+        requestAnimationFrame(sample)
+      })
+      return values
+    })
+
+    const collapseStart = samples[0]
+    expect(collapseStart.width).toBeGreaterThan(230)
+    expect(collapseStart.visibility).toBe('visible')
+    expect(collapseStart.transitionProperties).toEqual(['opacity', 'visibility'])
+    expect(collapseStart.transitionDurations).toEqual(['0.08s', '0s'])
+    expect(collapseStart.transitionDelays).toEqual(['0s', '0.08s'])
+
+    const fadingIndex = samples.findIndex(sample => sample.width > 230 && sample.visibility === 'visible' && sample.opacity > 0 && sample.opacity < 1)
+    const hiddenIndex = samples.findIndex(sample => sample.visibility === 'hidden')
+    const collapsedIndex = samples.findIndex(sample => sample.width < 80)
+    expect(fadingIndex).toBeGreaterThan(0)
+    expect(hiddenIndex).toBeGreaterThan(fadingIndex)
+    expect(collapsedIndex).toBeGreaterThan(fadingIndex)
+    expect(hiddenIndex).toBeLessThanOrEqual(collapsedIndex)
+    expect(samples.at(-1).opacity).toBe(0)
     await page.close()
   })
 })
@@ -159,6 +200,11 @@ async function sidebarMetrics(page) {
     return {
       width: Number.parseFloat(getComputedStyle(shell).gridTemplateColumns),
       opacity: Number.parseFloat(getComputedStyle(label).opacity),
+      visibility: getComputedStyle(label).visibility,
+      transform: getComputedStyle(label).transform,
+      transitionProperties: getComputedStyle(label).transitionProperty.split(',').map(value => value.trim()),
+      transitionDurations: getComputedStyle(label).transitionDuration.split(',').map(value => value.trim()),
+      transitionDelays: getComputedStyle(label).transitionDelay.split(',').map(value => value.trim()),
       motion: shell.dataset.sidebarMotion || ''
     }
   })
