@@ -62,6 +62,7 @@ export function createRecorderHttpServer({
   let unexpectedTerminalVideo
   let activeRecordingId = null
   let activeGoalText = ''
+  let activeInternalOrigin = null
   let lastStopResult = null
   let lastStopEvent = null
 
@@ -109,6 +110,7 @@ export function createRecorderHttpServer({
       activeRecordingId = null
     }
     activeGoalText = ''
+    activeInternalOrigin = null
     if (chromeProcess === chrome) chromeProcess = null
     if (stopVideo) await videoRecorder?.stop?.().catch(() => {})
     await session?._cdp?.disconnect?.().catch(() => {})
@@ -136,10 +138,12 @@ export function createRecorderHttpServer({
       : safeTelemetrySummary(session.getLiveSummary?.())
     const recordingId = activeRecordingId
     const goalText = activeGoalText
+    const internalOrigin = activeInternalOrigin
 
     activeVideoRecorder = null
     const stopPromise = (async () => {
       try {
+        await session.prepareForVideoStop?.()
         const video = hasTerminalVideo ? options.video : await videoRecorder?.stop?.()
         sessionDir = await session.stop({ video })
         let recording = null
@@ -149,12 +153,19 @@ export function createRecorderHttpServer({
               .then(value => JSON.parse(value))
               .then(value => Array.isArray(value) ? value : [])
               .catch(() => [])
-            await generatePoster({
+            const generatedPoster = await generatePoster({
               recordingDir: sessionDir,
               durationMs: video.durationMs ?? summary.duration_ms ?? 0,
+              coveredUntilOffsetMs: video.coveredUntilOffsetMs ?? video.durationMs ?? summary.duration_ms ?? 0,
               timeline,
+              internalOrigins: internalOrigin ? [internalOrigin] : [],
               nativeToolPathOptions
-            }).catch(error => appendStartupLog(`posterGeneration=failed message=${error.message}`))
+            }).catch(error => ({ status: 'failed', error }))
+            const poster = generatedPoster ?? { status: 'unavailable', reason: 'poster-generator-returned-no-result' }
+            await writePosterMetadata(sessionDir, poster)
+            if (poster.status === 'failed') {
+              await appendStartupLog(`posterGeneration=failed message=${poster.error?.message ?? 'unknown'}`)
+            }
           }
           recording = await recordingLibrary.promote({ id: recordingId, sessionDir, promptText: goalText })
         }
@@ -294,6 +305,7 @@ export function createRecorderHttpServer({
       throwIfClosing()
       const { chromePath, outputDir } = startOptions
       const baseUrl = startUrlBase || `http://127.0.0.1:${server.address().port}`
+      activeInternalOrigin = new URL(baseUrl).origin
       const userDataDir = join(homedir(), '.browser-forge', 'chrome-profile')
       const recordingToken = randomUUID()
       const recordingTitle = `Browser Forge Recording · ${recordingToken}`
@@ -479,6 +491,24 @@ function safeTelemetrySummary(summary = {}) {
   }
 }
 
+
+
+async function writePosterMetadata(recordingDir, result) {
+  const metadata = {
+    status: result?.status ?? 'failed',
+    ...(result?.reason ? { reason: result.reason } : {}),
+    ...(Number.isFinite(result?.requestedOffsetMs) ? { requestedOffsetMs: Math.round(result.requestedOffsetMs) } : {}),
+    ...(Number.isFinite(result?.actualOffsetMs) ? { actualOffsetMs: Math.round(result.actualOffsetMs) } : {}),
+    ...(Number.isFinite(result?.offsetMs) ? { offsetMs: Math.round(result.offsetMs) } : {}),
+    ...(Number.isFinite(result?.width) ? { width: Math.round(result.width) } : {}),
+    ...(Number.isFinite(result?.height) ? { height: Math.round(result.height) } : {}),
+    ...(result?.error ? { error: result.error.message ?? String(result.error) } : {})
+  }
+  await mkdir(join(recordingDir, 'video'), { recursive: true })
+  await writeFile(join(recordingDir, 'video', 'poster.json'), `${JSON.stringify(metadata, null, 2)}
+`)
+  return metadata
+}
 
 function registerRecordingLibraryRoutes({ app, recordingLibrary, chooseExportDirectory, revealPath }) {
   app.get('/api/recordings', asyncRoute(async (req, res) => {

@@ -30,9 +30,22 @@ export class NetworkCollector {
     entry.responseTimestamp = timestamp
   }
 
-  onLoadingFinished({ requestId }) {
+  onLoadingFinished({ requestId, timestamp }) {
     const entry = this._entries.get(requestId)
-    if (entry) entry.loadingFinished = true
+    if (entry) {
+      entry.loadingFinished = true
+      if (Number.isFinite(timestamp)) entry.finishedTimestamp = timestamp
+    }
+  }
+
+  onLoadingFailed({ requestId, errorText, canceled, blockedReason, timestamp }) {
+    const entry = this._entries.get(requestId)
+    if (!entry) return
+    entry.loadingFailed = true
+    entry.loadingError = errorText ?? ''
+    entry.canceled = canceled === true
+    if (blockedReason) entry.blockedReason = blockedReason
+    if (Number.isFinite(timestamp)) entry.finishedTimestamp = timestamp
   }
 
   setBody(requestId, body, base64Encoded) {

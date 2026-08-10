@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'path'
-import { access, mkdtemp, open as openFile, readFile, rm, writeFile } from 'fs/promises'
+import { access, mkdir, mkdtemp, open as openFile, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { createRecorderHttpServer as createRecorderHttpServerImpl } from '../../src/main/recorder/http-server.js'
 import { WebSocket } from 'ws'
@@ -555,6 +555,7 @@ describe('window video lifecycle', () => {
         this._cdp = { getTargets: () => [], disconnect: async () => {} }
       }
       async start() { order.push('session:start') }
+      prepareForVideoStop() { order.push('session:freeze') }
       async stop({ video: finalVideo } = {}) {
         order.push('session:stop')
         sessionStops.push(finalVideo)
@@ -589,7 +590,7 @@ describe('window video lifecycle', () => {
 
     const stop = await fetch(`${url}/api/stop-recording`, { method: 'POST' }).then(response => response.json())
     expect(stop).toEqual({ ok: true, sessionDir: '/tmp/session' })
-    expect(order).toEqual(['debug:ready', 'video:start', 'session:start', 'video:stop', 'session:stop', 'chrome:kill'])
+    expect(order).toEqual(['debug:ready', 'video:start', 'session:start', 'session:freeze', 'video:stop', 'session:stop', 'chrome:kill'])
     expect(sessionStops).toEqual([expect.objectContaining({ state: 'complete', sourcePath: '/tmp/browser-forge-video.mp4' })])
   })
 
@@ -721,6 +722,82 @@ describe('window video lifecycle', () => {
     await starting
     expect(stopCount).toBe(1)
     expect(recordingLibrary.promote).toHaveBeenCalledWith({ id, sessionDir: stagingPath, promptText: '' })
+  })
+
+
+  it('finalizes poster with captured coverage and internal origin, then persists readable offset metadata', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bf-poster-finalization-'))
+    const id = '3d4527e4-4d47-4aea-a4ba-cd61218bbd27'
+    const stagingPath = join(root, id)
+    await mkdir(join(stagingPath, 'video'), { recursive: true })
+    const recording = { id, title: 'Stable page', state: 'active' }
+    const recordingLibrary = {
+      createStagingRecording: vi.fn(async () => ({ id, path: stagingPath })),
+      promote: vi.fn(async () => recording)
+    }
+    class FakeRecordingSession {
+      constructor() { this._cdp = { getTargets: () => [], disconnect: async () => {} } }
+      async start() {}
+      async stop() {
+        await writeFile(join(stagingPath, 'timeline.json'), JSON.stringify([
+          { type: 'navigation-stable', url: 'https://example.test/orders', videoOffsetMs: 2_400 }
+        ]))
+        return stagingPath
+      }
+      getLiveSummary() { return { type: 'summary', startedAt: 1, tabs: [], totals: {}, duration_ms: 3_000 } }
+    }
+    const generatePoster = vi.fn(async () => ({
+      status: 'complete',
+      path: join(stagingPath, 'video', 'poster.png'),
+      requestedOffsetMs: 2_400,
+      actualOffsetMs: 2_360,
+      offsetMs: 2_360,
+      width: 1280,
+      height: 720
+    }))
+    recorderServer = createRecorderHttpServer({
+      uiRoot: join(process.cwd(), 'ui'),
+      startupLogFile: null,
+      startUrlBase: 'http://127.0.0.1:45678',
+      recordingLibrary,
+      generatePoster,
+      findAvailablePort: async () => 9333,
+      findChromePath: async () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      waitForChromeDebugEndpoint: async () => {},
+      launchChrome: () => ({ pid: 4242, exitCode: null, once: () => {}, kill: () => {} }),
+      createVideoRecorder: () => ({
+        async start(options) {
+          return { startEpochMs: 1_000, window: { pid: options.chromePid, windowId: 'window', title: options.expectedWindowTitle } }
+        },
+        async stop() {
+          return { state: 'complete', startEpochMs: 1_000, durationMs: 3_000, coveredUntilOffsetMs: 2_800, sourcePath: join(root, 'recording.mp4'), window: { pid: 4242, windowId: 'window', title: 'title' } }
+        }
+      }),
+      RecordingSession: FakeRecordingSession
+    })
+
+    try {
+      const url = await recorderServer.listen()
+      await fetch(`${url}/api/start-recording`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      await fetch(`${url}/api/stop-recording`, { method: 'POST' })
+
+      expect(generatePoster).toHaveBeenCalledWith(expect.objectContaining({
+        recordingDir: stagingPath,
+        durationMs: 3_000,
+        coveredUntilOffsetMs: 2_800,
+        internalOrigins: ['http://127.0.0.1:45678']
+      }))
+      expect(JSON.parse(await readFile(join(stagingPath, 'video', 'poster.json'), 'utf8'))).toEqual({
+        status: 'complete',
+        requestedOffsetMs: 2_400,
+        actualOffsetMs: 2_360,
+        offsetMs: 2_360,
+        width: 1280,
+        height: 720
+      })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   it('starts without outputDir and promotes managed material before returning recording detail', async () => {

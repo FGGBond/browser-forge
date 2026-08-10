@@ -10,7 +10,8 @@ import { buildHar } from './har-builder.js'
 import { buildTimeline } from './timeline-builder.js'
 import { writeSession } from './output-writer.js'
 import { addVideoOffset } from './video-manifest.js'
-import { randomUUID } from 'node:crypto'
+import { NavigationSettler } from './navigation-settler.js'
+import { createHash, randomUUID } from 'node:crypto'
 
 export class RecordingSession {
   constructor({ port = 9222, outputDir, sessionDir = null, video = null }) {
@@ -20,12 +21,15 @@ export class RecordingSession {
     this.video = video
     this._cdp = new CdpClient({
       port,
-      expectedTargetTitle: video?.window?.title ?? null
+      expectedTargetTitle: video?.window?.requestedTitle ?? video?.window?.title ?? null
     })
     this._tabCollectors = new Map()
     this._timelineEvents = []
     this._startedAt = null
     this._lastActiveTargetId = null
+    this._navigationSettling = new Map()
+    this._stableNavigationEmitted = false
+    this._stopping = false
   }
 
   async start() {
@@ -47,8 +51,13 @@ export class RecordingSession {
 
     await session.Network.enable()
     await session.Page.enable()
+    await session.Page.setLifecycleEventsEnabled({ enabled: true })
     await session.Runtime.enable()
     await session.DOM.enable()
+
+    const settling = this._createNavigationSettlingState({ targetId, session, collectors })
+    this._navigationSettling.set(targetId, settling)
+    this._wrapSessionClose(settling)
 
     // 注入用户操作监听：点击和 Enter 都通过 binding 回调触发截图
     await session.Runtime.addBinding({ name: 'bfClick' })
@@ -66,7 +75,7 @@ export class RecordingSession {
       `
     })
 
-    session.Runtime.bindingCalled(async ({ name, payload }) => {
+    const bindingCalled = async ({ name, payload }) => {
       if (name !== 'bfClick' && name !== 'bfKey') return
       const ts = Date.now()
       this._lastActiveTargetId = targetId
@@ -85,55 +94,275 @@ export class RecordingSession {
         return
       }
       // Enter：保留轻微延迟，等待键盘触发的提交/导航先进入稳定状态
-      this._scheduleScreenshot({ session, collectors, timestamp: ts })
-    })
+      this._scheduleScreenshot({ session, collectors, settling, timestamp: ts })
+    }
+    this._listen(settling, session, 'Runtime.bindingCalled', session.Runtime.bindingCalled, bindingCalled)
 
-    session.Network.requestWillBeSent(params => collectors.network.onRequestWillBeSent(params))
-    session.Network.responseReceived(params => collectors.network.onResponseReceived(params))
-    session.Network.loadingFinished(async ({ requestId }) => {
-      collectors.network.onLoadingFinished({ requestId })
+    const requestWillBeSent = params => {
+      collectors.network.onRequestWillBeSent(params)
+      settling.settler.onRequestStarted({
+        requestId: params.requestId,
+        loaderId: params.loaderId,
+        type: params.type,
+        timestamp: Date.now()
+      })
+    }
+    const responseReceived = params => collectors.network.onResponseReceived(params)
+    const loadingFinished = async ({ requestId }) => {
+      const timestamp = Date.now()
+      collectors.network.onLoadingFinished({ requestId, timestamp })
+      settling.settler.onRequestFinished({ requestId, timestamp })
       try {
         const { body, base64Encoded } = await session.Network.getResponseBody({ requestId })
         collectors.network.setBody(requestId, body, base64Encoded)
       } catch {}
-    })
-
-    session.Page.frameNavigated(async ({ frame }) => {
+    }
+    const loadingFailed = ({ requestId, errorText, canceled, blockedReason }) => {
+      const timestamp = Date.now()
+      collectors.network.onLoadingFailed({ requestId, errorText, canceled, blockedReason, timestamp })
+      settling.settler.onRequestFinished({ requestId, timestamp })
+    }
+    const frameNavigated = async ({ frame }) => {
       if (frame.parentId) return
-      this._addTimelineEvent({ timestamp: Date.now(), type: 'navigation', targetId, url: frame.url })
+      const timestamp = Date.now()
+      this._addTimelineEvent({ timestamp, type: 'navigation', targetId, url: frame.url, loaderId: frame.loaderId })
       const targetEntry = this._cdp._targets.get(targetId)
       if (targetEntry) targetEntry.info = { ...targetEntry.info, url: frame.url }
-      try {
-        // 等页面 load 完成或最多 2.5 秒，取 DOM 快照 + 更新 title
-        await Promise.race([
-          new Promise(resolve => session.Page.loadEventFired(resolve)),
-          new Promise(resolve => setTimeout(resolve, 2500))
-        ])
-        try {
-          const { result } = await session.Runtime.evaluate({ expression: 'document.title', returnByValue: true })
-          if (result.value && targetEntry) targetEntry.info = { ...targetEntry.info, title: result.value }
-        } catch {}
-        const { root } = await session.DOM.getDocument({ depth: -1 })
-        const { outerHTML } = await session.DOM.getOuterHTML({ nodeId: root.nodeId })
-        collectors.dom.addSnapshot({ timestamp: Date.now(), html: outerHTML, url: frame.url })
-        // 导航完成也截一张，记录初始页面状态
-        const { data } = await session.Page.captureScreenshot({ format: 'png' })
-        collectors.screenshots.addScreenshot({ timestamp: Date.now(), dataBase64: data })
-      } catch {}
-    })
+      this._beginNavigationSettling({ settling, frame, timestamp })
+    }
+    const lifecycleEvent = params => {
+      if (params.frameId !== settling.frameId) return
+      const timestamp = Date.now()
+      settling.settler.onLifecycle({ loaderId: params.loaderId, name: params.name, timestamp })
+      if (params.name === 'load' && params.loaderId === settling.loaderId) {
+        this._captureNavigationArtifacts({ session, collectors, targetId, settling }).catch(() => {})
+      }
+    }
 
-    session.Runtime.consoleAPICalled(({ type, args, timestamp, stackTrace }) => {
+    this._listen(settling, session, 'Network.requestWillBeSent', session.Network.requestWillBeSent, requestWillBeSent)
+    this._listen(settling, session, 'Network.responseReceived', session.Network.responseReceived, responseReceived)
+    this._listen(settling, session, 'Network.loadingFinished', session.Network.loadingFinished, loadingFinished)
+    this._listen(settling, session, 'Network.loadingFailed', session.Network.loadingFailed, loadingFailed)
+    this._listen(settling, session, 'Page.frameNavigated', session.Page.frameNavigated, frameNavigated)
+    this._listen(settling, session, 'Page.lifecycleEvent', session.Page.lifecycleEvent, lifecycleEvent)
+
+    if (typeof session.once === 'function') {
+      const onDisconnect = () => this._cleanupNavigationSettling(targetId)
+      session.once('disconnect', onDisconnect)
+      settling.cleanups.push(() => session.removeListener?.('disconnect', onDisconnect))
+    }
+
+    await this._recoverCurrentNavigation({ settling, session })
+
+    const consoleAPICalled = ({ type, args, timestamp, stackTrace }) => {
       collectors.console.addEntry({ type, args, timestamp, stackTrace })
-    })
-    session.Runtime.exceptionThrown(({ exceptionDetails, timestamp }) => {
+    }
+    const exceptionThrown = ({ exceptionDetails, timestamp }) => {
       collectors.console.addEntry({ type: 'error', args: [exceptionDetails], timestamp, stackTrace: exceptionDetails.stackTrace })
+    }
+    this._listen(settling, session, 'Runtime.consoleAPICalled', session.Runtime.consoleAPICalled, consoleAPICalled)
+    this._listen(settling, session, 'Runtime.exceptionThrown', session.Runtime.exceptionThrown, exceptionThrown)
+  }
+
+
+  _createNavigationSettlingState({ targetId, session, collectors }) {
+    const state = {
+      targetId,
+      session,
+      collectors,
+      frameId: null,
+      loaderId: null,
+      url: '',
+      generation: 0,
+      timer: null,
+      active: true,
+      capturedLoaders: new Set(),
+      pendingTimers: new Set(),
+      cleanups: []
+    }
+    state.settler = new NavigationSettler({
+      networkQuietMs: 800,
+      stableSampleCount: 3,
+      deadlineMs: 10_000,
+      onStable: event => {
+        if (this._stopping || this._stableNavigationEmitted || !state.active) return
+        this._stableNavigationEmitted = true
+        this._addTimelineEvent({ ...event, targetId })
+        for (const other of this._navigationSettling.values()) {
+          if (other.timer) clearTimeout(other.timer)
+          other.timer = null
+        }
+      }
+    })
+    return state
+  }
+
+  _listen(state, session, eventName, subscribe, handler) {
+    const unsubscribe = subscribe(handler)
+    state.cleanups.push(typeof unsubscribe === 'function'
+      ? unsubscribe
+      : () => session.removeListener?.(eventName, handler))
+  }
+
+  _wrapSessionClose(state) {
+    const { session, targetId } = state
+    if (typeof session.close !== 'function') return
+    const originalClose = session.close.bind(session)
+    const wrappedClose = async (...args) => {
+      this._cleanupNavigationSettling(targetId)
+      return originalClose(...args)
+    }
+    session.close = wrappedClose
+    state.cleanups.push(() => {
+      if (session.close === wrappedClose) session.close = originalClose
     })
   }
 
-  _scheduleScreenshot({ session, collectors, timestamp }) {
-    setTimeout(() => {
+  _beginNavigationSettling({ settling, frame, timestamp = Date.now(), readyState = null }) {
+    if (this._stopping || this._stableNavigationEmitted || !settling.active) return false
+    const began = settling.settler.beginNavigation({
+      url: frame.url,
+      loaderId: frame.loaderId,
+      timestamp,
+      videoOffsetMs: this._videoOffset(timestamp)
+    })
+    if (!began) return false
+    settling.frameId = frame.id
+    settling.loaderId = frame.loaderId
+    settling.url = frame.url
+    settling.generation += 1
+    if (settling.timer) clearTimeout(settling.timer)
+    settling.timer = null
+    if (readyState === 'complete') {
+      settling.settler.onLifecycle({ loaderId: frame.loaderId, name: 'load', timestamp })
+    } else if (readyState === 'interactive') {
+      settling.settler.onLifecycle({ loaderId: frame.loaderId, name: 'DOMContentLoaded', timestamp })
+    }
+    this._scheduleNavigationSample(settling, 0, settling.generation)
+    return true
+  }
+
+  async _recoverCurrentNavigation({ settling, session }) {
+    try {
+      const [{ frameTree }, evaluated] = await Promise.all([
+        session.Page.getFrameTree(),
+        session.Runtime.evaluate({
+          expression: '({ readyState: document.readyState, url: location.href })',
+          returnByValue: true
+        })
+      ])
+      const frame = frameTree?.frame
+      if (!frame) return false
+      const current = evaluated?.result?.value ?? {}
+      return this._beginNavigationSettling({
+        settling,
+        frame: { ...frame, url: current.url || frame.url },
+        timestamp: Date.now(),
+        readyState: current.readyState
+      })
+    } catch {
+      return false
+    }
+  }
+
+  _scheduleNavigationSample(settling, delayMs, generation) {
+    if (this._stopping || this._stableNavigationEmitted || !settling.active || generation !== settling.generation) return
+    settling.timer = setTimeout(async () => {
+      settling.timer = null
+      if (this._stopping || this._stableNavigationEmitted || !settling.active || generation !== settling.generation) return
+      await this._sampleNavigationViewport(settling, generation)
+      if (this._stopping || this._stableNavigationEmitted || !settling.active || generation !== settling.generation) return
+      const navigation = settling.settler._navigation
+      if (!navigation || Date.now() > navigation.timestamp + settling.settler.deadlineMs + 500) return
+      this._scheduleNavigationSample(settling, 250, generation)
+    }, delayMs)
+  }
+
+  async _sampleNavigationViewport(settling, generation) {
+    try {
+      const [{ data }, layout] = await Promise.all([
+        settling.session.Page.captureScreenshot({ format: 'png', fromSurface: true }),
+        settling.session.Runtime.evaluate({
+          expression: `(() => {
+            const root = document.documentElement
+            const body = document.body
+            return JSON.stringify({
+              url: location.href,
+              title: document.title,
+              readyState: document.readyState,
+              root: root ? [root.scrollWidth, root.scrollHeight, root.clientWidth, root.clientHeight, root.childElementCount] : null,
+              body: body ? [body.scrollWidth, body.scrollHeight, body.childElementCount, (body.innerText || '').length] : null
+            })
+          })()`,
+          returnByValue: true
+        })
+      ])
+      if (generation !== settling.generation || this._stopping || !settling.active) return null
+      const timestamp = Date.now()
+      const signature = createHash('sha256')
+        .update(String(data || ''))
+        .update('\0')
+        .update(String(layout?.result?.value ?? ''))
+        .digest('hex')
+      return settling.settler.addVisualSample({
+        loaderId: settling.loaderId,
+        timestamp,
+        videoOffsetMs: this._videoOffset(timestamp),
+        signature
+      })
+    } catch {
+      return null
+    }
+  }
+
+  async _captureNavigationArtifacts({ session, collectors, targetId, settling }) {
+    if (this._stopping || !settling.loaderId || settling.capturedLoaders.has(settling.loaderId)) return
+    settling.capturedLoaders.add(settling.loaderId)
+    const targetEntry = this._cdp._targets.get(targetId)
+    try {
+      const { result } = await session.Runtime.evaluate({ expression: 'document.title', returnByValue: true })
+      if (result?.value && targetEntry) targetEntry.info = { ...targetEntry.info, title: result.value }
+    } catch {}
+    try {
+      const { root } = await session.DOM.getDocument({ depth: -1 })
+      const { outerHTML } = await session.DOM.getOuterHTML({ nodeId: root.nodeId })
+      collectors.dom.addSnapshot({ timestamp: Date.now(), html: outerHTML, url: settling.url })
+    } catch {}
+    await this._captureScreenshot({ session, collectors })
+  }
+
+  _videoOffset(timestamp) {
+    if (!Number.isFinite(this.video?.startEpochMs)) return Math.max(0, Math.round(timestamp - (this._startedAt ?? timestamp)))
+    return Math.max(0, Math.round(timestamp - this.video.startEpochMs))
+  }
+
+  _cleanupNavigationSettling(targetId) {
+    const settling = this._navigationSettling.get(targetId)
+    if (!settling) return
+    settling.active = false
+    if (settling.timer) clearTimeout(settling.timer)
+    settling.timer = null
+    for (const timer of settling.pendingTimers) clearTimeout(timer)
+    settling.pendingTimers.clear()
+    for (const cleanup of settling.cleanups.splice(0)) {
+      try { cleanup() } catch {}
+    }
+    this._navigationSettling.delete(targetId)
+  }
+
+  _cleanupAllNavigationSettling() {
+    for (const targetId of [...this._navigationSettling.keys()]) {
+      this._cleanupNavigationSettling(targetId)
+    }
+  }
+
+  _scheduleScreenshot({ session, collectors, settling, timestamp }) {
+    const timer = setTimeout(() => {
+      settling?.pendingTimers.delete(timer)
+      if (this._stopping || settling?.active === false) return
       this._captureScreenshot({ session, collectors, timestamp })
     }, 300)
+    settling?.pendingTimers.add(timer)
   }
 
   async _captureScreenshot({ session, collectors, timestamp = Date.now() }) {
@@ -207,7 +436,13 @@ export class RecordingSession {
     }
   }
 
+  prepareForVideoStop() {
+    this._stopping = true
+    this._cleanupAllNavigationSettling()
+  }
+
   async stop({ video = this.video } = {}) {
+    this.prepareForVideoStop()
     const durationMs = Math.max(0, Date.now() - this._startedAt)
     await this._captureActiveTabScreenshot()
     const targets = this._cdp.getTargets()
