@@ -86,7 +86,7 @@ afterAll(async () => {
 })
 
 describe('three-question guided composer', () => {
-  it('uses a centered non-interactive progress pill and focuses the composer instead of the question', { timeout: 30000 }, async () => {
+  it('uses a centered non-interactive progress pill without moving focus to the question', { timeout: 30000 }, async () => {
     const page = await openGuidance()
     await expectStep(page, 1, '这次录制中，你完成了什么？')
     const progress = page.locator('[data-guidance-progress]')
@@ -98,7 +98,7 @@ describe('three-question guided composer', () => {
 
     const question = page.getByRole('heading', { name: '这次录制中，你完成了什么？' })
     expect(await question.getAttribute('tabindex')).toBe(null)
-    await expectComposerFocused(page)
+    expect(await question.evaluate(element => document.activeElement === element)).toBe(false)
     expect(await activeEditorCount(page)).toBe(1)
     expect(await page.locator('.EasyMDEContainer, .CodeMirror, .editor-toolbar').count()).toBe(0)
     await fillActiveEditor(page, '查询订单并读取物流状态')
@@ -510,7 +510,6 @@ async function openGuidance(context = browser) {
   const toggle = page.locator('[data-toggle-analysis]')
   if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
   await page.locator('[data-guidance-step]').waitFor({ timeout: 3_000 })
-  await expectComposerFocused(page)
   return page
 }
 

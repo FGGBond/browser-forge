@@ -79,34 +79,32 @@ async function newIsolatedPage() {
 }
 
 describe('recording detail UI', () => {
-  it('defines a responsive workspace column with restrained, reduced-motion-safe content motion', () => {
+  it('defines a shell-owned context column with restrained, reduced-motion-safe content motion', () => {
     const css = readFileSync(join(process.cwd(), 'ui', 'styles.css'), 'utf8')
     const detailSource = readFileSync(join(process.cwd(), 'ui', 'views', 'detail.js'), 'utf8')
+    const contextSource = readFileSync(join(process.cwd(), 'ui', 'views', 'context-pane.js'), 'utf8')
 
-    expect(css).toMatch(/\.analysis-workspace\s*\{[^}]*display:grid[^}]*grid-template-columns:minmax\(560px,\s*1fr\)\s+0/s)
-    expect(css).toMatch(/\.analysis-workspace\.analysis-pane-open\s*\{[^}]*grid-template-columns:minmax\(560px,\s*1fr\)\s+var\(--pane-w\)/s)
+    expect(css).toMatch(/\.app-shell \{[^}]*grid-template-columns:var\(--sidebar-w\) minmax\(560px,1fr\) var\(--context-w\)/s)
     expect(css).toMatch(/\.sidebar-resize-handle,\s*\n\.pane-resize-handle\s*\{[^}]*cursor:\s*col-resize/s)
-    expect(css).toMatch(/\.analysis-pane\s*\{[^}]*position:sticky[^}]*top:0[^}]*height:100vh[^}]*overflow:auto/s)
-    expect(css).toMatch(/@media \(max-width:900px\)[\s\S]*?\.analysis-pane \{[^}]*position:fixed/s)
+    expect(css).toMatch(/\.workspace-context-host\s*\{[^}]*position:sticky[^}]*top:0[^}]*height:100vh/s)
+    expect(css).toMatch(/@media \(max-width:1103px\)[\s\S]*?\.workspace-context-host \{[^}]*position:fixed/s)
     expect(css).toMatch(/\.analysis-pane-inner\s*\{[^}]*opacity:0[^}]*transform:translateX\(10px\)/s)
-    expect(css).toMatch(/\.analysis-workspace\.analysis-pane-open:not\(\.analysis-pane-closing\) \.analysis-pane-inner\s*\{[^}]*opacity:1[^}]*transform:none[^}]*transition:transform 200ms cubic-bezier\(\.2,\.8,\.2,1\),opacity 180ms cubic-bezier\(\.2,\.8,\.2,1\)/s)
-    expect(css).toMatch(/\.analysis-workspace\.analysis-pane-closing \.analysis-pane-inner\s*\{[^}]*opacity:0[^}]*transform:translateX\(10px\)[^}]*transition:transform 140ms cubic-bezier\(\.4,0,\.2,1\),opacity 140ms cubic-bezier\(\.4,0,\.2,1\)/s)
+    expect(css).toMatch(/\.app-shell\.analysis-pane-open:not\(\.analysis-pane-closing\) \.analysis-pane-inner\s*\{[^}]*opacity:1[^}]*transform:none[^}]*transition:transform 200ms cubic-bezier\(\.2,\.8,\.2,1\),opacity 180ms cubic-bezier\(\.2,\.8,\.2,1\)/s)
+    expect(css).toMatch(/\.app-shell\.analysis-pane-closing \.analysis-pane-inner\s*\{[^}]*opacity:0[^}]*transform:translateX\(10px\)[^}]*transition:transform 140ms cubic-bezier\(\.4,0,\.2,1\),opacity 140ms cubic-bezier\(\.4,0,\.2,1\)/s)
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[^{]*\{[^}]*\.analysis-pane-inner[^}]*transform:none[^}]*transition-property:opacity[^}]*transition-duration:120ms/s)
     expect(css).not.toContain('.analysis-backdrop')
     expect(css).not.toContain('transition:all')
+    expect(detailSource).not.toContain('data-analysis-pane')
+    expect(detailSource).not.toContain('renderPromptEditor')
     expect(detailSource).not.toContain('data-analysis-backdrop')
     expect(detailSource).not.toContain('aria-modal')
     expect(detailSource).not.toContain('role="dialog"')
     expect(detailSource).not.toContain('setBackgroundInert')
     expect(detailSource).not.toContain("document.addEventListener('keydown'")
-    expect(detailSource).not.toContain('analysis-pane-header')
-    expect(detailSource).not.toContain('recording-analysis-guidance-title')
-    expect(detailSource).toContain('aria-label="分析指导"')
-    expect(detailSource).toContain('analysis-pane-closing')
-    expect(detailSource).toContain('clearTimeout(closeTimer)')
-    expect(detailSource).toContain('createPromptControllerProxy')
-    expect(detailSource).not.toMatch(/promptController\s*=\s*await renderPromptEditor/)
-    expect(detailSource).not.toContain('onToggleSidebar')
+    expect(contextSource).toContain('aria-label="分析指导"')
+    expect(contextSource).toContain('analysis-pane-closing')
+    expect(contextSource).toContain('clearTimeout(closeTimer)')
+    expect(contextSource).toContain('loadingRecordingId')
     expect(detailSource).toContain('data-detail-titlebar')
     expect(detailSource).toContain('data-evidence-strip')
     expect(detailSource).toContain('data-object-actions')
@@ -156,6 +154,27 @@ describe('recording detail UI', () => {
     expect(await page.getByRole('button', { name: '导出录制' }).count()).toBe(1)
     expect(await page.getByRole('button', { name: '移入回收站' }).count()).toBe(1)
     expect(await page.locator('[data-analysis-pane][hidden]').count()).toBe(0)
+    await page.close()
+  }, 20_000)
+
+  it('changes responsive modes before the three panes can overflow', async () => {
+    const page = await newIsolatedPage()
+    await page.setViewportSize({ width: 1276, height: 760 })
+    await openDetail(page)
+    for (const [width, expectedSidebar, drawer] of [[1276, 240, false], [1275, 68, false], [1104, 68, false], [1103, 68, true]]) {
+      await page.setViewportSize({ width, height: 760 })
+      if (drawer && await page.locator('[data-toggle-analysis]').getAttribute('aria-expanded') === 'false') await openContextDrawer(page)
+      const geometry = await page.evaluate(() => {
+        const sidebar = document.querySelector('.app-sidebar').getBoundingClientRect()
+        const pane = document.querySelector('[data-analysis-pane]').getBoundingClientRect()
+        const contextHost = document.querySelector('[data-context-host]')
+        return { sidebarWidth: sidebar.width, paneRight: pane.right, panePosition: getComputedStyle(contextHost).position }
+      })
+      expect(geometry.sidebarWidth).toBeGreaterThanOrEqual(expectedSidebar - 2)
+      expect(geometry.sidebarWidth).toBeLessThanOrEqual(expectedSidebar + 2)
+      expect(geometry.paneRight).toBeLessThanOrEqual(width + 0.5)
+      expect(geometry.panePosition === 'fixed').toBe(drawer)
+    }
     await page.close()
   }, 20_000)
 
@@ -233,7 +252,7 @@ describe('recording detail UI', () => {
     })
     expect(headerLayout).toMatchObject({ display: 'grid', height: 44 })
     expect(headerLayout.titleWidth).toBeGreaterThanOrEqual(140)
-    await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-guidance-editor-surface]'))).toBe(true)
+    expect(await page.locator('[data-guidance-editor-surface]').isEditable()).toBe(true)
 
     const rateButton = page.locator('[data-player-rate]')
     await expect.poll(() => rateButton.isVisible()).toBe(true)
@@ -246,11 +265,11 @@ describe('recording detail UI', () => {
     await page.keyboard.press('Escape')
     expect(await toggle.getAttribute('aria-expanded')).toBe('true')
     expect(await pane.getAttribute('hidden')).toBeNull()
-    expect(await page.locator('[data-analysis-workspace]').getAttribute('class')).toContain('analysis-pane-open')
+    expect(await page.locator('[data-app-shell]').getAttribute('class')).toContain('analysis-pane-open')
     await page.close()
   })
 
-  it('shows submitted answers as chat bubbles and keeps the next question focused when the hidden pane becomes visible', async () => {
+  it('shows submitted answers as chat bubbles and keeps the next question editable in the persistent context pane', async () => {
     promptText = serializeGuidanceMarkdown({ actions: '打开订单并读取物流状态', capability: '', acceptance: '' })
     const page = await newIsolatedPage()
     try {
@@ -272,25 +291,26 @@ describe('recording detail UI', () => {
       const surface = page.locator('[data-guidance-editor-surface]')
       await surface.waitFor({ state: 'visible' })
       expect((await surface.boundingBox()).height).toBeGreaterThan(0)
-      await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-guidance-editor-surface]'))).toBe(true)
+      expect(await surface.isEditable()).toBe(true)
     } finally {
       await page.close()
     }
   })
 
-  it('returns the detail controller before delayed guidance loads so the first navigation click succeeds', async () => {
+  it('keeps a delayed shell context load alive while navigating from detail back to the repository', async () => {
     promptDelayMs = 900
     const page = await newIsolatedPage()
     try {
-      await page.goto(baseUrl, { waitUntil: 'networkidle' })
+      await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
+      await page.getByRole('button', { name: '去分析', exact: true }).waitFor()
       await page.getByRole('button', { name: '去分析', exact: true }).click()
       await page.locator('[data-analysis-workspace]').waitFor()
       await page.locator('[data-back]').click()
       await page.locator('.library-view').waitFor({ timeout: 350 })
-      await page.waitForTimeout(950)
+      await page.locator('[data-context-host] [data-guidance-editor-surface]').waitFor({ state: 'attached', timeout: 2_000 })
       expect(await page.locator('.library-view').count()).toBe(1)
       expect(await page.locator('[data-analysis-workspace]').count()).toBe(0)
-      expect(await page.locator('[data-guidance-question-title]').count()).toBe(0)
+      expect(await page.locator('[data-context-host] [data-guidance-question-title]').count()).toBe(1)
     } finally {
       await page.close()
     }
@@ -337,6 +357,7 @@ describe('recording detail UI', () => {
     try {
       await page.setViewportSize({ width: 820, height: 760 })
       await openDetail(page)
+      await openContextDrawer(page)
       await page.locator('[data-guidance-editor-surface]').waitFor({ state: 'attached' })
       await fillActiveEditor(page, '关闭分析栏前必须保存')
       await page.locator('[data-close-analysis]').click()
@@ -355,7 +376,7 @@ describe('recording detail UI', () => {
       await page.locator('[data-save-error]').waitFor()
       expect(await page.locator('[data-toggle-analysis]').getAttribute('aria-expanded')).toBe('true')
       expect(await page.locator('[data-analysis-pane]').getAttribute('hidden')).toBeNull()
-      expect(await page.locator('[data-analysis-workspace]').getAttribute('class')).not.toContain('analysis-pane-closing')
+      expect(await page.locator('[data-app-shell]').getAttribute('class')).not.toContain('analysis-pane-closing')
     } finally {
       await page.close()
     }
@@ -366,17 +387,18 @@ describe('recording detail UI', () => {
     try {
       await page.setViewportSize({ width: 820, height: 760 })
       await openDetail(page)
+      await openContextDrawer(page)
       await page.locator('[data-guidance-editor-surface]').waitFor({ state: 'attached' })
       const pane = page.locator('[data-analysis-pane]')
       const toggle = page.locator('[data-toggle-analysis]')
       await page.locator('[data-close-analysis]').click()
       expect(await pane.getAttribute('hidden')).toBeNull()
-      expect(await page.locator('[data-analysis-workspace]').getAttribute('class')).toContain('analysis-pane-closing')
+      expect(await page.locator('[data-app-shell]').getAttribute('class')).toContain('analysis-pane-closing')
       await toggle.click()
       await page.waitForTimeout(220)
       expect(await toggle.getAttribute('aria-expanded')).toBe('true')
       expect(await pane.getAttribute('hidden')).toBeNull()
-      const workspaceClass = await page.locator('[data-analysis-workspace]').getAttribute('class')
+      const workspaceClass = await page.locator('[data-app-shell]').getAttribute('class')
       expect(workspaceClass).toContain('analysis-pane-open')
       expect(workspaceClass).not.toContain('analysis-pane-closing')
     } finally {
@@ -389,8 +411,11 @@ describe('recording detail UI', () => {
     const page = await newIsolatedPage()
     try {
       await page.setViewportSize({ width: 820, height: 760 })
-      await page.goto(baseUrl, { waitUntil: 'networkidle' })
-      await page.getByRole('button', { name: '去分析', exact: true }).click()
+      await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
+      const analyze = page.getByRole('button', { name: '去分析', exact: true })
+      await analyze.waitFor()
+      await analyze.click()
+      await openContextDrawer(page)
       const pane = page.locator('[data-analysis-pane]')
       const toggle = page.locator('[data-toggle-analysis]')
       await toggle.waitFor({ state: 'visible' })
@@ -398,7 +423,8 @@ describe('recording detail UI', () => {
       await page.locator('[data-close-analysis]').click()
       await expect.poll(() => toggle.getAttribute('aria-expanded')).toBe('false')
       await page.locator('[data-guidance-editor-surface]').waitFor({ state: 'attached', timeout: 2_000 })
-      expect(await pane.getAttribute('hidden')).not.toBeNull()
+      await page.locator('[data-context-host]').waitFor({ state: 'hidden' })
+      expect(await page.locator('[data-context-host]').getAttribute('hidden')).not.toBeNull()
       await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-toggle-analysis]'))).toBe(true)
     } finally {
       await page.close()
@@ -412,8 +438,8 @@ describe('recording detail UI', () => {
       await page.setViewportSize({ width: 820, height: 760 })
       await page.goto(baseUrl, { waitUntil: 'networkidle' })
       await page.getByRole('button', { name: '去分析', exact: true }).click()
+      await openContextDrawer(page)
       const toggle = page.locator('[data-toggle-analysis]')
-      await toggle.waitFor({ state: 'visible' })
       await page.locator('[data-prompt-load-error]').waitFor()
       expect(await page.locator('video').isVisible()).toBe(true)
       expect(await page.locator('[data-player-rate]').isEnabled()).toBe(true)
@@ -426,7 +452,7 @@ describe('recording detail UI', () => {
   })
 
   it('resizes the analysis pane by dragging its divider within min/max limits and remembers the width', async () => {
-    const context = await browser.newContext()
+    const context = await browser.newContext({ viewport: { width: 1512, height: 869 } })
     const page = await context.newPage()
     await openDetail(page)
     const handle = page.locator('.pane-resize-handle')
@@ -618,19 +644,27 @@ async function waitForLayoutStable(locator, { samples = 4, delay = 50 } = {}) {
 }
 
 async function openDetail(page, { reset = true } = {}) {
-  await page.goto(baseUrl, { waitUntil: 'networkidle' })
   if (reset) {
-    await page.evaluate(() => {
+    await page.addInitScript(() => {
       try {
         localStorage.removeItem('browser-forge.sidebar-collapsed')
         localStorage.removeItem('browser-forge.sidebar-width')
         localStorage.removeItem('browser-forge.analysis-pane-width')
       } catch {}
     })
-    await page.reload({ waitUntil: 'networkidle' })
   }
-  await page.getByRole('button', { name: '去分析', exact: true }).click()
+  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
+  const analyze = page.getByRole('button', { name: '去分析', exact: true })
+  await analyze.waitFor()
+  await analyze.click()
   await page.locator('[data-analysis-workspace]').waitFor()
+}
+
+async function openContextDrawer(page) {
+  const toggle = page.locator('[data-toggle-analysis]')
+  await toggle.waitFor({ state: 'visible' })
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
+  await page.locator('[data-context-host]').waitFor({ state: 'visible' })
 }
 
 async function fillActiveEditor(page, value) {

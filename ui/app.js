@@ -6,6 +6,7 @@ import { renderDetail } from './views/detail.js'
 import { renderTrash } from './views/trash.js'
 import { readSidebarCollapsed, renderSidebar, writeSidebarCollapsed } from './views/sidebar.js'
 import { mountSidebarResize } from './views/split-resize.js'
+import { createContextPane } from './views/context-pane.js'
 
 const state = createState({
   route: 'library',
@@ -14,8 +15,7 @@ const state = createState({
   recordings: [],
   selectedId: null,
   activeRecording: null,
-  sidebarCollapsed: readSidebarCollapsed(),
-  analysisPaneOpen: true
+  sidebarCollapsed: readSidebarCollapsed()
 })
 
 export function upsertRecording(recordings = [], recording) {
@@ -64,22 +64,29 @@ const root = document.getElementById('app')
 const isElectron = new URLSearchParams(location.search).get('shell') === 'electron'
 document.body.classList.toggle('shell-electron', isElectron)
 root.innerHTML = `
-  <div class="app-shell" data-app-shell>
+  <div class="app-shell analysis-pane-open" data-app-shell>
     <div data-sidebar-host></div>
     <main class="app-main" data-main></main>
+    <div class="workspace-context-host" data-context-host></div>
+    <button class="workspace-context-toggle" type="button" data-toggle-analysis aria-controls="recording-analysis-guidance" aria-expanded="true" aria-label="关闭录制说明" title="关闭录制说明">
+      ${contextIcon()}<span>说明</span>
+    </button>
   </div>`
 const shell = root.querySelector('[data-app-shell]')
 const sidebarHost = root.querySelector('[data-sidebar-host]')
 const main = root.querySelector('[data-main]')
+const contextHost = root.querySelector('[data-context-host]')
+const contextToggle = root.querySelector('[data-toggle-analysis]')
+const contextPane = createContextPane({ shell, host: contextHost, toggle: contextToggle, api })
 let cleanupView
 let beforeNavigate
 let navigating = false
 
 const beforeCloseHook = async () => {
   const activeBeforeNavigate = beforeNavigate
-  if (!activeBeforeNavigate) return true
   try {
-    return await activeBeforeNavigate() !== false
+    if (activeBeforeNavigate && await activeBeforeNavigate() === false) return false
+    return await contextPane.beforeNavigate() !== false
   } catch {
     return false
   }
@@ -276,11 +283,36 @@ function renderWorkspaceSidebar(value = state.value) {
 state.subscribe(renderWorkspaceSidebar)
 renderWorkspaceSidebar()
 
+function workspaceContextRecordingId(value = state.value) {
+  if (value.route === 'detail') return value.selectedId
+  if (value.route === 'recording') return value.activeRecording?.recordingId || value.activeRecording?.id || value.selectedId
+  if (value.route === 'library') {
+    const selected = value.recordings.find(recording => recording.id === value.selectedId)
+    return selected?.id || value.recordings[0]?.id || null
+  }
+  return null
+}
+
+function syncWorkspaceContext(value = state.value) {
+  const recordingId = workspaceContextRecordingId(value)
+  if (recordingId) void contextPane.showRecording(recordingId)
+  else contextPane.showPlaceholder({
+    title: value.route === 'new-recording' ? '准备录制' : '录制说明',
+    message: value.route === 'new-recording'
+      ? '开始录制后，可在这里随时补充操作意图和交付上下文。'
+      : '选择一段录制，或开始新录制后在这里补充上下文。'
+  })
+}
+
+state.subscribe(syncWorkspaceContext)
+syncWorkspaceContext()
+
 export async function navigate(route, patch = {}, { force = false } = {}) {
   if (navigating) return false
   navigating = true
   try {
     if (!force && beforeNavigate && !await beforeNavigate()) return false
+    if (!await contextPane.beforeNavigate()) return false
     cleanupView?.()
     cleanupView = null
     beforeNavigate = null
@@ -334,8 +366,7 @@ export async function navigate(route, patch = {}, { force = false } = {}) {
         container: main,
         api,
         recordingId: state.value.selectedId,
-        analysisPaneOpen: state.value.analysisPaneOpen,
-        onAnalysisPaneChange: analysisPaneOpen => state.update({ analysisPaneOpen }),
+        beforeObjectAction: contextPane.flush,
         onRecordingUpdated: recording => state.update(value => ({ recordings: upsertRecording(value.recordings, recording) })),
         onBack: () => navigate('library'),
         onTrashed: async recording => { showUndoToast(recording); await navigate('library', {}, { force: true }) }
@@ -376,6 +407,8 @@ function showUndoToast(recording) {
     await navigate('detail', { selectedId: restored.id })
   })
 }
+
+function contextIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 4h13v12h-13zM11.5 4v12M6.5 8h2M6.5 11h2"/></svg>' }
 
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]) }
 

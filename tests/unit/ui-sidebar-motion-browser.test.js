@@ -76,52 +76,43 @@ describe('workspace sidebar motion', () => {
     await page.close()
   })
 
-  it('keeps the sidebar, video, and analysis editor nodes alive across state updates and collapse toggles', async () => {
+  it('keeps the shell context and editor nodes alive from repository through detail and sidebar collapse', async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
+    await page.locator('[data-context-host] [data-guidance-editor-surface]').waitFor({ state: 'attached', timeout: 3000 })
+
+    await page.evaluate(() => {
+      window.__shellBeforeDetail = document.querySelector('[data-app-shell]')
+      window.__sidebarBeforeDetail = document.querySelector('.app-sidebar')
+      window.__contextBeforeDetail = document.querySelector('[data-context-host]')
+      window.__editorBeforeDetail = document.querySelector('[data-context-host] [data-guidance-editor-surface]')
+    })
+
     await page.getByRole('button', { name: '去分析', exact: true }).click()
     await page.locator('[data-video-player] video').waitFor({ timeout: 3000 })
 
-    await page.evaluate(() => {
-      window.__sidebarBeforeAnalysis = document.querySelector('.app-sidebar')
-      window.__videoBeforeAnalysis = document.querySelector('[data-video-player] video')
-      Object.defineProperty(window.__videoBeforeAnalysis, 'currentTime', {
-        configurable: true,
-        writable: true,
-        value: 37.25
-      })
-    })
-
-    await page.locator('[data-toggle-analysis]').click()
-    await page.locator('[data-analysis-pane] textarea, [data-analysis-pane] [contenteditable="true"], [data-analysis-pane] .CodeMirror').first().waitFor({ state: 'attached', timeout: 3000 })
-
-    const afterAnalysisOpen = await page.evaluate(() => ({
-      sameNode: window.__sidebarBeforeAnalysis === document.querySelector('.app-sidebar'),
+    const afterDetail = await page.evaluate(() => ({
+      shell: window.__shellBeforeDetail === document.querySelector('[data-app-shell]'),
+      sidebar: window.__sidebarBeforeDetail === document.querySelector('.app-sidebar'),
+      context: window.__contextBeforeDetail === document.querySelector('[data-context-host]'),
+      editor: window.__editorBeforeDetail === document.querySelector('[data-context-host] [data-guidance-editor-surface]'),
       sidebarWidth: document.querySelector('.app-sidebar').getBoundingClientRect().width,
-      shellFirstColumn: Number.parseFloat(getComputedStyle(document.querySelector('[data-app-shell]')).gridTemplateColumns)
+      contextWidth: document.querySelector('[data-context-host]').getBoundingClientRect().width
     }))
-    expect(afterAnalysisOpen.sameNode).toBe(true)
-    expect(afterAnalysisOpen.sidebarWidth).toBeGreaterThan(230)
-    expect(afterAnalysisOpen.shellFirstColumn).toBeGreaterThan(230)
+    expect(afterDetail).toMatchObject({ shell: true, sidebar: true, context: true, editor: true })
+    expect(afterDetail.sidebarWidth).toBeGreaterThan(230)
+    expect(afterDetail.contextWidth).toBeGreaterThanOrEqual(470)
 
-    await page.evaluate(() => {
-      window.__analysisEditorBeforeToggle = document.querySelector(
-        '[data-analysis-pane] [contenteditable="true"], [data-analysis-pane] .CodeMirror, [data-analysis-pane] textarea'
-      )
-      document.querySelector('[data-sidebar-toggle]').click()
-    })
+    await page.locator('[data-sidebar-toggle]').click()
     await page.waitForTimeout(180)
 
     const preserved = await page.evaluate(() => ({
-      sidebar: window.__sidebarBeforeAnalysis === document.querySelector('.app-sidebar'),
-      video: window.__videoBeforeAnalysis === document.querySelector('[data-video-player] video'),
-      currentTime: document.querySelector('[data-video-player] video').currentTime,
-      editor: window.__analysisEditorBeforeToggle === document.querySelector(
-        '[data-analysis-pane] [contenteditable="true"], [data-analysis-pane] .CodeMirror, [data-analysis-pane] textarea'
-      )
+      shell: window.__shellBeforeDetail === document.querySelector('[data-app-shell]'),
+      sidebar: window.__sidebarBeforeDetail === document.querySelector('.app-sidebar'),
+      context: window.__contextBeforeDetail === document.querySelector('[data-context-host]'),
+      editor: window.__editorBeforeDetail === document.querySelector('[data-context-host] [data-guidance-editor-surface]')
     }))
-
-    expect(preserved).toEqual({ sidebar: true, video: true, currentTime: 37.25, editor: true })
+    expect(preserved).toEqual({ shell: true, sidebar: true, context: true, editor: true })
     await page.close()
   }, 15000)
 
