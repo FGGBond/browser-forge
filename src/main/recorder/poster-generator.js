@@ -2,55 +2,78 @@ import { spawn as spawnProcess } from 'child_process'
 import { join } from 'path'
 import { resolveNativeToolPath } from './native-tools.js'
 
-
-export function selectPosterOffset({ durationMs, timeline = [], internalOrigins = [], settleDelayMs = 750 } = {}) {
+export function selectPosterOffset({ durationMs, coveredUntilOffsetMs = durationMs, timeline = [], internalOrigins = [] } = {}) {
   const duration = Math.max(0, Number(durationMs) || 0)
-  const maxOffset = duration > 100 ? duration - 100 : duration
+  const coverage = Math.min(duration, Math.max(0, Number(coveredUntilOffsetMs) || 0))
+  if (coverage <= 0) return null
+  const maxOffset = coverage > 100 ? coverage - 100 : coverage
   const internal = new Set(internalOrigins.map(value => {
     try { return new URL(String(value)).origin } catch { return null }
   }).filter(Boolean))
+
   for (const event of timeline) {
-    if (event?.type !== 'navigation' || event?.success === false || event?.failed === true) continue
+    if (event?.type !== 'navigation-stable' || event?.success === false || event?.failed === true) continue
     const offset = Number(event.videoOffsetMs)
     if (!Number.isFinite(offset) || offset < 0) continue
     let parsed
     try { parsed = new URL(String(event.url || event.documentUrl || event.pageUrl || '')) } catch { continue }
     if (!['http:', 'https:'].includes(parsed.protocol)) continue
-    if (internal.has(parsed.origin) || ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname)) continue
-    return Math.max(0, Math.round(Math.min(maxOffset, offset + Math.max(0, Number(settleDelayMs) || 0))))
+    if (internal.has(parsed.origin) || parsed.pathname.endsWith('/recording-start.html')) continue
+    return Math.max(0, Math.round(Math.min(maxOffset, offset)))
   }
-  return Math.max(0, Math.round(Math.min(maxOffset, 1000, duration * 0.2)))
+  return null
 }
 
 export async function generatePoster({
   recordingDir,
   durationMs,
+  coveredUntilOffsetMs = durationMs,
   timeline = [],
   internalOrigins = [],
-  settleDelayMs = 750,
   nativeToolPathOptions = {},
   spawn = spawnProcess
 }) {
   const input = join(recordingDir, 'video', 'recording.mp4')
   const output = join(recordingDir, 'video', 'poster.png')
-  const offsetMs = selectPosterOffset({ durationMs, timeline, internalOrigins, settleDelayMs })
+  const requestedOffsetMs = selectPosterOffset({ durationMs, coveredUntilOffsetMs, timeline, internalOrigins })
+  if (requestedOffsetMs === null) {
+    return { status: 'unavailable', reason: 'no-stable-external-page' }
+  }
   try {
     const binary = resolveNativeToolPath({ ...nativeToolPathOptions, toolName: 'bf-video-frame' })
-    await runProcess(spawn, binary, [
+    const extracted = await runProcess(spawn, binary, [
       '--input', input,
-      '--offset-ms', String(offsetMs),
+      '--offset-ms', String(requestedOffsetMs),
       '--output', output
     ])
-    return { status: 'complete', path: output, offsetMs }
+    const nativeRequestedOffsetMs = Number(extracted?.requestedOffsetMs)
+    const actualOffsetMs = Number(extracted?.actualOffsetMs)
+    if (!Number.isFinite(nativeRequestedOffsetMs) || nativeRequestedOffsetMs < 0 || !Number.isFinite(actualOffsetMs) || actualOffsetMs < 0) {
+      throw new Error('Native frame extractor did not report valid offsets')
+    }
+    return {
+      status: 'complete',
+      path: output,
+      offsetMs: Math.round(actualOffsetMs),
+      requestedOffsetMs: Math.round(nativeRequestedOffsetMs),
+      actualOffsetMs: Math.round(actualOffsetMs),
+      ...(Number.isFinite(Number(extracted.width)) ? { width: Math.round(Number(extracted.width)) } : {}),
+      ...(Number.isFinite(Number(extracted.height)) ? { height: Math.round(Number(extracted.height)) } : {})
+    }
   } catch (error) {
     return { status: 'failed', error }
   }
 }
 
 async function runProcess(spawn, binary, args) {
-  const child = spawn(binary, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+  const child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] })
   if (!child?.once) throw new Error('Native frame extractor did not start')
+  let stdout = ''
   let stderr = ''
+  child.stdout?.on?.('data', chunk => {
+    stdout += Buffer.from(chunk).toString('utf8')
+    if (stdout.length > 32_768) stdout = stdout.slice(-32_768)
+  })
   child.stderr?.on?.('data', chunk => {
     stderr += Buffer.from(chunk).toString('utf8')
     if (stderr.length > 8_192) stderr = stderr.slice(-8_192)
@@ -59,7 +82,25 @@ async function runProcess(spawn, binary, args) {
     child.once('error', reject)
     child.once('close', (code, signal) => {
       if (code === 0) resolve()
-      else reject(new Error(`Native frame extractor failed (${signal || (code ?? 'unknown')}): ${stderr.trim() || 'no error output'}`))
+      else reject(new Error(`Native frame extractor failed (${signal || (code ?? 'unknown')}): ${stderr.trim() || parseNativeError(stdout) || 'no error output'}`))
     })
   })
+  const records = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
+    try { return JSON.parse(line) } catch { return null }
+  }).filter(Boolean)
+  const result = records.at(-1)
+  if (!result || result.type === 'error') {
+    throw new Error(result?.message || 'Native frame extractor returned invalid output')
+  }
+  return result
+}
+
+function parseNativeError(stdout) {
+  for (const line of stdout.split(/\r?\n/).reverse()) {
+    try {
+      const value = JSON.parse(line)
+      if (value?.message) return value.message
+    } catch {}
+  }
+  return ''
 }
