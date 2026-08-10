@@ -28,7 +28,7 @@ export const api = {
   getTimeline(id) { return request(`/api/recordings/${encodeURIComponent(id)}/timeline`).then(result => result.events) },
   getPrompt(id) { return request(`/api/recordings/${encodeURIComponent(id)}/prompt`) },
   savePrompt(id, text) { return request(`/api/recordings/${encodeURIComponent(id)}/prompt`, { method: 'PUT', body: JSON.stringify({ text }) }) },
-  getExternalAgentPrompt(id) { return request(`/api/recordings/${encodeURIComponent(id)}/external-agent-prompt`) },
+  createAgentHandoff(id) { return request(`/api/recordings/${encodeURIComponent(id)}/agent-handoff`, { method: 'POST' }) },
   trashRecording(id) { return request(`/api/recordings/${encodeURIComponent(id)}/trash`, { method: 'POST' }) },
   restoreRecording(id) { return request(`/api/recordings/${encodeURIComponent(id)}/restore`, { method: 'POST' }) },
   deleteRecording(id) { return request(`/api/recordings/${encodeURIComponent(id)}`, { method: 'DELETE' }) },

@@ -1,0 +1,243 @@
+/* Guided analysis composer overrides. Kept separate from the shared workspace shell. */
+.analysis-prompt {
+  min-height: 100vh;
+  padding-bottom: 0;
+}
+
+.guidance-editor {
+  min-height: calc(100vh - 4px);
+  display: flex;
+  flex-direction: column;
+}
+
+.guidance-flow {
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.guidance-progress {
+  width: max-content;
+  max-width: 100%;
+  margin: 2px auto 24px;
+  padding: 5px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-muted) 82%, transparent);
+  font-size: 10px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .01em;
+  line-height: 1.4;
+  text-align: center;
+  user-select: none;
+}
+
+.guidance-progress-dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.guidance-step {
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.guidance-question {
+  padding: 0 4px 22px;
+}
+
+.guidance-question h3,
+.guidance-review-heading h3 {
+  margin: 0 0 8px;
+  outline: 0;
+  font-size: 18px;
+  line-height: 1.35;
+  letter-spacing: -.02em;
+}
+
+.guidance-question h3:focus,
+.guidance-review-heading h3:focus {
+  outline: 0;
+}
+
+.guidance-question p,
+.guidance-review-heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.guidance-composer {
+  position: sticky;
+  z-index: 2;
+  bottom: 0;
+  margin-top: auto;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--surface-solid) 94%, transparent);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, .08), 0 1px 2px rgba(0, 0, 0, .04);
+  backdrop-filter: blur(18px);
+  transition: border-color 140ms ease-out, box-shadow 140ms ease-out, background-color 140ms ease-out;
+}
+
+.guidance-composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: var(--surface-solid);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .09), 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.guidance-editor-root {
+  min-width: 0;
+}
+
+.guidance-editor [data-guidance-editor-surface],
+.guidance-editor textarea[data-prompt-textarea]:not([hidden]) {
+  box-sizing: border-box;
+  width: 100%;
+  position: relative;
+  min-height: 72px;
+  max-height: min(36vh, 280px);
+  margin: 0;
+  padding: 5px 6px 10px;
+  overflow-y: auto;
+  resize: none;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  color: var(--text);
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  caret-color: var(--accent);
+  scrollbar-width: thin;
+}
+
+.guidance-editor [data-guidance-editor-surface]:focus,
+.guidance-editor textarea[data-prompt-textarea]:not([hidden]):focus {
+  border: 0;
+  outline: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+.guidance-editor [data-guidance-editor-surface]:empty::before,
+.guidance-editor [data-guidance-editor-surface]:has(> p:only-child > br:only-child)::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  color: var(--subtle);
+  pointer-events: none;
+}
+
+.guidance-editor [data-guidance-editor-surface] p {
+  margin: 0 0 8px;
+}
+
+.guidance-editor [data-guidance-editor-surface] p:last-child {
+  margin-bottom: 0;
+}
+
+.guidance-editor [data-guidance-editor-surface] ul,
+.guidance-editor [data-guidance-editor-surface] ol {
+  margin: 0 0 8px;
+  padding-left: 22px;
+}
+
+.guidance-editor [data-guidance-editor-surface] li + li {
+  margin-top: 3px;
+}
+
+.guidance-composer .guidance-actions {
+  position: static;
+  margin: 4px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  box-shadow: none;
+}
+
+.guidance-review {
+  padding-bottom: 16px;
+}
+
+.guidance-review-heading {
+  padding: 2px 4px 16px;
+}
+
+.guidance-review-footer {
+  position: sticky;
+  z-index: 2;
+  bottom: 0;
+  margin-top: auto;
+  padding: 10px 0 24px;
+  background: linear-gradient(to bottom, transparent, var(--surface-solid) 18px);
+}
+
+.guidance-review-footer .guidance-actions {
+  position: static;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-sm);
+}
+
+.guidance-review-actions {
+  grid-template-columns: auto auto minmax(0, 1fr);
+}
+
+.guidance-review-actions [hidden] {
+  display: none !important;
+}
+
+.guidance-review-actions [data-agent-handoff] {
+  justify-self: stretch;
+}
+
+.guidance-handoff-status {
+  min-height: 18px;
+  padding: 0 4px 7px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+  text-align: right;
+}
+
+.guidance-handoff-status:empty {
+  min-height: 0;
+  padding: 0;
+}
+
+.guidance-handoff-status[data-tone="success"] {
+  color: var(--success);
+}
+
+.guidance-handoff-status[data-tone="error"] {
+  color: var(--danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guidance-composer {
+    transition-duration: .01ms;
+  }
+}

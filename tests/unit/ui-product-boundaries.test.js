@@ -65,10 +65,12 @@ describe('recording workspace product boundaries', () => {
     expect(readUi('views/detail.js')).toContain('data-analysis-pane')
   })
 
-  it('keeps the analysis guidance flow structured, local, and free of normal save-state copy', () => {
+  it('keeps the analysis guidance flow structured, local, and free of editor chrome', () => {
     const promptEditor = readUi('views/prompt-editor.js')
+    const api = readUi('api.js')
+    const index = readUi('index.html')
 
-    for (const dependency of ['parseGuidanceMarkdown', 'serializeGuidanceMarkdown', 'mountMarkdownEditor', 'renderSafeMarkdown']) {
+    for (const dependency of ['parseGuidanceMarkdown', 'serializeGuidanceMarkdown', 'mountGuidanceEditor', 'renderSafeMarkdown']) {
       expect(promptEditor).toContain(dependency)
     }
     for (const question of [
@@ -78,11 +80,13 @@ describe('recording workspace product boundaries', () => {
     ]) {
       expect(promptEditor).toContain(question)
     }
+    for (const copy of ['第 ${stepIndex + 1} / 3 个问题', '导出并复制给外部 Agent', '录制已导出，复制失败', '重试复制']) {
+      expect(promptEditor).toContain(copy)
+    }
     for (const hook of [
       'data-guidance-step',
       'data-guidance-progress',
-      'data-guidance-step-jump',
-      'data-guidance-review-title',
+      'data-guidance-composer',
       'data-guidance-next',
       'data-guidance-previous',
       'data-guidance-review',
@@ -90,20 +94,22 @@ describe('recording workspace product boundaries', () => {
       'data-save-error',
       'data-retry-save',
       'data-dismiss-save-error',
-      'data-prompt-textarea'
+      'data-prompt-textarea',
+      'data-retry-copy'
     ]) {
       expect(promptEditor).toContain(hook)
     }
-    expect(promptEditor).toContain('尚未配置 Agent')
-    expect(promptEditor).toContain('browser-forge skill')
-    expect(promptEditor).toContain('使用 browser-forge skill 分析录制并生成可独立运行的 skill 与 CLI 工具。')
-    expect(promptEditor).toContain('maxReachedStep')
-    expect(promptEditor).not.toContain('Agent guidance')
-    expect(promptEditor).not.toContain('data-save-state')
-    expect(promptEditor).not.toContain('说明尚未保存')
-    expect(promptEditor).not.toContain('正在保存')
-    expect(promptEditor).not.toContain('预览完整提示词')
-    expect(promptEditor).not.toContain('GUIDED_PROMPT_TEMPLATE')
+    expect(promptEditor).toContain('role="status" aria-live="polite"')
+    expect(promptEditor).toContain('createAgentHandoff')
+    expect(promptEditor).not.toContain('getExternalAgentPrompt')
+    expect(promptEditor).not.toContain('mountMarkdownEditor')
+    expect(promptEditor).not.toContain('maxReachedStep')
+    expect(promptEditor).not.toContain('data-guidance-step-jump')
+    expect(promptEditor).not.toContain('tabindex="-1"')
+    expect(api).toContain('createAgentHandoff')
+    expect(index).toContain('/guidance.css')
+    expect(index).not.toContain('easymde')
+    expect(index).not.toContain('EasyMDE')
   })
 
   it('locks the local UI to same-origin resources with a strict CSP', () => {

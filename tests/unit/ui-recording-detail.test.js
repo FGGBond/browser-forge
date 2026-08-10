@@ -119,14 +119,14 @@ describe('recording detail UI', () => {
     expect(await pane.getAttribute('aria-modal')).toBeNull()
     expect(await page.locator('[data-analysis-backdrop]').count()).toBe(0)
 
-    await page.locator('[data-guidance-step-title]').waitFor({ state: 'attached' })
+    await page.locator('[data-guidance-editor-surface]').waitFor({ state: 'attached' })
     await toggle.click()
     await pane.waitFor({ state: 'visible' })
-    const focusedTitleStyle = await page.locator('[data-guidance-step-title]').evaluate(element => {
+    const questionStyle = await pane.locator('.guidance-question h3').evaluate(element => {
       const style = getComputedStyle(element)
-      return { outlineOffset: style.outlineOffset, borderRadius: style.borderRadius }
+      return { outlineStyle: style.outlineStyle, tabIndex: element.getAttribute('tabindex') }
     })
-    expect(focusedTitleStyle).toEqual({ outlineOffset: '3px', borderRadius: '4px' })
+    expect(questionStyle).toEqual({ outlineStyle: 'none', tabIndex: null })
     expect(await toggle.getAttribute('aria-expanded')).toBe('true')
     expect(await toggle.getByText('去分析', { exact: true }).count()).toBe(1)
     expect(await pane.getAttribute('hidden')).toBeNull()
@@ -142,7 +142,7 @@ describe('recording detail UI', () => {
     const closeBox = await pane.locator('[data-close-analysis]').boundingBox()
     expect(Math.abs(closeBox.y - statusBox.y)).toBeLessThanOrEqual(2)
     expect(closeBox.x + closeBox.width).toBeLessThanOrEqual(statusBox.x + statusBox.width)
-    await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-guidance-step-title]'))).toBe(true)
+    await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-guidance-editor-surface]'))).toBe(true)
 
     const rateButton = page.locator('[data-player-rate]')
     await expect.poll(() => rateButton.isVisible()).toBe(true)
@@ -164,26 +164,18 @@ describe('recording detail UI', () => {
     await page.close()
   })
 
-  it('refreshes a preloaded EasyMDE value when the hidden guidance pane becomes visible', async () => {
+  it('shows and focuses a preloaded guided composer when the hidden pane becomes visible', async () => {
     promptText = serializeGuidanceMarkdown({ actions: '打开订单并读取物流状态', capability: '', acceptance: '' })
     const page = await browser.newPage()
     try {
       await openDetail(page)
       await page.locator('[data-toggle-analysis]').click()
       await page.locator('[data-analysis-pane]').waitFor({ state: 'visible' })
-      const readRendering = () => page.locator('.CodeMirror').evaluate(element => {
-        const line = element.querySelector('.CodeMirror-line')
-        const editor = element.getBoundingClientRect()
-        const content = line?.getBoundingClientRect()
-        return {
-          value: element.CodeMirror?.getValue(),
-          text: line?.textContent || '',
-          visibleHeight: content ? Math.min(content.bottom, editor.bottom) - Math.max(content.top, editor.top) : 0
-        }
-      })
-      expect((await readRendering()).value).toBe('打开订单并读取物流状态')
-      await expect.poll(async () => (await readRendering()).text).toContain('打开订单并读取物流状态')
-      expect((await readRendering()).visibleHeight).toBeGreaterThan(0)
+      const surface = page.locator('[data-guidance-editor-surface]')
+      await surface.waitFor({ state: 'visible' })
+      expect(await surface.textContent()).toContain('打开订单并读取物流状态')
+      expect((await surface.boundingBox()).height).toBeGreaterThan(0)
+      await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-guidance-editor-surface]'))).toBe(true)
     } finally {
       await page.close()
     }
@@ -237,7 +229,7 @@ describe('recording detail UI', () => {
       await rateButton.click()
       expect(await rateButton.textContent()).toBe('1.5×')
       await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-player-rate]'))).toBe(true)
-      await page.locator('[data-guidance-step-title]').waitFor({ state: 'attached', timeout: 2_000 })
+      await page.locator('[data-guidance-editor-surface]').waitFor({ state: 'attached', timeout: 2_000 })
       await page.waitForTimeout(50)
       expect(await page.evaluate(() => document.activeElement?.matches('[data-player-rate]'))).toBe(true)
     } finally {
@@ -250,7 +242,7 @@ describe('recording detail UI', () => {
     const page = await browser.newPage()
     try {
       await openDetail(page)
-      await page.locator('[data-guidance-step-title]').waitFor({ state: 'attached' })
+      await page.locator('[data-guidance-editor-surface]').waitFor({ state: 'attached' })
       await page.locator('[data-toggle-analysis]').click()
       await fillActiveEditor(page, '关闭分析栏前必须保存')
       await page.locator('[data-close-analysis]').click()
@@ -279,7 +271,7 @@ describe('recording detail UI', () => {
     const page = await browser.newPage()
     try {
       await openDetail(page)
-      await page.locator('[data-guidance-step-title]').waitFor({ state: 'attached' })
+      await page.locator('[data-guidance-editor-surface]').waitFor({ state: 'attached' })
       const pane = page.locator('[data-analysis-pane]')
       const toggle = page.locator('[data-toggle-analysis]')
       await toggle.click()
@@ -311,7 +303,7 @@ describe('recording detail UI', () => {
       expect(await toggle.getAttribute('aria-expanded')).toBe('true')
       await page.locator('[data-close-analysis]').click()
       await expect.poll(() => toggle.getAttribute('aria-expanded')).toBe('false')
-      await page.locator('[data-guidance-step-title]').waitFor({ state: 'attached', timeout: 2_000 })
+      await page.locator('[data-guidance-editor-surface]').waitFor({ state: 'attached', timeout: 2_000 })
       expect(await pane.getAttribute('hidden')).not.toBeNull()
       await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-toggle-analysis]'))).toBe(true)
     } finally {
@@ -369,20 +361,16 @@ async function openDetail(page) {
 }
 
 async function fillActiveEditor(page, value) {
-  await page.evaluate(nextValue => {
-    const wrapper = document.querySelector('[data-guidance-step] .CodeMirror')
-    if (wrapper?.CodeMirror) return wrapper.CodeMirror.setValue(nextValue)
-    const textarea = document.querySelector('[data-guidance-step] [data-prompt-textarea]')
-    textarea.value = nextValue
-    textarea.dispatchEvent(new Event('input', { bubbles: true }))
-  }, value)
+  const surface = page.locator('[data-guidance-editor-surface]')
+  if (await surface.count()) return surface.fill(value)
+  return page.locator('[data-guidance-step] [data-prompt-textarea]:visible').fill(value)
 }
 
 async function readActiveEditor(page) {
   return page.evaluate(() => {
-    const wrapper = document.querySelector('[data-guidance-step] .CodeMirror')
-    if (wrapper?.CodeMirror) return wrapper.CodeMirror.getValue()
-    return document.querySelector('[data-guidance-step] [data-prompt-textarea]')?.value ?? ''
+    const surface = document.querySelector('[data-guidance-editor-surface]')
+    if (surface) return [...surface.children].map(block => block.innerText).join('\n\n').trim()
+    return document.querySelector('[data-guidance-step] [data-prompt-textarea]:not([hidden])')?.value ?? ''
   })
 }
 
