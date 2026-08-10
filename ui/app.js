@@ -15,7 +15,7 @@ const state = createState({
   selectedId: null,
   activeRecording: null,
   sidebarCollapsed: readSidebarCollapsed(),
-  analysisPaneOpen: false
+  analysisPaneOpen: true
 })
 
 export function upsertRecording(recordings = [], recording) {
