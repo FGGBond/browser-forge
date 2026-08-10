@@ -7,6 +7,18 @@ afterEach(() => {
 })
 
 describe('RecordingSession screenshot triggers', () => {
+  it('uses the native-matched recording window title as the CDP token identity', () => {
+    const recording = new RecordingSession({
+      outputDir: '/tmp/browser-forge-test',
+      video: {
+        startEpochMs: 1_000,
+        window: { pid: 4242, windowId: '99', title: 'Browser Forge Recording · token-123' }
+      }
+    })
+
+    expect(recording._cdp.expectedTargetTitle).toBe('Browser Forge Recording · token-123')
+  })
+
   it('injects an Enter key listener alongside click capture', async () => {
     const recording = new RecordingSession({ outputDir: '/tmp/browser-forge-test' })
     const pageScripts = []

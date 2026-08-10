@@ -18,7 +18,10 @@ export class RecordingSession {
     this.outputDir = outputDir
     this.sessionDir = sessionDir
     this.video = video
-    this._cdp = new CdpClient({ port })
+    this._cdp = new CdpClient({
+      port,
+      expectedTargetTitle: video?.window?.title ?? null
+    })
     this._tabCollectors = new Map()
     this._timelineEvents = []
     this._startedAt = null

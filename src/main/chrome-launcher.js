@@ -39,7 +39,8 @@ export function buildChromeArgs({ port, userDataDir, startUrl = 'about:blank' })
     `--user-data-dir=${userDataDir}`,
     '--no-first-run',
     '--no-default-browser-check',
-    `--app=${startUrl}`
+    '--new-window',
+    startUrl
   ]
 }
 
