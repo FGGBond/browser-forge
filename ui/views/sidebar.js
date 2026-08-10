@@ -22,7 +22,6 @@ export function renderSidebar({
   route,
   selectedId,
   collapsed = false,
-  analysisExpanded = false,
   locked = false,
   onNavigate,
   onNew,
@@ -41,7 +40,7 @@ export function renderSidebar({
           ${libraryIcon()}<span class="recording-nav-copy sidebar-label"><strong>全部录制</strong></span>
         </button>
         <div class="sidebar-recordings" data-sidebar-recordings>
-          ${recordings.length ? recordings.map(recording => recordingItem(recording, selectedId, route, locked, analysisExpanded)).join('') : `<p class="sidebar-empty sidebar-label">完成录制后会显示在这里</p>`}
+          ${recordings.length ? recordings.map(recording => recordingItem(recording, selectedId, route, locked)).join('') : `<p class="sidebar-empty sidebar-label">完成录制后会显示在这里</p>`}
         </div>
       </section>
       <nav class="secondary-nav" aria-label="录制管理">
@@ -49,8 +48,8 @@ export function renderSidebar({
           ${trashIcon()}<span class="sidebar-label">回收站</span>
         </button>
       </nav>
-      <button class="sidebar-toggle" type="button" data-sidebar-toggle aria-label="${collapsed ? '显示侧边栏' : '收起侧边栏'}" title="${collapsed ? '显示侧边栏' : '收起侧边栏'}">
-        ${collapseIcon(collapsed)}<span class="sidebar-label sr-only">${collapsed ? '显示侧边栏' : '收起侧边栏'}</span>
+      <button class="sidebar-toggle" type="button" data-sidebar-toggle aria-label="${collapsed ? '展开侧边栏' : '收起侧边栏'}" title="${collapsed ? '展开侧边栏' : '收起侧边栏'}">
+        ${collapseIcon(collapsed)}<span class="sidebar-label sr-only">${collapsed ? '展开侧边栏' : '收起侧边栏'}</span>
       </button>
     </aside>`
 
@@ -66,17 +65,13 @@ export function renderSidebar({
   return () => { container.replaceChildren() }
 }
 
-function recordingItem(recording, selectedId, route, locked, analysisExpanded = false) {
+function recordingItem(recording, selectedId, route, locked) {
   const active = route === 'detail' && recording.id === selectedId
   const label = String(recording.title || '未命名录制')
-  const bubble = analysisExpanded && active
-    ? `<span class="sidebar-recording-chat" data-recording-chat="${escapeAttribute(recording.id)}" aria-hidden="true">${chatBubbleIcon()}</span>`
-    : ''
   return `
-    <button type="button" class="sidebar-recording${active ? ' active' : ''}${bubble ? ' has-chat' : ''}" data-recording-nav="${escapeAttribute(recording.id)}" aria-current="${active ? 'page' : 'false'}" ${locked ? 'disabled' : ''} title="${escapeAttribute(label)}">
+    <button type="button" class="sidebar-recording${active ? ' active' : ''}" data-recording-nav="${escapeAttribute(recording.id)}" aria-current="${active ? 'page' : 'false'}" ${locked ? 'disabled' : ''} title="${escapeAttribute(label)}">
       <span class="recording-folder" data-recording-folder="${active ? 'open' : 'closed'}" aria-hidden="true">${folderIcon(active)}</span>
       <span class="sidebar-label recording-nav-copy"><strong>${escapeHtml(label)}</strong></span>
-      ${bubble}
     </button>`
 }
 
@@ -85,7 +80,6 @@ function escapeHtml(value) {
 }
 
 function escapeAttribute(value) { return escapeHtml(value) }
-function chatBubbleIcon() { return '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5h12v9H8l-3.2 2.6A.75.75 0 0 1 3.5 16V5.5Z"/></svg>' }
 function folderIcon(open) { return open
   ? '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 7V5.5h5l1.5 2h6.5v2"/><path d="M3 9.5h14l-1.5 6H4.5l-1.5-6Z"/></svg>'
   : '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 5.5h5l1.5 2h6.5v8h-13v-10Z"/></svg>' }

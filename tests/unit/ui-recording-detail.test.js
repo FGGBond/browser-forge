@@ -87,7 +87,7 @@ describe('recording detail UI', () => {
     expect(css).toMatch(/\.analysis-workspace\.analysis-pane-open\s*\{[^}]*grid-template-columns:minmax\(560px,\s*1fr\)\s+var\(--pane-w\)/s)
     expect(css).toMatch(/\.sidebar-resize-handle,\s*\n\.pane-resize-handle\s*\{[^}]*cursor:\s*col-resize/s)
     expect(css).toMatch(/\.analysis-pane\s*\{[^}]*position:sticky[^}]*top:0[^}]*height:100vh[^}]*overflow:auto/s)
-    expect(css).not.toMatch(/\.analysis-pane\s*\{[^}]*(?:position:fixed|position:absolute)/s)
+    expect(css).toMatch(/@media \(max-width:900px\)[\s\S]*?\.analysis-pane \{[^}]*position:fixed/s)
     expect(css).toMatch(/\.analysis-pane-inner\s*\{[^}]*opacity:0[^}]*transform:translateX\(10px\)/s)
     expect(css).toMatch(/\.analysis-workspace\.analysis-pane-open:not\(\.analysis-pane-closing\) \.analysis-pane-inner\s*\{[^}]*opacity:1[^}]*transform:none[^}]*transition:transform 180ms cubic-bezier\(\.2,\.8,\.2,1\),opacity 180ms cubic-bezier\(\.2,\.8,\.2,1\)/s)
     expect(css).toMatch(/\.analysis-workspace\.analysis-pane-closing \.analysis-pane-inner\s*\{[^}]*opacity:0[^}]*transform:translateX\(10px\)[^}]*transition:transform 140ms cubic-bezier\(\.4,0,\.2,1\),opacity 140ms cubic-bezier\(\.4,0,\.2,1\)/s)
@@ -429,25 +429,21 @@ describe('recording detail UI', () => {
     await context.close()
   })
 
-  it('collapses the left sidebar fully when analysis opens and restores it via the reveal affordance', async () => {
+  it('keeps the left navigation stable when analysis opens', async () => {
     const page = await newIsolatedPage()
     await page.goto(baseUrl, { waitUntil: 'networkidle' })
     const shell = page.locator('[data-app-shell]')
-    expect(await shell.getAttribute('class')).not.toContain('sidebar-hidden')
+    const sidebar = page.locator('.app-sidebar')
+    const initialWidth = (await sidebar.boundingBox()).width
+    expect(initialWidth).toBeGreaterThan(230)
 
     await page.getByRole('button', { name: '去分析', exact: true }).click()
-    // 进入详情:右侧分析栏此时还未展开。点击去分析后左侧栏自动全部收起
     await page.locator('[data-toggle-analysis]').click()
     await page.locator('[data-analysis-pane]').waitFor({ state: 'visible' })
-    await expect.poll(() => shell.getAttribute('class')).toContain('sidebar-hidden')
-    expect(await shell.getAttribute('class')).toContain('sidebar-collapsed')
-    expect(await page.locator('[data-sidebar-host]').evaluate(el => el.classList.contains('is-hidden'))).toBe(true)
-    // 出现可恢复的「显示侧边栏」入口
-    const reveal = page.locator('[data-sidebar-reveal]')
-    await reveal.waitFor({ state: 'attached' })
-    expect(await reveal.evaluate(el => el.hidden)).toBe(false)
-    await reveal.click()
-    await expect.poll(() => shell.getAttribute('class')).not.toContain('sidebar-hidden')
+
+    expect(await shell.getAttribute('class')).not.toContain('sidebar-collapsed')
+    expect((await sidebar.boundingBox()).width).toBeGreaterThan(230)
+    expect(await page.locator('[data-sidebar-reveal]').count()).toBe(0)
     await page.close()
   }, 20_000)
 

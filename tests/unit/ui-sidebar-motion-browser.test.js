@@ -68,7 +68,7 @@ describe('workspace sidebar motion', () => {
     const after = await page.evaluate(() => Number.parseFloat(getComputedStyle(document.querySelector('[data-app-shell]')).gridTemplateColumns))
     expect(after).toBe(68)
 
-    await page.locator('[data-sidebar-reveal]').click()
+    await page.locator('[data-sidebar-toggle]').click()
     await page.waitForFunction(() => ['expanded','expanding'].includes(document.querySelector('[data-app-shell]').dataset.sidebarMotion), null, { timeout: 5000 })
     const restored = await page.evaluate(() => Number.parseFloat(getComputedStyle(document.querySelector('[data-app-shell]')).gridTemplateColumns))
     expect(restored).toBeGreaterThan(230)
@@ -95,7 +95,14 @@ describe('workspace sidebar motion', () => {
     await page.locator('[data-toggle-analysis]').click()
     await page.locator('[data-analysis-pane] textarea, [data-analysis-pane] [contenteditable="true"], [data-analysis-pane] .CodeMirror').first().waitFor({ state: 'attached', timeout: 3000 })
 
-    expect(await page.evaluate(() => window.__sidebarBeforeAnalysis === document.querySelector('.app-sidebar'))).toBe(true)
+    const afterAnalysisOpen = await page.evaluate(() => ({
+      sameNode: window.__sidebarBeforeAnalysis === document.querySelector('.app-sidebar'),
+      sidebarWidth: document.querySelector('.app-sidebar').getBoundingClientRect().width,
+      shellFirstColumn: Number.parseFloat(getComputedStyle(document.querySelector('[data-app-shell]')).gridTemplateColumns)
+    }))
+    expect(afterAnalysisOpen.sameNode).toBe(true)
+    expect(afterAnalysisOpen.sidebarWidth).toBeGreaterThan(230)
+    expect(afterAnalysisOpen.shellFirstColumn).toBeGreaterThan(230)
 
     await page.evaluate(() => {
       window.__analysisEditorBeforeToggle = document.querySelector(

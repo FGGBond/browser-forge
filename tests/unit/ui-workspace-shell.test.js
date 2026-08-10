@@ -33,6 +33,8 @@ describe('recording workspace shell', () => {
     expect(source).toContain('data-recording-nav')
     expect(source).toContain('data-recording-folder')
     expect(source).toContain("active ? 'open' : 'closed'")
+    expect(source).not.toContain('analysisExpanded')
+    expect(source).not.toContain('sidebar-recording-chat')
     expect(source).toContain("aria-current=\"${active ? 'page' : 'false'}\"")
     expect(source).not.toContain('Browser Forge')
     expect(source).toContain('全部录制')
@@ -42,13 +44,16 @@ describe('recording workspace shell', () => {
     expect(source).not.toContain('<small>${escapeHtml(site)}</small>')
   })
 
-  it('collapses nonessential sidebar content into a clean mobile toolbar', () => {
+  it('defines a stable 240px navigation, 68px rail, and 476px context contract', () => {
     const css = readUi('styles.css')
-    expect(css).toMatch(/@media \(max-width: 840px\)[\s\S]*?\.sidebar-recording-section \{ display: none;/)
-    expect(css).toContain('.primary-nav span, .secondary-nav span, .sidebar-new span, .sidebar-toggle { display: none; }')
-    const shellRule = css.match(/\.app-shell \{[^}]*\}/s)?.[0] || ''
-    expect(shellRule).not.toMatch(/transition:[^;}]*grid-template-columns/)
-    expect(css).not.toMatch(/\.analysis-workspace[^}]*transition:[^;}]*grid-template-columns/s)
+    expect(css).toMatch(/\.app-shell \{[^}]*--sidebar-w:\s*240px[^}]*--sidebar-rail-w:\s*68px/s)
+    expect(css).toMatch(/\.app-shell\.sidebar-collapsed \{[^}]*grid-template-columns:\s*var\(--sidebar-rail-w\) minmax\(0,1fr\)/s)
+    expect(css).toContain('--context-w: 476px')
+    expect(css).toMatch(/@media \(max-width:\s*1180px\)[\s\S]*?grid-template-columns:\s*var\(--sidebar-rail-w\) minmax\(0,1fr\)/)
+    expect(css).toMatch(/@media \(max-width:\s*900px\)[\s\S]*?\.analysis-pane[^}]*position:\s*fixed/)
+    expect(css).not.toContain('.sidebar-hidden')
+    expect(css).not.toContain('data-sidebar-peek')
+    expect(css).not.toContain('.sidebar-reveal')
   })
 
   it('defines an interruptible compositor-only sidebar motion contract', () => {
@@ -58,7 +63,10 @@ describe('recording workspace shell', () => {
     expect(app).toContain('data-sidebar-motion')
     expect(app).toContain('requestAnimationFrame')
     expect(app).toContain('sidebar-labels-hidden')
-    expect(app).not.toContain('cleanupSidebar?.()')
+    expect(app).not.toContain('AUTO_COLLAPSE')
+    expect(app).not.toContain('autoCollapse')
+    expect(app).not.toContain('sidebarHoverPeek')
+    expect(app).not.toContain('data-sidebar-reveal')
     expect(css).toMatch(/\.sidebar-label \{[^}]*opacity:1[^}]*transform:/s)
     expect(css).toMatch(/\.sidebar-labels-hidden \.sidebar-label \{[^}]*opacity:0[^}]*translateX\(-6px\)/s)
     expect(css).not.toMatch(/\.app-sidebar\.is-collapsed \.sidebar-label \{[^}]*display\s*:\s*none/s)
@@ -75,6 +83,8 @@ describe('recording workspace shell', () => {
     expect(app).toContain('writeSidebarCollapsed')
     expect(app).toContain("navigate('detail', { selectedId: id })")
     expect(app).toContain('analysisPaneOpen')
+    expect(app).not.toMatch(/onToggleSidebar:\s*collapsed\s*=>[\s\S]*?sidebarCollapsed/)
+    expect(app).not.toContain('analysisExpanded')
     expect(app).not.toContain('analysisModalOpen')
     expect(app).not.toContain('sidebarHost.inert')
     const detail = readUi('views/detail.js')
