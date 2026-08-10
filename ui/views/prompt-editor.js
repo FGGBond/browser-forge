@@ -23,12 +23,22 @@ const QUESTIONS = Object.freeze([
   }
 ])
 
+const SUPPLEMENTAL_CONTEXT = Object.freeze({
+  key: 'notes',
+  title: '补充上下文',
+  description: '补充限制、参数、边界情况或交付偏好。这些内容会随录制一起交给外部 Agent。',
+  placeholder: '补充限制、参数、边界情况或交付偏好。'
+})
+
 const signalComposerEngagement = () => window.signalComposerEngagement?.()
 
 export async function renderPromptEditor({ container, recordingId, api }) {
   const prompt = await api.getPrompt(recordingId)
   const parsed = parseGuidanceMarkdown(prompt.text)
-  const fields = Object.fromEntries(QUESTIONS.map(({ key }) => [key, parsed[key] ?? '']))
+  const fields = {
+    ...Object.fromEntries(QUESTIONS.map(({ key }) => [key, parsed[key] ?? ''])),
+    notes: parsed.notes ?? ''
+  }
 
   container.innerHTML = `
     <section class="guidance-editor" aria-label="Skill 要求指导">
@@ -80,6 +90,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   let done = false
   let editingSubmittedKey = null
   let activeEditor = null
+  let activeEditorKey = null
   let timer = null
   let savePromise = null
   let editRevision = 0
@@ -94,6 +105,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   let focusSequence = 0
 
   const referenceIndex = () => stepIndex
+  const activePrompt = () => done ? SUPPLEMENTAL_CONTEXT : QUESTIONS[referenceIndex()]
 
   const invalidateHandoff = () => {
     handoffResult = null
@@ -102,10 +114,9 @@ export async function renderPromptEditor({ container, recordingId, api }) {
 
   const syncActiveEditor = () => {
     if (!activeEditor) return
-    const question = QUESTIONS[referenceIndex()]
     const value = activeEditor.getMarkdown()
-    if (fields[question.key] === value) return
-    fields[question.key] = value
+    if (!activeEditorKey || fields[activeEditorKey] === value) return
+    fields[activeEditorKey] = value
     editRevision += 1
     dirty = true
     invalidateHandoff()
@@ -114,6 +125,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   const destroyActiveEditor = () => {
     activeEditor?.destroy()
     activeEditor = null
+    activeEditorKey = null
   }
 
   const chatIsNearBottom = () => {
@@ -129,7 +141,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   const focusComposer = ({ force = false } = {}) => {
     const sequence = ++focusSequence
     const focus = () => {
-      if (destroyed || done || sequence !== focusSequence || !activeEditor) return
+      if (destroyed || sequence !== focusSequence || !activeEditor) return
       if (!container.isConnected || container.getClientRects().length === 0) return
       const active = document.activeElement
       if (!force && active && active !== document.body && !active.matches?.('[data-toggle-analysis]')) return
@@ -244,39 +256,28 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     editingSubmittedKey = null
     destroyActiveEditor()
     renderChatList()
-    updateProgress()
-    refreshSendState()
+    mountQuestionEditor()
     applyCompletionLayout()
     // 不要在无内容变化时清掉已完成的 handoff;真正内容变化会经由 syncActiveEditor/scheduleSave 清掉
   }
 
-  // 完成态:handoff 卡吸附在 composer 顶部并完全遮罩它;composer 禁用交互
-  const composerEditorRoot = composer.querySelector('[data-guidance-editor-root]')
-  const composerFooter = composer.querySelector('.guidance-composer-footer')
-
-  // 完成态锁定 composer;铅笔编辑进行中也视为可交互
+  // 完成后保留 composer，用于持续补充会随 handoff 一起保存的上下文。
   const syncComposerInteractivity = () => {
-    const locked = done && editingSubmittedKey === null
-    composer.classList.toggle('guidance-composer-done', locked)
-    composer.setAttribute('aria-disabled', locked ? 'true' : 'false')
+    composer.classList.remove('guidance-composer-done')
+    composer.setAttribute('aria-disabled', 'false')
     if (currentQuestion) currentQuestion.hidden = done
-    if (composerEditorRoot) composerEditorRoot.hidden = locked
-    if (composerFooter) composerFooter.hidden = locked
   }
 
   const applyCompletionLayout = () => {
     syncComposerInteractivity()
     const surface = composer.querySelector('[data-guidance-editor-surface]')
-    if (surface) surface.contentEditable = done ? 'false' : 'true'
+    if (surface) surface.contentEditable = 'true'
     renderHandoffCard()
   }
 
   const refreshSendState = () => {
-    if (!activeEditor || done) {
-      sendButton.disabled = true
-      return
-    }
-    sendButton.disabled = transitionPending
+    const notesAreEmpty = done && !(activeEditor?.getMarkdown() ?? '').trim()
+    sendButton.disabled = !activeEditor || transitionPending || notesAreEmpty
   }
 
   const updateProgress = () => {
@@ -288,34 +289,35 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     if (composer.classList.contains('guidance-composer-done') && !done) applyCompletionLayout()
     const editing = editingSubmittedKey !== null
     const isLast = current === QUESTIONS.length - 1 && !editing
-    const sendLabel = editing ? '保存修改' : isLast ? '检查并完成' : '发送答案'
+    const sendLabel = done ? '保存补充上下文' : editing ? '保存修改' : isLast ? '检查并完成' : '发送答案'
     sendButton.setAttribute('aria-label', sendLabel)
-    sendButton.dataset.mode = editing ? 'edit' : isLast ? 'complete' : 'send'
+    sendButton.dataset.mode = done ? 'notes' : editing ? 'edit' : isLast ? 'complete' : 'send'
   }
 
   const mountQuestionEditor = () => {
-    const question = QUESTIONS[referenceIndex()]
-    composer.setAttribute('data-guidance-step', String(referenceIndex() + 1))
-    questionTitle.textContent = question.title
-    questionTitle.id = `guidance-active-title-${question.key}`
-    questionDescription.textContent = question.description
-    questionDescription.id = `guidance-active-description-${question.key}`
+    const prompt = activePrompt()
+    composer.setAttribute('data-guidance-step', done ? 'complete' : String(referenceIndex() + 1))
+    questionTitle.textContent = prompt.title
+    questionTitle.id = `guidance-active-title-${prompt.key}`
+    questionDescription.textContent = prompt.description
+    questionDescription.id = `guidance-active-description-${prompt.key}`
     const root = composer.querySelector('[data-guidance-editor-root]')
     const textarea = composer.querySelector('[data-prompt-textarea]')
     destroyActiveEditor()
     root.innerHTML = ''
     textarea.value = ''
+    activeEditorKey = prompt.key
     activeEditor = mountGuidanceEditor({
       root,
       textarea,
-      initialMarkdown: fields[question.key],
-      placeholder: question.placeholder,
+      initialMarkdown: fields[prompt.key],
+      placeholder: prompt.placeholder,
       labelledBy: questionTitle.id,
       describedBy: questionDescription.id,
       onChange: value => {
         // 通知 app.js:用户在 composer 输入,阻止左侧栏被 auto revert 唤起
         signalComposerEngagement()
-        scheduleSave(question.key, value)
+        scheduleSave(prompt.key, value)
       },
       onSubmit: () => { void handleSend() }
     })
@@ -359,9 +361,11 @@ export async function renderPromptEditor({ container, recordingId, api }) {
       done = false
       const keyIndex = QUESTIONS.findIndex(question => question.key === key)
       if (keyIndex >= 0) stepIndex = keyIndex
-      // 重置 composer 输入,否则它会展示最后一题的答案
+      // 摘除补充上下文编辑器；历史答案改完后会重新挂载，并保留 fields.notes。
+      destroyActiveEditor()
       const root = composer.querySelector('[data-guidance-editor-root]')
       if (root) root.innerHTML = ''
+      renderHandoffCard()
     }
     editingSubmittedKey = key
     renderChatList()
@@ -464,7 +468,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     handoffCard.innerHTML = `
       <div class="guidance-handoff-copy">
         <strong>三个问题都已完成</strong>
-        <p>导出录制并复制给外部 Agent 的提示词，你的 Agent 会读取导出的录制并产出 skill。</p>
+        <p>Browser Forge 只负责导出录制并准备交接提示词；外部 Agent 会读取这些材料并产出 skill。</p>
       </div>
       <div class="guidance-handoff-status" data-handoff-status role="${handoffStatus.tone === 'error' && displayedMessage ? 'alert' : 'status'}" ${displayedMessage ? '' : 'hidden'}>
         <span data-handoff-message>${displayedMessage}</span>
@@ -567,15 +571,14 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   }
 
   const handleSend = async () => {
-    if (transitionPending || done) return
+    if (transitionPending) return
     syncActiveEditor()
     const index = referenceIndex()
-    const question = QUESTIONS[index]
     transitionPending = true
     refreshSendState()
     try {
       if (!await saveNow()) return
-      if (destroyed) return
+      if (destroyed || done) return
       submitted[index] = true
       const nextIndex = submitted.findIndex(flag => !flag)
       if (nextIndex === -1) {
@@ -596,12 +599,9 @@ export async function renderPromptEditor({ container, recordingId, api }) {
 
   const renderView = ({ forceFocus = false } = {}) => {
     renderChatList()
-    if (!done) {
-      if (!activeEditor) mountQuestionEditor()
-      else updateProgress(), refreshSendState()
-    } else {
-      applyCompletionLayout()
-    }
+    if (!activeEditor) mountQuestionEditor()
+    else updateProgress(), refreshSendState()
+    if (done) applyCompletionLayout()
     focusComposer({ force: forceFocus })
   }
 
@@ -665,7 +665,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   renderView()
   renderHandoffCard()
 
-  // 初始恢复完成态时按完成态约束 composer
+  // 初始恢复完成态时展示 handoff，同时保留可编辑的补充上下文 composer。
   if (done) applyCompletionLayout()
 
   return {

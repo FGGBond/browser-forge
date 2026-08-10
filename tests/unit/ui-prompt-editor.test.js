@@ -115,7 +115,7 @@ describe('three-question guided composer', () => {
     await page.locator('[data-guidance-send]').waitFor({ state: 'visible' })
     await expect.poll(() => page.locator('[data-guidance-send]').evaluate(b => !b.disabled), { timeout: 3000 }).toBe(true)
     await page.locator('[data-guidance-send]').dispatchEvent('click')
-    // 完成态:吸附 handoff 卡出现在 composer 上方、review 块不再渲染、composer 被禁用遮罩
+    // 完成态:handoff 卡出现在 composer 上方，补充上下文 composer 仍可使用
     await expectComposerDone(page)
     expect(await page.locator('[data-guidance-review]').count()).toBe(0)
     expect(await page.locator('[data-guidance-progress]').evaluate(el => el.hidden)).toBe(true)
@@ -123,7 +123,7 @@ describe('three-question guided composer', () => {
     await page.close()
   })
 
-  it('attaches the handoff card above the composer with the composer masked once done', async () => {
+  it('attaches the handoff card above an enabled supplemental composer once done', async () => {
     const page = await openGuidance()
     await completeQuestions(page)
     const layout = await page.evaluate(() => {
@@ -147,13 +147,49 @@ describe('three-question guided composer', () => {
     expect(layout.insideComposer).toBe(true)
     expect(layout.position).toBe('absolute')
     expect(layout.bottom.endsWith('px')).toBe(true) // bottom: calc(100% + 8px) 在 computed 中解析为 px
-    expect(layout.composerMode).toBe('true')
+    expect(layout.composerMode).toBe('false')
     expect(layout.widthMatch).toBe(true)
     expect(layout.above).toBe(true)
     expect(layout.sendDisabled).toBe(true)
-    // 完成态下 composer 中 surface 不可再输入(contenteditable=false)
+    // 完成态下 composer 继续接收补充上下文，空内容时发送按钮保持禁用
     const surface = page.locator('[data-guidance-composer] [data-guidance-editor-surface]')
-    expect(await surface.getAttribute('contenteditable')).toBe('false')
+    expect(await surface.getAttribute('contenteditable')).toBe('true')
+    expect(await surface.getAttribute('data-placeholder')).toContain('补充')
+    await page.close()
+  })
+
+  it('keeps the completed composer available and persists supplemental context for handoff', { timeout: 15000 }, async () => {
+    const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
+    const page = await openGuidance(context)
+    try {
+      await completeQuestions(page)
+      await fillActiveEditor(page, '只查询最近两小时，并限定应用 ID 为 ddks-ticket。')
+      await expect.poll(() => page.locator('[data-guidance-send]').isDisabled()).toBe(false)
+      await page.locator('[data-guidance-send]').dispatchEvent('click')
+
+      await expect.poll(() => savedPrompts.some(text => parseGuidanceMarkdown(text).notes.includes('ddks-ticket'))).toBe(true)
+      expect(await page.locator('[data-guidance-composer]').getAttribute('aria-disabled')).toBe('false')
+      expect(await readActiveEditor(page)).toContain('ddks-ticket')
+
+      await page.getByRole('button', { name: '导出并复制给外部 Agent' }).dispatchEvent('click')
+      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('ddks-ticket')
+    } finally {
+      await context.close()
+    }
+  })
+
+  it('describes an external-agent handoff truthfully and keeps message motion reduced-motion safe', async () => {
+    const page = await openGuidance()
+    await completeQuestions(page)
+
+    const handoffCopy = (await page.locator('.guidance-handoff-copy').textContent()).replace(/\s+/g, ' ').trim()
+    expect(handoffCopy).toContain('Browser Forge 只负责导出录制并准备交接提示词')
+    expect(handoffCopy).toContain('外部 Agent')
+    expect(handoffCopy).not.toMatch(/Browser Forge (?:正在|将会)(?:分析|生成)/)
+
+    const css = readFileSync(join(process.cwd(), 'ui', 'guidance.css'), 'utf8')
+    expect(css).toMatch(/\.guidance-chat-item\s*\{[^}]*animation:\s*guidanceMessageIn 1(?:6|7|8)0ms/s)
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.guidance-chat-item[\s\S]*animation:\s*none/s)
     await page.close()
   })
 
@@ -290,7 +326,7 @@ describe('three-question guided composer', () => {
       await page.getByRole('button', { name: '导出并复制给外部 Agent' }).dispatchEvent('click')
 
       await expect.poll(() => handoffCalls).toBe(1)
-      expect(parseGuidanceMarkdown(savedPrompts[0])).toEqual({ actions: legacy, capability: '', acceptance: '', legacy: false })
+      expect(parseGuidanceMarkdown(savedPrompts[0])).toEqual({ actions: legacy, capability: '', acceptance: '', notes: '', legacy: false })
       expect(requestEvents.indexOf('save:done')).toBeLessThan(requestEvents.indexOf('agent-handoff'))
       expect(requestEvents).not.toContain('legacy-external-prompt')
     } finally {
@@ -471,7 +507,8 @@ async function openGuidance(context = browser) {
   const page = await context.newPage()
   await page.goto(baseUrl, { waitUntil: 'networkidle' })
   await page.locator('[data-recording-id]').first().click()
-  await page.locator('[data-toggle-analysis]').click()
+  const toggle = page.locator('[data-toggle-analysis]')
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
   await page.locator('[data-guidance-step]').waitFor({ timeout: 3_000 })
   await expectComposerFocused(page)
   return page
@@ -489,10 +526,11 @@ async function completeQuestions(page) {
   await expectComposerDone(page)
 }
 
-// 完成态:吸附 handoff 卡可见、composer 进入禁用遮罩态
+// 完成态:吸附 handoff 卡可见、composer 切换为可用的补充上下文输入
 async function expectComposerDone(page) {
   await page.locator('[data-handoff-card]').waitFor({ state: 'visible', timeout: 5000 })
-  await expect.poll(() => page.locator('[data-guidance-composer]').getAttribute('aria-disabled')).toBe('true')
+  await expect.poll(() => page.locator('[data-guidance-composer]').getAttribute('aria-disabled')).toBe('false')
+  await expect.poll(() => activeEditorCount(page)).toBe(1)
 }
 
 
@@ -546,6 +584,7 @@ function buildCompletePrompt(text, path) {
     `本次录制中的动作与意图：${fields.actions}`,
     `希望提取的 skill 能力：${fields.capability}`,
     `Skill 验收标准：${fields.acceptance}`,
+    `补充上下文：${fields.notes}`,
     '根据 timeline.json 中的 videoOffsetMs 使用内置零依赖视频抽帧工具。',
     '交付可独立运行的 skill、清晰输入输出契约和 CLI 工具。'
   ].join('\n')

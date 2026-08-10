@@ -1,17 +1,24 @@
 export const GUIDANCE_HEADINGS = Object.freeze({
   actions: '本次录制中的动作与意图',
   capability: '希望提取的 skill 能力',
-  acceptance: 'Skill 验收标准'
+  acceptance: 'Skill 验收标准',
+  notes: '补充上下文'
 })
 
-const GUIDANCE_VERSION = 'v2'
+const LEGACY_V2_HEADINGS = Object.freeze({
+  actions: GUIDANCE_HEADINGS.actions,
+  capability: GUIDANCE_HEADINGS.capability,
+  acceptance: GUIDANCE_HEADINGS.acceptance
+})
+const CURRENT_GUIDANCE_VERSION = 'v3'
+const GUIDANCE_FORMATS = Object.freeze({
+  v2: LEGACY_V2_HEADINGS,
+  [CURRENT_GUIDANCE_VERSION]: GUIDANCE_HEADINGS
+})
 const GUIDANCE_END_SENTINEL = '<!-- /browser-forge-guidance -->'
-const GUIDANCE_SENTINEL_PATTERN = new RegExp(
-  `^<!-- browser-forge-guidance:${GUIDANCE_VERSION} actions=(0|[1-9]\\d*) capability=(0|[1-9]\\d*) acceptance=(0|[1-9]\\d*) -->\\n\\n`
-)
 
 export function emptyGuidance() {
-  return { actions: '', capability: '', acceptance: '' }
+  return { actions: '', capability: '', acceptance: '', notes: '' }
 }
 
 export function serializeGuidanceMarkdown(fields = {}) {
@@ -21,7 +28,7 @@ export function serializeGuidanceMarkdown(fields = {}) {
   if (!Object.values(values).some(value => value.trim())) return ''
 
   const sentinel = [
-    `<!-- browser-forge-guidance:${GUIDANCE_VERSION}`,
+    `<!-- browser-forge-guidance:${CURRENT_GUIDANCE_VERSION}`,
     ...Object.keys(GUIDANCE_HEADINGS).map(key => `${key}=${values[key].length}`)
   ].join(' ') + ' -->'
   const sections = Object.entries(GUIDANCE_HEADINGS).map(
@@ -36,35 +43,48 @@ export function parseGuidanceMarkdown(text = '') {
   if (!source.trim()) return { ...emptyGuidance(), legacy: false }
 
   const normalized = normalizeLineEndings(source)
-  const sentinelMatch = normalized.match(GUIDANCE_SENTINEL_PATTERN)
-  if (!sentinelMatch) return legacyGuidance(source)
+  for (const [version, headings] of Object.entries(GUIDANCE_FORMATS)) {
+    const result = parseVersionedGuidance(normalized, version, headings)
+    if (result) return { ...emptyGuidance(), ...result, legacy: false }
+  }
+  return legacyGuidance(source)
+}
+
+function parseVersionedGuidance(source, version, headings) {
+  const keys = Object.keys(headings)
+  const lengthFields = keys.map(key => `${key}=(0|[1-9]\\d*)`).join(' ')
+  const sentinelPattern = new RegExp(
+    `^<!-- browser-forge-guidance:${version} ${lengthFields} -->\\n\\n`
+  )
+  const sentinelMatch = source.match(sentinelPattern)
+  if (!sentinelMatch) return null
 
   const lengths = sentinelMatch.slice(1).map(value => Number(value))
-  if (!lengths.every(Number.isSafeInteger)) return legacyGuidance(source)
+  if (!lengths.every(Number.isSafeInteger)) return null
 
-  const result = emptyGuidance()
+  const result = {}
   let offset = sentinelMatch[0].length
-  const entries = Object.entries(GUIDANCE_HEADINGS)
+  const entries = Object.entries(headings)
 
   for (const [index, [key, heading]] of entries.entries()) {
     const prefix = `## ${heading}\n\n`
-    if (!normalized.startsWith(prefix, offset)) return legacyGuidance(source)
+    if (!source.startsWith(prefix, offset)) return null
     offset += prefix.length
 
     const contentEnd = offset + lengths[index]
-    if (contentEnd > normalized.length) return legacyGuidance(source)
-    result[key] = normalized.slice(offset, contentEnd)
+    if (contentEnd > source.length) return null
+    result[key] = source.slice(offset, contentEnd)
     offset = contentEnd
 
     const separator = index === entries.length - 1
       ? `\n\n${GUIDANCE_END_SENTINEL}`
       : '\n\n'
-    if (!normalized.startsWith(separator, offset)) return legacyGuidance(source)
+    if (!source.startsWith(separator, offset)) return null
     offset += separator.length
   }
 
-  if (offset !== normalized.length) return legacyGuidance(source)
-  return { ...result, legacy: false }
+  if (offset !== source.length) return null
+  return result
 }
 
 function legacyGuidance(source) {

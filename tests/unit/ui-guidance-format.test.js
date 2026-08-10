@@ -7,20 +7,22 @@ import {
 } from '../../ui/guidance-format.js'
 
 describe('guidance Markdown format', () => {
-  it('exposes stable headings for exactly three guidance fields', () => {
+  it('exposes stable headings for required answers and supplemental notes', () => {
     expect(GUIDANCE_HEADINGS).toEqual({
       actions: '本次录制中的动作与意图',
       capability: '希望提取的 skill 能力',
-      acceptance: 'Skill 验收标准'
+      acceptance: 'Skill 验收标准',
+      notes: '补充上下文'
     })
     expect(Object.isFrozen(GUIDANCE_HEADINGS)).toBe(true)
   })
 
-  it('round-trips the three guidance answers', () => {
+  it('round-trips required answers and supplemental notes in the new version', () => {
     const fields = {
       actions: '查询订单并读取物流状态',
       capability: '根据订单号返回承运商和最新节点',
-      acceptance: '使用 JD123 查询，结果必须与详情页一致'
+      acceptance: '使用 JD123 查询，结果必须与详情页一致',
+      notes: '仅查询最近两小时，并限定应用 ID 为 ddks-ticket。'
     }
 
     expect(parseGuidanceMarkdown(serializeGuidanceMarkdown(fields))).toEqual({
@@ -29,15 +31,43 @@ describe('guidance Markdown format', () => {
     })
   })
 
-  it('uses an explicit version sentinel while keeping stable readable headings', () => {
+  it('writes an explicit new version sentinel while keeping stable readable headings', () => {
     const markdown = serializeGuidanceMarkdown({ actions: '打开订单详情' })
 
     expect(markdown).toMatch(
-      /^<!-- browser-forge-guidance:v2 actions=6 capability=0 acceptance=0 -->\n/
+      /^<!-- browser-forge-guidance:v3 actions=6 capability=0 acceptance=0 notes=0 -->\n/
     )
     for (const heading of Object.values(GUIDANCE_HEADINGS)) {
       expect(markdown).toContain(`## ${heading}`)
     }
+  })
+
+  it('reads a complete v2 document without losing material and initializes notes', () => {
+    const v2 = [
+      '<!-- browser-forge-guidance:v2 actions=6 capability=4 acceptance=4 -->',
+      '',
+      '## 本次录制中的动作与意图',
+      '',
+      '打开订单详情',
+      '',
+      '## 希望提取的 skill 能力',
+      '',
+      '查询物流',
+      '',
+      '## Skill 验收标准',
+      '',
+      '结果一致',
+      '',
+      '<!-- /browser-forge-guidance -->'
+    ].join('\n')
+
+    expect(parseGuidanceMarkdown(v2)).toEqual({
+      actions: '打开订单详情',
+      capability: '查询物流',
+      acceptance: '结果一致',
+      notes: '',
+      legacy: false
+    })
   })
 
   it('round-trips Markdown headings, fenced code blocks, and lists inside every answer', () => {
@@ -84,6 +114,7 @@ describe('guidance Markdown format', () => {
 
     expect(parseGuidanceMarkdown(serializeGuidanceMarkdown(fields))).toEqual({
       ...fields,
+      notes: '',
       legacy: false
     })
   })
@@ -126,6 +157,7 @@ describe('guidance Markdown format', () => {
 
     expect(parseGuidanceMarkdown(serializeGuidanceMarkdown(fields))).toEqual({
       ...fields,
+      notes: '',
       legacy: false
     })
   })
@@ -134,7 +166,8 @@ describe('guidance Markdown format', () => {
     const fields = {
       actions: '    const order = await findOrder()\n    return order.status',
       capability: '\n先保留开头空行，再描述能力。\n',
-      acceptance: '第一行使用 Markdown hard break。  \n\n尾部空白也属于正文。\t  \n'
+      acceptance: '第一行使用 Markdown hard break。  \n\n尾部空白也属于正文。\t  \n',
+      notes: '补充上下文也保留结尾空白。  \n'
     }
 
     expect(parseGuidanceMarkdown(serializeGuidanceMarkdown(fields))).toEqual({
@@ -157,10 +190,11 @@ describe('guidance Markdown format', () => {
     const markdown = serializeGuidanceMarkdown(input)
 
     expect(markdown).toMatch(
-      /^<!-- browser-forge-guidance:v2 actions=2 capability=3 acceptance=3 -->\n/
+      /^<!-- browser-forge-guidance:v3 actions=2 capability=3 acceptance=3 notes=0 -->\n/
     )
     expect(parseGuidanceMarkdown(markdown)).toEqual({
       ...normalized,
+      notes: '',
       legacy: false
     })
   })
@@ -172,6 +206,7 @@ describe('guidance Markdown format', () => {
       actions: legacy,
       capability: '',
       acceptance: '',
+      notes: '',
       legacy: true
     })
   })
@@ -195,6 +230,7 @@ describe('guidance Markdown format', () => {
       actions: legacy,
       capability: '',
       acceptance: '',
+      notes: '',
       legacy: true
     })
   })
@@ -210,6 +246,7 @@ describe('guidance Markdown format', () => {
       actions: legacy,
       capability: '',
       acceptance: '',
+      notes: '',
       legacy: true
     })
   })
@@ -224,6 +261,7 @@ describe('guidance Markdown format', () => {
 
     expect(parseGuidanceMarkdown(crlf)).toEqual({
       ...fields,
+      notes: '',
       legacy: false
     })
   })
@@ -235,6 +273,7 @@ describe('guidance Markdown format', () => {
       actions: '',
       capability: '',
       acceptance: '',
+      notes: '',
       legacy: false
     })
     expect(serializeGuidanceMarkdown(parsedEmpty)).toBe('')
@@ -249,6 +288,7 @@ describe('guidance Markdown format', () => {
       actions: markdown,
       capability: '',
       acceptance: '',
+      notes: '',
       legacy: true
     })
   })

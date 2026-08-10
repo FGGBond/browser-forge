@@ -49,6 +49,7 @@
 
 .guidance-chat-item {
   display: flex;
+  animation: guidanceMessageIn 170ms cubic-bezier(.2, .8, .2, 1);
   flex-direction: column;
   gap: 8px;
 }
@@ -351,18 +352,9 @@
   animation: guidanceCardIn 240ms cubic-bezier(.2, .8, .2, 1);
 }
 
-/* 完成态 composer:内容禁用,交给吸附卡承接交互 */
-.guidance-composer.guidance-composer-done > :not([data-handoff-card]) {
-  opacity: .42;
-  pointer-events: none;
-}
-/* 完成态物理摘除输入/动作;重新进入铅笔编辑时由 JS 去掉 guidance-composer-done 恢复 */
-.guidance-composer.guidance-composer-done [data-guidance-editor-root],
-.guidance-composer.guidance-composer-done .guidance-composer-footer {
-  visibility: hidden;
-  height: 0;
-  min-height: 0;
-  overflow: hidden;
+@keyframes guidanceMessageIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes guidanceCardIn {
@@ -456,6 +448,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .guidance-chat-item,
   .guidance-progress,
   .guidance-handoff-card,
   .guidance-composer,
