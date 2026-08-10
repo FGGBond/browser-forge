@@ -1,6 +1,16 @@
 import { describe, it, expect, vi } from 'vitest'
 import { CdpClient } from '../../src/main/recorder/cdp-client.js'
 
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((onResolve, onReject) => {
+    resolve = onResolve
+    reject = onReject
+  })
+  return { promise, resolve, reject }
+}
+
 function createCdpHarness({ targetInfos = [], windowIds = {} } = {}) {
   const handlers = {}
   const sessions = new Map()
@@ -114,20 +124,25 @@ describe('CdpClient', () => {
 
   it('does not reattach the token target after it moves out of the anchored window', async () => {
     const tokenTitle = 'Browser Forge Recording · token-123'
-    const { cdp, handlers, windowIds } = createCdpHarness({
+    const { cdp, browser, handlers, sessions, windowIds } = createCdpHarness({
       targetInfos: [{ targetId: 'token-page', type: 'page', title: tokenTitle, url: 'http://127.0.0.1/start' }],
       windowIds: { 'token-page': 41 }
     })
     const client = new CdpClient({ port: 9222, cdp, expectedTargetTitle: tokenTitle })
     await client.connect()
+    browser.Target.attachToTarget.mockClear()
 
     windowIds['token-page'] = 99
     await handlers.targetInfoChanged({ targetInfo: { targetId: 'token-page', type: 'page', title: 'Moved once', url: 'https://moved.test/one' } })
     await handlers.targetInfoChanged({ targetInfo: { targetId: 'token-page', type: 'page', title: 'Moved twice', url: 'https://moved.test/two' } })
 
     expect(client._targets.has('token-page')).toBe(false)
+    expect(browser.Target.attachToTarget).not.toHaveBeenCalled()
+    expect(sessions.get('session-token-page').close).toHaveBeenCalledOnce()
     expect(client.getTargets()).toContainEqual(expect.objectContaining({
       targetId: 'token-page',
+      title: tokenTitle,
+      url: 'http://127.0.0.1/start',
       detached: true
     }))
   })
@@ -151,9 +166,98 @@ describe('CdpClient', () => {
     expect(sessions.get('session-moving-tab').close).toHaveBeenCalledOnce()
     expect(client.getTargets()).toContainEqual(expect.objectContaining({
       targetId: 'moving-tab',
-      title: 'Moved',
-      url: 'https://moved.test',
+      title: 'Moving',
+      url: 'https://moving.test',
       detached: true
+    }))
+    expect(client.getTargets()).not.toContainEqual(expect.objectContaining({
+      targetId: 'moving-tab',
+      title: 'Moved',
+      url: 'https://moved.test'
+    }))
+  })
+
+  it('fails closed without recording unverified metadata when window lookup fails', async () => {
+    const tokenTitle = 'Browser Forge Recording · token-123'
+    const { cdp, handlers, sessions, windowIds } = createCdpHarness({
+      targetInfos: [
+        { targetId: 'token-page', type: 'page', title: tokenTitle, url: 'http://127.0.0.1/start' },
+        { targetId: 'moving-tab', type: 'page', title: 'Verified', url: 'https://verified.test' }
+      ],
+      windowIds: { 'token-page': 41, 'moving-tab': 41 }
+    })
+    const client = new CdpClient({ port: 9222, cdp, expectedTargetTitle: tokenTitle })
+    await client.connect()
+
+    windowIds['moving-tab'] = new Error('window unavailable')
+    await handlers.targetInfoChanged({
+      targetInfo: { targetId: 'moving-tab', type: 'page', title: 'Unverified', url: 'https://unverified.test' }
+    })
+
+    expect(client._targets.has('moving-tab')).toBe(false)
+    expect(sessions.get('session-moving-tab').close).toHaveBeenCalledOnce()
+    expect(client.getTargets()).toContainEqual(expect.objectContaining({
+      targetId: 'moving-tab',
+      title: 'Verified',
+      url: 'https://verified.test',
+      detached: true
+    }))
+    expect(client.getTargets()).not.toContainEqual(expect.objectContaining({
+      targetId: 'moving-tab',
+      title: 'Unverified',
+      url: 'https://unverified.test'
+    }))
+  })
+
+  it('serializes window identity checks and ignores a stale async result', async () => {
+    const tokenTitle = 'Browser Forge Recording · token-123'
+    const { cdp, browser, handlers, sessions } = createCdpHarness({
+      targetInfos: [
+        { targetId: 'token-page', type: 'page', title: tokenTitle, url: 'http://127.0.0.1/start' },
+        { targetId: 'moving-tab', type: 'page', title: 'Verified', url: 'https://verified.test' }
+      ],
+      windowIds: { 'token-page': 41, 'moving-tab': 41 }
+    })
+    const client = new CdpClient({ port: 9222, cdp, expectedTargetTitle: tokenTitle })
+    await client.connect()
+
+    const staleForeign = deferred()
+    const latestRecordedWindow = deferred()
+    let movingTabLookup = 0
+    browser.Browser.getWindowForTarget.mockImplementation(async ({ targetId }) => {
+      if (targetId !== 'moving-tab') return { windowId: 41 }
+      movingTabLookup += 1
+      return movingTabLookup === 1 ? staleForeign.promise : latestRecordedWindow.promise
+    })
+
+    const staleChange = handlers.targetInfoChanged({
+      targetInfo: { targetId: 'moving-tab', type: 'page', title: 'Stale foreign', url: 'https://foreign.test' }
+    })
+    const latestChange = handlers.targetInfoChanged({
+      targetInfo: { targetId: 'moving-tab', type: 'page', title: 'Back in recording', url: 'https://recorded.test' }
+    })
+
+    await vi.waitFor(() => {
+      expect(browser.Browser.getWindowForTarget).toHaveBeenCalledTimes(3)
+    })
+
+    staleForeign.resolve({ windowId: 99 })
+    await staleChange
+    expect(browser.Browser.getWindowForTarget).toHaveBeenCalledTimes(4)
+    latestRecordedWindow.resolve({ windowId: 41 })
+    await latestChange
+
+    expect(client._targets.has('moving-tab')).toBe(true)
+    expect(sessions.get('session-moving-tab').close).not.toHaveBeenCalled()
+    expect(client.getTargets()).toContainEqual(expect.objectContaining({
+      targetId: 'moving-tab',
+      title: 'Back in recording',
+      url: 'https://recorded.test'
+    }))
+    expect(client.getTargets()).not.toContainEqual(expect.objectContaining({
+      targetId: 'moving-tab',
+      title: 'Stale foreign',
+      url: 'https://foreign.test'
     }))
   })
 

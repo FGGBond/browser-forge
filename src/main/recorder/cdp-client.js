@@ -13,6 +13,8 @@ export class CdpClient {
     this._targetHistory = new Map()
     this._attachingTargets = new Map()
     this._pendingTargetInfos = new Map()
+    this._targetIdentityQueues = new Map()
+    this._targetIdentityVersions = new Map()
     this._browser = null
   }
 
@@ -34,7 +36,7 @@ export class CdpClient {
         return this._handleTargetInfoChanged(targetInfo).catch(() => {})
       })
       this._browser.Target.targetDestroyed(({ targetId }) => {
-        return this._archiveTarget(targetId, { closed: true }).catch(() => {})
+        return this._handleTargetDestroyed(targetId).catch(() => {})
       })
 
       const { targetInfos } = await this._browser.Target.getTargets()
@@ -44,12 +46,12 @@ export class CdpClient {
       }
 
       for (const info of pageTargets) {
-        await this._considerTarget(info, {
+        await this._queueTargetInfo(info, {
           knownWindowId: info.targetId === this._anchorTargetId ? this.windowId : null
         })
       }
       for (const info of this._pendingTargetInfos.values()) {
-        await this._considerTarget(info)
+        await this._queueTargetInfo(info)
       }
       this._pendingTargetInfos.clear()
     } catch (error) {
@@ -81,61 +83,86 @@ export class CdpClient {
   }
 
   async _handleTargetInfo(targetInfo) {
-    if (targetInfo?.type !== 'page') return
+    if (targetInfo?.type !== 'page') return false
     if (this.expectedTargetTitle && !Number.isInteger(this.windowId)) {
       this._pendingTargetInfos.set(targetInfo.targetId, targetInfo)
-      return
+      return false
     }
-    await this._considerTarget(targetInfo)
+    return this._queueTargetInfo(targetInfo)
   }
 
   async _handleTargetInfoChanged(targetInfo) {
-    if (targetInfo?.type !== 'page') return
-    const targetId = targetInfo.targetId
-    const current = this._targets.get(targetId)
-
-    if (!current) {
-      await this._handleTargetInfo(targetInfo)
-      return
+    if (targetInfo?.type !== 'page') return false
+    if (this.expectedTargetTitle && !Number.isInteger(this.windowId)) {
+      this._pendingTargetInfos.set(targetInfo.targetId, targetInfo)
+      return false
     }
-
-    this._setTargetInfo(targetInfo)
-    if (!this.expectedTargetTitle) return
-
-    try {
-      const targetWindowId = await this._getWindowId(targetId)
-      if (targetWindowId !== this.windowId) {
-        await this._archiveTarget(targetId, { detached: true })
-      }
-    } catch {
-      // If Chrome can no longer prove the target belongs to the recording
-      // window, stop collecting it rather than risking cross-window data.
-      await this._archiveTarget(targetId, { detached: true })
-    }
+    return this._queueTargetInfo(targetInfo)
   }
 
-  async _considerTarget(targetInfo, { knownWindowId = null } = {}) {
-    if (targetInfo?.type !== 'page') return false
-    if (this._targets.has(targetInfo.targetId)) {
-      this._setTargetInfo(targetInfo)
-      return true
-    }
+  async _handleTargetDestroyed(targetId) {
+    this._invalidateTargetIdentity(targetId)
+    await this._archiveTarget(targetId, { closed: true })
+  }
 
-    if (this.expectedTargetTitle) {
-      if (!Number.isInteger(this.windowId)) return false
-      let targetWindowId = knownWindowId
-      if (!Number.isInteger(targetWindowId)) {
-        try {
-          targetWindowId = await this._getWindowId(targetInfo.targetId)
-        } catch {
+  _invalidateTargetIdentity(targetId) {
+    const version = (this._targetIdentityVersions.get(targetId) ?? 0) + 1
+    this._targetIdentityVersions.set(targetId, version)
+  }
+
+  _queueTargetInfo(targetInfo, { knownWindowId = null } = {}) {
+    const targetId = targetInfo.targetId
+    const version = (this._targetIdentityVersions.get(targetId) ?? 0) + 1
+    this._targetIdentityVersions.set(targetId, version)
+
+    const previous = this._targetIdentityQueues.get(targetId) ?? Promise.resolve()
+    const operation = previous.catch(() => {}).then(async () => {
+      const isLatest = () => this._targetIdentityVersions.get(targetId) === version
+
+      if (this.expectedTargetTitle) {
+        if (!Number.isInteger(this.windowId)) return false
+
+        let targetWindowId = knownWindowId
+        if (!Number.isInteger(targetWindowId)) {
+          try {
+            targetWindowId = await this._getWindowId(targetId)
+          } catch {
+            if (!isLatest()) return false
+            await this._archiveTarget(targetId, { detached: true })
+            return false
+          }
+        }
+
+        // A newer target event supersedes this identity result. Never let an
+        // older async lookup update metadata, detach, or attach the target.
+        if (!isLatest()) return false
+        if (targetWindowId !== this.windowId) {
+          await this._archiveTarget(targetId, { detached: true })
           return false
         }
+      } else if (!isLatest()) {
+        return false
       }
-      if (targetWindowId !== this.windowId) return false
-    }
 
-    await this._attachTarget(targetInfo)
-    return true
+      if (!isLatest()) return false
+      const current = this._targets.get(targetId)
+      if (current) {
+        this._setTargetInfo(targetInfo)
+        return true
+      }
+
+      await this._attachTarget(targetInfo)
+      return true
+    })
+
+    let trackedOperation
+    trackedOperation = operation.finally(() => {
+      if (this._targetIdentityQueues.get(targetId) === trackedOperation) {
+        this._targetIdentityQueues.delete(targetId)
+      }
+    })
+    this._targetIdentityQueues.set(targetId, trackedOperation)
+    return trackedOperation
   }
 
   async _attachTarget(targetInfo) {
@@ -208,6 +235,8 @@ export class CdpClient {
     this._targetHistory.clear()
     this._attachingTargets.clear()
     this._pendingTargetInfos.clear()
+    this._targetIdentityQueues.clear()
+    this._targetIdentityVersions.clear()
     this._browser = null
     this.windowId = null
     this._anchorTargetId = null
