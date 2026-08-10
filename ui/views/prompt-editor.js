@@ -89,6 +89,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   const submitted = [false, false, false]
   let done = false
   let editingSubmittedKey = null
+  let editingFromDone = false
   let activeEditor = null
   let activeEditorKey = null
   let timer = null
@@ -110,6 +111,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
   const invalidateHandoff = () => {
     handoffResult = null
     handoffStatus = emptyHandoffStatus()
+    if (done && !transitionPending) renderHandoffCard()
   }
 
   const syncActiveEditor = () => {
@@ -252,6 +254,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
 
   const completeFlow = () => {
     done = true
+    editingFromDone = false
     stepIndex = QUESTIONS.length - 1
     editingSubmittedKey = null
     destroyActiveEditor()
@@ -357,6 +360,7 @@ export async function renderPromptEditor({ container, recordingId, api }) {
     // 通知 app.js:用户主动进入编辑,阻止左侧栏被 auto revert 唤起
     signalComposerEngagement()
     // 从完成态进入铅笔编辑:解除 done;同步 composer 题目且重置输入,避免最后一题答案"遗留在" composer
+    editingFromDone = done
     if (done) {
       done = false
       const keyIndex = QUESTIONS.findIndex(question => question.key === key)
@@ -389,8 +393,17 @@ export async function renderPromptEditor({ container, recordingId, api }) {
       clearTimeout(timer)
       timer = setTimeout(saveNow, 500)
     }
+    const restoreCompletion = editingFromDone && allSubmitted()
+    editingFromDone = false
     editingSubmittedKey = null
     renderChatList()
+    if (restoreCompletion) {
+      done = true
+      mountQuestionEditor()
+      applyCompletionLayout()
+      focusComposer()
+      return
+    }
     updateProgress()
     refreshSendState()
     if (!done && !activeEditor && !destroyed) mountQuestionEditor()
@@ -529,9 +542,18 @@ export async function renderPromptEditor({ container, recordingId, api }) {
         setHandoffStatus()
         return
       }
+      const handoffRevision = editRevision
       const result = await api.createAgentHandoff(recordingId)
       if (!result) {
         setHandoffStatus()
+        return
+      }
+      if (editRevision !== handoffRevision) {
+        handoffResult = null
+        setHandoffStatus({
+          message: '内容已更新，请重新导出并复制。',
+          label: '重新导出并复制给外部 Agent'
+        })
         return
       }
       handoffResult = result

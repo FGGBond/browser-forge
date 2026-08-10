@@ -12,6 +12,7 @@ let promptText
 let savedPrompts
 let failSavesRemaining
 let delayedSave
+let delayedHandoff
 let requestEvents
 let handoffCalls
 let handoffMode
@@ -57,7 +58,9 @@ beforeAll(async () => {
         res.statusCode = 500
         return json(res, { error: { code: 'FILESYSTEM_FAILURE', message: 'export failed' } })
       }
-      return json(res, { recordingId: id, path: exportedPath, text: buildCompletePrompt(promptText, exportedPath) })
+      const text = buildCompletePrompt(promptText, exportedPath)
+      if (delayedHandoff) await delayedHandoff
+      return json(res, { recordingId: id, path: exportedPath, text })
     }
     if (url.pathname === `/api/recordings/${id}/external-agent-prompt`) {
       requestEvents.push('legacy-external-prompt')
@@ -75,6 +78,7 @@ beforeEach(() => {
   savedPrompts = []
   failSavesRemaining = 0
   delayedSave = null
+  delayedHandoff = null
   requestEvents = []
   handoffCalls = 0
   handoffMode = 'success'
@@ -178,6 +182,58 @@ describe('three-question guided composer', () => {
     }
   })
 
+  it('rejects a stale handoff snapshot when supplemental context changes during export', { timeout: 15000 }, async () => {
+    const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
+    await installControlledClipboard(context)
+    let releaseHandoff
+    delayedHandoff = new Promise(resolve => { releaseHandoff = resolve })
+    const page = await openGuidance(context)
+    try {
+      await page.evaluate(() => { window.__clipboardShouldFail = false })
+      await completeQuestions(page)
+      await fillActiveEditor(page, '导出前的限制。')
+      await page.locator('[data-guidance-send]').dispatchEvent('click')
+      await expect.poll(() => page.getByRole('button', { name: '导出并复制给外部 Agent' }).isEnabled()).toBe(true)
+      await page.getByRole('button', { name: '导出并复制给外部 Agent' }).click()
+      await expect.poll(() => handoffCalls).toBe(1)
+
+      await fillActiveEditor(page, '导出期间新增的限制。')
+      releaseHandoff()
+      delayedHandoff = null
+
+      const status = page.locator('[data-handoff-status]')
+      await expect.poll(() => status.textContent()).toContain('内容已更新')
+      expect(await page.evaluate(() => window.__copiedText)).toBe('')
+
+      await page.getByRole('button', { name: '重新导出并复制给外部 Agent' }).dispatchEvent('click')
+      await expect.poll(() => handoffCalls).toBe(2)
+      await expect.poll(() => page.evaluate(() => window.__copiedText)).toContain('导出期间新增的限制')
+    } finally {
+      releaseHandoff?.()
+      delayedHandoff = null
+      await context.close()
+    }
+  })
+
+  it('clears completed handoff success UI as soon as supplemental context changes', { timeout: 10000 }, async () => {
+    const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
+    const page = await openGuidance(context)
+    try {
+      await completeQuestions(page)
+      await page.getByRole('button', { name: '导出并复制给外部 Agent' }).dispatchEvent('click')
+      const status = page.locator('[data-handoff-status]')
+      await expect.poll(() => status.textContent()).toContain('已导出并复制')
+
+      await fillActiveEditor(page, '成功交接后新增的限制。')
+
+      await expect.poll(async () => (await status.textContent()).trim()).toBe('')
+      await page.getByRole('button', { name: '导出并复制给外部 Agent' }).waitFor()
+      expect(handoffCalls).toBe(1)
+    } finally {
+      await context.close()
+    }
+  })
+
   it('describes an external-agent handoff truthfully and keeps message motion reduced-motion safe', async () => {
     const page = await openGuidance()
     await completeQuestions(page)
@@ -266,6 +322,26 @@ describe('three-question guided composer', () => {
     expect(await page.locator('[data-guidance-composer]').getAttribute('aria-disabled')).toBe('false')
     expect(await readActiveEditor(page)).toBe('')
     await page.close()
+  })
+
+  it('restores the supplemental composer when a completed-answer edit is canceled', { timeout: 10000 }, async () => {
+    const page = await openGuidance()
+    try {
+      await completeQuestions(page)
+      await fillActiveEditor(page, '取消编辑后仍要保留的补充上下文。')
+
+      await page.locator('[data-edit-answer="capability"]').dispatchEvent('click')
+      await expectChatEditing(page, 'capability')
+      expect(await page.locator('[data-handoff-card]').evaluate(element => element.hidden)).toBe(true)
+
+      await page.locator('[data-chat-edit-cancel="capability"]').dispatchEvent('click')
+
+      await expectComposerDone(page)
+      expect(await page.locator('[data-guidance-step]').getAttribute('data-guidance-step')).toBe('complete')
+      expect(await readActiveEditor(page)).toContain('取消编辑后仍要保留的补充上下文')
+    } finally {
+      await page.close()
+    }
   })
 
   it('keeps 500ms autosave and flushes before step transitions', { timeout: 10000 }, async () => {
