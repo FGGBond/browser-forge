@@ -192,7 +192,7 @@ export function createContextPane({ shell, host, toggle, api, onOpenChange = () 
     recordingId = nextRecordingId
     loadingRecordingId = nextRecordingId
     placeholderSignature = null
-    promptSlot.innerHTML = '<div class="context-loading" role="status"><span class="loading-ring"></span><span>正在读取录制说明…</span></div>'
+    promptSlot.innerHTML = '<div class="context-loading" role="status" aria-live="polite"><span class="loading-ring"></span><span>正在读取录制说明…</span></div>'
 
     const currentLoad = (async () => {
       try {

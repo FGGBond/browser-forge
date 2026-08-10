@@ -63,7 +63,7 @@ export async function loadLibrary({ api, state, list, count, onSelect }) {
     list.querySelectorAll('[data-analyze]').forEach(button => button.addEventListener('click', () => onSelect(button.dataset.analyze)))
   } catch (error) {
     count.textContent = '读取失败'
-    list.innerHTML = `<div class="inline-error"><strong>无法读取录制仓库</strong><span>${escapeHtml(error.message)}</span><button class="button quiet" data-retry>重试</button></div>`
+    list.innerHTML = `<div class="inline-error" role="alert"><strong>无法读取录制仓库</strong><span>${escapeHtml(error.message)}</span><button class="button quiet" data-retry>重试</button></div>`
     list.querySelector('[data-retry]')?.addEventListener('click', () => loadLibrary({ api, state, list, count, onSelect }))
   } finally {
     list.setAttribute('aria-busy', 'false')
@@ -99,10 +99,10 @@ function recordingRow(recording) {
 }
 
 function videoStatusLabel(status) {
-  if (status === 'complete') return '视频可用'
-  if (status === 'partial') return '视频部分可用'
-  if (status === 'failed') return '视频录制失败'
-  return '没有可播放视频'
+  if (status === 'complete') return '完整'
+  if (status === 'partial') return '部分'
+  if (status === 'failed') return '失败'
+  return '缺失'
 }
 
 export function formatDuration(durationMs = 0) {

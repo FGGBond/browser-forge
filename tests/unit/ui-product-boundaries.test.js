@@ -63,7 +63,8 @@ describe('recording workspace product boundaries', () => {
     expect(recording).not.toContain('permission-actions')
     expect(recording).not.toContain('advanced-settings')
     expect(readUi('views/prompt-editor.js')).not.toContain('尚未配置 Agent')
-    expect(readUi('views/detail.js')).toContain('data-analysis-pane')
+    expect(readUi('views/detail.js')).not.toContain('data-analysis-pane')
+    expect(readUi('views/context-pane.js')).toContain('data-analysis-pane')
   })
 
   it('keeps the analysis guidance flow structured, local, and free of editor chrome', () => {
@@ -133,6 +134,56 @@ describe('recording workspace product boundaries', () => {
     expect(resourceUrls.every(url => url.startsWith('/') && !url.startsWith('//'))).toBe(true)
     expect(index).not.toMatch(/<(?:script|link)[^>]+(?:https?:|data:|file:|\/\/)/i)
     expect(index).not.toMatch(/<script(?![^>]+\bsrc=)[^>]*>\s*[^<]/i)
+  })
+
+  it('removes superseded card, setup, detail, and editor chrome from the active stylesheet', () => {
+    const stylesheet = readUi('styles.css')
+    for (const retiredSelector of [
+      '.recording-card',
+      '.recording-poster',
+      '.library-grid',
+      '.detail-welcome',
+      '.setup-card',
+      '.live-header',
+      '.recording-detail',
+      '.detail-grid',
+      '.timeline-event',
+      '.EasyMDEContainer',
+      '.editor-toolbar',
+      '.CodeMirror',
+      '.guidance-review-card',
+      '.new-recording-hero',
+      '.new-recording-stage',
+      '.send-goal-action'
+    ]) {
+      expect(stylesheet).not.toContain(retiredSelector)
+    }
+  })
+
+  it('keeps workspace motion property-specific, bounded, and reduced-motion aware', () => {
+    const stylesheets = ['styles.css', 'new-recording.css', 'guidance.css'].map(readUi).join('\n')
+
+    expect(stylesheets).not.toMatch(/transition(?:-property)?\s*:\s*all\b/i)
+    expect(stylesheets).not.toMatch(/ease-in(?!-out)/)
+    expect(readUi('guidance.css')).toContain('animation: guidanceCardIn 220ms')
+    expect(readUi('guidance.css')).toContain('@media (hover: hover) and (pointer: fine) {\n  .guidance-chat-item:hover')
+    expect(readUi('styles.css')).toContain('@media (hover: hover) and (pointer: fine) {\n  .bf-player:not(.controls-hidden):hover')
+    for (const stylesheet of ['styles.css', 'new-recording.css', 'guidance.css'].map(readUi)) {
+      expect(stylesheet).toContain('@media (prefers-reduced-motion: reduce)')
+      expect(stylesheet).toMatch(/animation:\s*none/)
+    }
+  })
+
+  it('announces asynchronous loading and failure states without relying on color alone', () => {
+    const library = readUi('views/library.js')
+    const detail = readUi('views/detail.js')
+    const contextPane = readUi('views/context-pane.js')
+
+    expect(library).toContain('class="inline-error" role="alert"')
+    expect(detail).toContain('class="inline-error" role="alert"')
+    expect(detail).toContain('data-notices aria-live="polite"')
+    expect(contextPane).toContain('class="context-loading" role="status" aria-live="polite"')
+    expect(contextPane).toContain('data-prompt-load-error role="alert"')
   })
 
 })

@@ -334,7 +334,7 @@ export async function renderNewRecording({ container, api, onStarted }) {
 export async function renderRecording({ container, api, activeRecording, onStopped, onCancel }) {
   ensureRecordingStylesheet()
   container.innerHTML = `
-    <section class="recording-lifecycle recording-active live-recording" data-recording-state="active" aria-labelledby="live-recording-title">
+    <section class="recording-lifecycle recording-active" data-recording-state="active" aria-labelledby="live-recording-title">
       <div class="recording-stage">
         <header class="recording-stage-header recording-active-header">
           <div>

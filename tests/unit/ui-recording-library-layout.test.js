@@ -221,9 +221,9 @@ describe('recording repository compact workspace layout', () => {
       expect(text).toContain(recording.startHost)
       expect(text).toContain(recording.durationMs === 163000 ? '02:43' : recording.durationMs === 68000 ? '01:08' : '00:42')
     }
-    expect(await page.locator(`[data-recording-id="${recordings[0].id}"]`).textContent()).toContain('视频可用')
-    expect(await page.locator(`[data-recording-id="${recordings[1].id}"]`).textContent()).toContain('视频部分可用')
-    expect(await page.locator(`[data-recording-id="${recordings[2].id}"]`).textContent()).toContain('视频录制失败')
+    expect(await page.locator(`[data-recording-id="${recordings[0].id}"]`).textContent()).toContain('完整')
+    expect(await page.locator(`[data-recording-id="${recordings[1].id}"]`).textContent()).toContain('部分')
+    expect(await page.locator(`[data-recording-id="${recordings[2].id}"]`).textContent()).toContain('失败')
 
     await page.locator(`[data-recording-id="${recordings[1].id}"] [data-analyze]`).click()
     await expect.poll(() => page.locator('[data-title-input]').inputValue()).toBe(recordings[1].title)

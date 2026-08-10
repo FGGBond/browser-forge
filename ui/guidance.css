@@ -130,18 +130,23 @@
   height: 13px;
 }
 
-.guidance-chat-item:hover .guidance-edit,
-.guidance-chat-item:hover .guidance-copy,
 .guidance-edit:focus-visible,
 .guidance-copy:focus-visible,
 .guidance-copy.copied {
   opacity: .85;
 }
 
-.guidance-edit:hover,
-.guidance-copy:hover {
-  color: var(--accent);
-  background: var(--accent-soft);
+@media (hover: hover) and (pointer: fine) {
+  .guidance-chat-item:hover .guidance-edit,
+  .guidance-chat-item:hover .guidance-copy {
+    opacity: .85;
+  }
+
+  .guidance-edit:hover,
+  .guidance-copy:hover {
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
 }
 
 /* Bottom dock: current question + composer pinned to bottom of pane */
@@ -323,9 +328,11 @@
 
 .guidance-send svg { width: 16px; height: 16px; }
 
-.guidance-send:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 34%, transparent);
+@media (hover: hover) and (pointer: fine) {
+  .guidance-send:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 34%, transparent);
+  }
 }
 
 .guidance-send:disabled {
@@ -349,7 +356,7 @@
   background: color-mix(in srgb, var(--surface-solid) 97%, #000 3%);
   box-shadow: 0 12px 32px rgba(0, 0, 0, .16);
   backdrop-filter: blur(18px);
-  animation: guidanceCardIn 240ms cubic-bezier(.2, .8, .2, 1);
+  animation: guidanceCardIn 220ms cubic-bezier(.2, .8, .2, 1);
 }
 
 @keyframes guidanceMessageIn {

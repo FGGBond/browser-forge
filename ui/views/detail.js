@@ -9,7 +9,7 @@ export async function renderDetail({
   onRecordingUpdated = () => {},
   beforeObjectAction = async () => true
 }) {
-  container.innerHTML = `<section class="detail-loading"><div class="loading-ring"></div><span>正在读取录制…</span></section>`
+  container.innerHTML = `<section class="detail-loading" role="status" aria-live="polite"><div class="loading-ring"></div><span>正在读取录制…</span></section>`
   try {
     const recording = await api.getRecording(recordingId)
     container.innerHTML = detailMarkup(recording)
@@ -88,7 +88,7 @@ export async function renderDetail({
       cleanup: () => playerController?.destroy()
     }
   } catch (error) {
-    container.innerHTML = `<section class="narrow-view"><button class="back-button" data-back>返回录制仓库</button><div class="inline-error"><strong>无法打开录制</strong><span>${escapeHtml(error.message)}</span></div></section>`
+    container.innerHTML = `<section class="narrow-view"><button class="back-button" data-back>返回录制仓库</button><div class="inline-error" role="alert"><strong>无法打开录制</strong><span>${escapeHtml(error.message)}</span></div></section>`
     container.querySelector('[data-back]').addEventListener('click', onBack)
     return null
   }
@@ -115,7 +115,7 @@ function detailMarkup(recording) {
           <dl class="evidence-strip" data-evidence-strip aria-label="录制证据摘要">
             <div><dt>时长</dt><dd>${formatDuration(recording.durationMs)}</dd></div>
             <div class="evidence-domains"><dt>域名</dt><dd title="${escapeAttribute(domainSummary)}">${escapeHtml(domainSummary)}</dd></div>
-            <div><dt>视频</dt><dd>${videoStatusLabel(recording.videoStatus)}</dd></div>
+            <div><dt>状态</dt><dd>${videoStatusLabel(recording.videoStatus)}</dd></div>
             <div><dt>录制时间</dt><dd>${formatDate(recording.createdAt)}</dd></div>
           </dl>
           <div class="object-action-dock" data-object-actions aria-label="录制操作">
@@ -130,7 +130,7 @@ function detailMarkup(recording) {
 function formatDuration(value) { const seconds = Math.max(0, Math.floor(Number(value || 0) / 1000)); const minutes = Math.floor(seconds / 60); const rest = seconds % 60; return `${minutes}:${String(rest).padStart(2, '0')}` }
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '时间未知' : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date) }
 export function formatBytes(value) { const bytes = Number(value); if (!Number.isFinite(bytes) || bytes < 0) return '计算中'; if (bytes < 1024) return `${bytes} B`; if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`; if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`; return `${(bytes / 1024 ** 3).toFixed(1)} GB` }
-function videoStatusLabel(status) { if (status === 'complete') return '视频可用'; if (status === 'partial') return '视频部分可用'; if (status === 'failed') return '视频录制失败'; return '没有可播放视频' }
+function videoStatusLabel(status) { if (status === 'complete') return '完整'; if (status === 'partial') return '部分'; if (status === 'failed') return '失败'; return '缺失' }
 function videoUnavailable(status) { return `<div class="video-unavailable">${videoOffIcon()}<strong>${status === 'failed' ? '视频录制失败' : '没有可播放视频'}</strong><span>可以保留这段录制，稍后补充分析说明或重新录制。</span></div>` }
 function showNotice(container, message, tone) { const stack = container.querySelector('[data-notices]'); const notice = document.createElement('div'); notice.className = `notice ${tone}`; notice.textContent = message; stack.append(notice); setTimeout(() => notice.remove(), 5000) }
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]) }
