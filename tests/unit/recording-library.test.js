@@ -294,6 +294,7 @@ describe('RecordingLibrary prompts', () => {
       actions: '第一行\n第二行  ',
       capability: '能力说明\n\n',
       acceptance: '验收标准\t',
+      notes: '',
       legacy: false
     })
   })

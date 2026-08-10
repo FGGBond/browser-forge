@@ -46,19 +46,23 @@ afterAll(async () => {
 })
 
 describe('recording status and responsive shell', () => {
-  it('marks the Electron shell and uses a compact top navigation on narrow screens', async () => {
+  it('marks the Electron shell and keeps a compact navigation rail on narrow screens', async () => {
     const page = await browser.newPage({ viewport: { width: 640, height: 720 } })
     await page.goto(`${baseUrl}?shell=electron`, { waitUntil: 'networkidle' })
     const layout = await page.evaluate(() => ({
       bodyClass: document.body.className,
       columns: getComputedStyle(document.querySelector('.app-shell')).gridTemplateColumns,
+      sidebarWidth: Math.round(document.querySelector('.app-sidebar').getBoundingClientRect().width),
       sidebarHeight: Math.round(document.querySelector('.app-sidebar').getBoundingClientRect().height),
-      navLabelDisplay: getComputedStyle(document.querySelector('.primary-nav span')).display
+      navLabelVisibility: getComputedStyle(document.querySelector('.primary-nav .sidebar-label')).visibility,
+      contextToggleDisplay: getComputedStyle(document.querySelector('.workspace-context-toggle')).display
     }))
     expect(layout.bodyClass).toContain('shell-electron')
-    expect(layout.columns).toBe('640px')
-    expect(layout.sidebarHeight).toBe(58)
-    expect(layout.navLabelDisplay).toBe('none')
+    expect(layout.columns).toBe('68px 572px')
+    expect(layout.sidebarWidth).toBe(67)
+    expect(layout.sidebarHeight).toBe(720)
+    expect(layout.navLabelVisibility).toBe('hidden')
+    expect(layout.contextToggleDisplay).toBe('flex')
     await page.close()
   })
 
@@ -92,7 +96,7 @@ describe('recording status and responsive shell', () => {
     await page.locator('[data-open-pages]').waitFor()
 
     const result = await page.evaluate(() => {
-      const header = document.querySelector('.live-header')
+      const header = document.querySelector('.recording-active-header')
       const button = document.querySelector('[data-stop]')
       const pages = document.querySelector('[data-open-pages]')
       const style = getComputedStyle(button)
@@ -112,11 +116,11 @@ describe('recording status and responsive shell', () => {
     })
     expect(result.headerDirection).toBe('column')
     expect(result.stopWidth).toBe(result.headerWidth)
-    expect(result.pagesColumns.split(' ').length).toBe(1)
+    expect(result.pagesColumns.split(' ').length).toBe(2)
     expect(result.focusRule).toContain('var(--accent)')
     expect(result.focusRule).toContain('var(--focus-ring)')
     expect(result.unlabeledIconButtons).toBe(0)
-    expect(result.transitionDuration.split(', ').every(value => Number.parseFloat(value) >= 0.16 && Number.parseFloat(value) <= 0.22)).toBe(true)
+    expect(result.transitionDuration.split(', ').every(value => Number.parseFloat(value) >= 0.08 && Number.parseFloat(value) <= 0.22)).toBe(true)
     expect(result.transitionTiming.split(', ').every(value => value === 'ease-out')).toBe(true)
     await stop.press('Enter')
     await expect.poll(() => stopRequests).toBe(1)
